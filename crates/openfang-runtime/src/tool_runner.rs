@@ -291,6 +291,36 @@ pub async fn execute_tool(
             .await
         }
 
+        "enforce_quality_gate" => {
+            return match tool_enforce_quality_gate(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+
+        "trigger_cursor_worker" => {
+            return match tool_trigger_cursor_worker(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+
         // Inter-agent tools (require kernel handle)
         "agent_send" => tool_agent_send(input, kernel).await,
         "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id).await,
@@ -641,6 +671,32 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "timeout_seconds": { "type": "integer", "description": "Timeout in seconds (default: 30)" }
                 },
                 "required": ["command"]
+            }),
+        },
+        ToolDefinition {
+            name: "enforce_quality_gate".to_string(),
+            description: "Run the spoke quality gate (`mise run 001-qa`) on an allowlisted absolute spoke root. Returns JSON with exit_code, stdout, stderr.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "spoke_root": { "type": "string", "description": "Absolute path to the spoke repository root" }
+                },
+                "required": ["spoke_root"]
+            }),
+        },
+        ToolDefinition {
+            name: "trigger_cursor_worker".to_string(),
+            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Maps to `cursor agent -d <workspace> -p <prompt> --mode <mode> -o json` plus optional allowlisted flags. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "workspace": { "type": "string", "description": "Absolute path to the spoke repository root (allowlisted)" },
+                    "prompt": { "type": "string", "description": "Task text / instructions for the agent" },
+                    "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor agent mode (default: agent)" },
+                    "behavior": { "type": "string", "description": "Skill reference or expectation text appended to the prompt" },
+                    "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI flags allowlisted by OpenFang (e.g. --yolo, --force)" }
+                },
+                "required": ["workspace", "prompt"]
             }),
         },
         // --- Inter-agent tools ---
@@ -1605,6 +1661,170 @@ async fn tool_shell_exec(
         Ok(Err(e)) => Err(format!("Failed to execute command: {e}")),
         Err(_) => Err(format!("Command timed out after {timeout_secs}s")),
     }
+}
+
+/// Timeout for full workspace build + test + clippy via mise.
+const ENFORCE_QA_GATE_TIMEOUT_SECS: u64 = 3600;
+
+async fn tool_enforce_quality_gate(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let spoke_root = input["spoke_root"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
+    let path = Path::new(spoke_root);
+    let resolved = openfang_types::config::validate_spoke_root_allowlisted(
+        &kh.automation_spoke_roots(),
+        path,
+    )?;
+
+    let mut cmd = tokio::process::Command::new("mise");
+    cmd.args(["run", "001-qa"]);
+    cmd.current_dir(&resolved);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(ENFORCE_QA_GATE_TIMEOUT_SECS),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "enforce_quality_gate timed out after {ENFORCE_QA_GATE_TIMEOUT_SECS}s"
+        )
+    })?
+    .map_err(|e| format!("Failed to run mise: {e}"))?;
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+
+    let body = serde_json::json!({
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+    });
+    let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+    let failed = exit_code != 0;
+    Ok((json, failed))
+}
+
+/// Extra `cursor agent` argv tokens permitted via the `flags` tool parameter (AC #8).
+const CURSOR_AGENT_ALLOWLISTED_FLAGS: &[&str] = &["--yolo", "--force"];
+
+/// Timeout for Cursor Agent CLI runs (build/test-scale work).
+const TRIGGER_CURSOR_WORKER_TIMEOUT_SECS: u64 = 3600;
+
+fn parse_cursor_agent_extra_flags(input: &serde_json::Value) -> Result<Vec<String>, String> {
+    match input.get("flags") {
+        None => Ok(Vec::new()),
+        Some(v) if v.is_null() => Ok(Vec::new()),
+        Some(v) => {
+            let arr = v
+                .as_array()
+                .ok_or_else(|| "flags must be a JSON array of strings".to_string())?;
+            let mut out = Vec::with_capacity(arr.len());
+            for item in arr {
+                let s = item
+                    .as_str()
+                    .ok_or_else(|| "flags must be a JSON array of strings".to_string())?;
+                if !CURSOR_AGENT_ALLOWLISTED_FLAGS.contains(&s) {
+                    return Err(format!(
+                        "flag '{s}' is not allowlisted; allowed: {}",
+                        CURSOR_AGENT_ALLOWLISTED_FLAGS.join(", ")
+                    ));
+                }
+                out.push(s.to_string());
+            }
+            Ok(out)
+        }
+    }
+}
+
+async fn tool_trigger_cursor_worker(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let workspace = input["workspace"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'workspace'".to_string())?;
+    let prompt = input["prompt"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'prompt'".to_string())?;
+    let mode = input["mode"].as_str().unwrap_or("agent");
+    if !matches!(mode, "agent" | "plan" | "ask") {
+        return Err(format!(
+            "invalid mode '{mode}'; allowed: agent, plan, ask"
+        ));
+    }
+    let full_prompt = match input["behavior"].as_str() {
+        Some(b) if !b.is_empty() => {
+            format!("{prompt}\n\n--- Behavior / expectations ---\n{b}")
+        }
+        _ => prompt.to_string(),
+    };
+    let extra_flags = parse_cursor_agent_extra_flags(input)?;
+
+    let path = Path::new(workspace);
+    let resolved = openfang_types::config::validate_spoke_root_allowlisted(
+        &kh.automation_spoke_roots(),
+        path,
+    )?;
+
+    let mut cmd = tokio::process::Command::new("cursor");
+    cmd.args(["agent", "-d"])
+        .arg(&resolved)
+        .arg("-p")
+        .arg(&full_prompt)
+        .arg("--mode")
+        .arg(mode)
+        .args(["-o", "json"]);
+    for f in &extra_flags {
+        cmd.arg(f);
+    }
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(TRIGGER_CURSOR_WORKER_TIMEOUT_SECS),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| {
+        format!(
+            "trigger_cursor_worker timed out after {TRIGGER_CURSOR_WORKER_TIMEOUT_SECS}s"
+        )
+    })?
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "cursor CLI not found on PATH (install Cursor and ensure `cursor` is available)"
+                .to_string()
+        } else {
+            format!("Failed to run cursor agent: {e}")
+        }
+    })?;
+
+    let exit_code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    let structured_output: Option<serde_json::Value> =
+        serde_json::from_str(stdout.trim()).ok();
+
+    let body = serde_json::json!({
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "structured_output": structured_output,
+    });
+    let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+    let failed = exit_code != 0;
+    Ok((json, failed))
 }
 
 // ---------------------------------------------------------------------------
@@ -3293,19 +3513,98 @@ async fn tool_canvas_present(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::kernel_handle::{AgentInfo, KernelHandle};
+
+    #[derive(Clone)]
+    struct QaGateStubKernel {
+        roots: Vec<PathBuf>,
+    }
+
+    #[async_trait::async_trait]
+    impl KernelHandle for QaGateStubKernel {
+        async fn spawn_agent(
+            &self,
+            _: &str,
+            _: Option<&str>,
+        ) -> Result<(String, String), String> {
+            Err("stub".into())
+        }
+        async fn send_to_agent(&self, _: &str, _: &str) -> Result<String, String> {
+            Err("stub".into())
+        }
+        fn list_agents(&self) -> Vec<AgentInfo> {
+            vec![]
+        }
+        fn kill_agent(&self, _: &str) -> Result<(), String> {
+            Err("stub".into())
+        }
+        fn memory_store(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
+            Err("stub".into())
+        }
+        fn memory_recall(&self, _: &str) -> Result<Option<serde_json::Value>, String> {
+            Ok(None)
+        }
+        fn find_agents(&self, _: &str) -> Vec<AgentInfo> {
+            vec![]
+        }
+        async fn task_post(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<String, String> {
+            Err("stub".into())
+        }
+        async fn task_claim(&self, _: &str) -> Result<Option<serde_json::Value>, String> {
+            Ok(None)
+        }
+        async fn task_complete(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("stub".into())
+        }
+        async fn task_list(&self, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+            Ok(vec![])
+        }
+        async fn publish_event(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
+            Err("stub".into())
+        }
+        async fn knowledge_add_entity(
+            &self,
+            _: openfang_types::memory::Entity,
+        ) -> Result<String, String> {
+            Err("stub".into())
+        }
+        async fn knowledge_add_relation(
+            &self,
+            _: openfang_types::memory::Relation,
+        ) -> Result<String, String> {
+            Err("stub".into())
+        }
+        async fn knowledge_query(
+            &self,
+            _: openfang_types::memory::GraphPattern,
+        ) -> Result<Vec<openfang_types::memory::GraphMatch>, String> {
+            Ok(vec![])
+        }
+        fn automation_spoke_roots(&self) -> Vec<PathBuf> {
+            self.roots.clone()
+        }
+    }
 
     #[test]
     fn test_builtin_tool_definitions() {
         let tools = builtin_tool_definitions();
         assert!(
-            tools.len() >= 39,
-            "Expected at least 39 tools, got {}",
+            tools.len() >= 40,
+            "Expected at least 40 tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         // Original 12
         assert!(names.contains(&"file_read"));
         assert!(names.contains(&"shell_exec"));
+        assert!(names.contains(&"enforce_quality_gate"));
+        assert!(names.contains(&"trigger_cursor_worker"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
         assert!(names.contains(&"agent_list"));
@@ -3388,6 +3687,344 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[tokio::test]
+    async fn test_enforce_quality_gate_requires_kernel() {
+        let result = execute_tool(
+            "test-id",
+            "enforce_quality_gate",
+            &serde_json::json!({"spoke_root": "/tmp"}),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("Kernel"),
+            "unexpected: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforce_quality_gate_empty_allowlist() {
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel { roots: vec![] });
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().canonicalize().unwrap();
+        let result = execute_tool(
+            "test-id",
+            "enforce_quality_gate",
+            &serde_json::json!({"spoke_root": p.to_str().unwrap()}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("automation"),
+            "unexpected: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforce_quality_gate_rejects_unlisted_path() {
+        let allow_dir = tempfile::tempdir().unwrap();
+        let allow = allow_dir.path().canonicalize().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let target = other.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow],
+        });
+        let result = execute_tool(
+            "test-id",
+            "enforce_quality_gate",
+            &serde_json::json!({"spoke_root": target.to_str().unwrap()}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("not under"),
+            "unexpected: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enforce_quality_gate_requires_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let allow = dir.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow],
+        });
+        let result = execute_tool(
+            "test-id",
+            "enforce_quality_gate",
+            &serde_json::json!({"spoke_root": "relative/path"}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("absolute"),
+            "unexpected: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_trigger_cursor_worker_requires_kernel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().canonicalize().unwrap();
+        let result = execute_tool(
+            "test-id",
+            "trigger_cursor_worker",
+            &serde_json::json!({
+                "workspace": p.to_str().unwrap(),
+                "prompt": "do work"
+            }),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Kernel"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_cursor_worker_empty_allowlist() {
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel { roots: vec![] });
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path().canonicalize().unwrap();
+        let result = execute_tool(
+            "test-id",
+            "trigger_cursor_worker",
+            &serde_json::json!({
+                "workspace": p.to_str().unwrap(),
+                "prompt": "task"
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("automation"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_cursor_worker_rejects_unlisted_path() {
+        let allow_dir = tempfile::tempdir().unwrap();
+        let allow = allow_dir.path().canonicalize().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let target = other.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow],
+        });
+        let result = execute_tool(
+            "test-id",
+            "trigger_cursor_worker",
+            &serde_json::json!({
+                "workspace": target.to_str().unwrap(),
+                "prompt": "x"
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("not under"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_cursor_worker_requires_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let allow = dir.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow],
+        });
+        let result = execute_tool(
+            "test-id",
+            "trigger_cursor_worker",
+            &serde_json::json!({
+                "workspace": "relative/path",
+                "prompt": "x"
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("absolute"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_cursor_worker_rejects_disallowed_flag() {
+        let dir = tempfile::tempdir().unwrap();
+        let allow = dir.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow.clone()],
+        });
+        let result = execute_tool(
+            "test-id",
+            "trigger_cursor_worker",
+            &serde_json::json!({
+                "workspace": allow.to_str().unwrap(),
+                "prompt": "x",
+                "flags": ["--evil-injection"]
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("not allowlisted"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_trigger_cursor_worker_invalid_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let allow = dir.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow.clone()],
+        });
+        let result = execute_tool(
+            "test-id",
+            "trigger_cursor_worker",
+            &serde_json::json!({
+                "workspace": allow.to_str().unwrap(),
+                "prompt": "x",
+                "mode": "hack"
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("invalid mode"), "{}", result.content);
     }
 
     #[tokio::test]

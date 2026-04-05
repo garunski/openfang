@@ -1,0 +1,10 @@
+[tools]
+rust = "stable"
+
+[tasks."001-qa"]
+description = "Quality gate: build, test, clippy (matches CLAUDE.md)"
+run = [
+    "cargo build --workspace --lib",
+    "cargo test --workspace",
+    "cargo clippy --workspace --all-targets -- -D warnings",
+]

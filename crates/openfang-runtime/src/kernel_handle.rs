@@ -6,6 +6,7 @@
 //! it into the agent loop.
 
 use async_trait::async_trait;
+use std::path::PathBuf;
 
 /// Agent info returned by list and discovery operations.
 #[derive(Debug, Clone)]
@@ -257,5 +258,10 @@ pub trait KernelHandle: Send + Sync {
         // The kernel MUST override this with real enforcement
         let _ = parent_caps;
         self.spawn_agent(manifest_toml, parent_id).await
+    }
+
+    /// Allowlisted spoke roots for `enforce_quality_gate` and `trigger_cursor_worker` (`[automation].spoke_roots`).
+    fn automation_spoke_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
     }
 }

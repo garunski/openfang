@@ -57,6 +57,8 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "file_write"
             | "file_list"
             | "shell_exec"
+            | "enforce_quality_gate"
+            | "trigger_cursor_worker"
             | "web_search"
             | "web_fetch"
             | "browser_navigate"

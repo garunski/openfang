@@ -1130,6 +1130,56 @@ pub struct KernelConfig {
     /// Heartbeat monitor settings.
     #[serde(default)]
     pub heartbeat: HeartbeatSettings,
+    /// Automation pipeline (spoke quality gates, backlog tooling).
+    #[serde(default)]
+    pub automation: AutomationConfig,
+}
+
+/// Automation / pipeline configuration (`[automation]` in config.toml).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AutomationConfig {
+    /// Absolute spoke repository roots allowed for `enforce_quality_gate` and `trigger_cursor_worker`.
+    #[serde(default)]
+    pub spoke_roots: Vec<PathBuf>,
+    /// Absolute backlog roots (reserved for future backlog native tools).
+    #[serde(default)]
+    pub backlog_roots: Vec<PathBuf>,
+}
+
+/// Validate `spoke_root` is absolute, exists, and lies under one of `allowlisted_roots`.
+pub fn validate_spoke_root_allowlisted(
+    allowlisted_roots: &[PathBuf],
+    spoke_root: &std::path::Path,
+) -> Result<PathBuf, String> {
+    if !spoke_root.is_absolute() {
+        return Err("spoke_root must be an absolute path".to_string());
+    }
+    if allowlisted_roots.is_empty() {
+        return Err(
+            "No automation spoke roots configured. Add paths to [automation].spoke_roots in config.toml."
+                .to_string(),
+        );
+    }
+    let canon = std::fs::canonicalize(spoke_root).map_err(|e| {
+        format!("spoke_root does not exist or is not accessible: {e}")
+    })?;
+    for root in allowlisted_roots {
+        if !root.is_absolute() {
+            continue;
+        }
+        let Ok(root_canon) = std::fs::canonicalize(root) else {
+            continue;
+        };
+        if canon.strip_prefix(&root_canon).is_ok() {
+            return Ok(canon);
+        }
+    }
+    Err(format!(
+        "spoke_root '{}' is not under any path in [automation].spoke_roots ({} configured root(s))",
+        canon.display(),
+        allowlisted_roots.len()
+    ))
 }
 
 /// Heartbeat monitor settings exposed in `[heartbeat]` config section.
@@ -1367,6 +1417,7 @@ impl Default for KernelConfig {
             auth: AuthConfig::default(),
             workflows_dir: None,
             heartbeat: HeartbeatSettings::default(),
+            automation: AutomationConfig::default(),
         }
     }
 }
@@ -1485,6 +1536,14 @@ impl std::fmt::Debug for KernelConfig {
                 &format!("{} mapping(s)", self.provider_api_keys.len()),
             )
             .field("auth", &format!("enabled={}", self.auth.enabled))
+            .field(
+                "automation",
+                &format!(
+                    "{} spoke root(s), {} backlog root(s)",
+                    self.automation.spoke_roots.len(),
+                    self.automation.backlog_roots.len()
+                ),
+            )
             .finish()
     }
 }
@@ -3664,6 +3723,7 @@ impl KernelConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn test_default_config() {
@@ -4218,5 +4278,52 @@ mod tests {
         "#;
         let config: KernelConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.heartbeat.default_timeout_secs, 300);
+    }
+
+    #[test]
+    fn test_automation_spoke_roots_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let mut config = KernelConfig::default();
+        config.automation.spoke_roots = vec![root.clone()];
+        let toml_str = toml::to_string(&config).unwrap();
+        let back: KernelConfig = toml::from_str(&toml_str).unwrap();
+        assert_eq!(back.automation.spoke_roots, vec![root]);
+    }
+
+    #[test]
+    fn test_validate_spoke_root_allowlisted_accepts_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let child = dir.path().join("nested");
+        std::fs::create_dir_all(&child).unwrap();
+        let allow = vec![root.clone()];
+        let got = validate_spoke_root_allowlisted(&allow, child.as_path()).unwrap();
+        assert_eq!(got, child.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_validate_spoke_root_allowlisted_rejects_outside() {
+        let dir = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let allow = vec![root];
+        let err = validate_spoke_root_allowlisted(&allow, other.path()).unwrap_err();
+        assert!(err.contains("not under any path"));
+    }
+
+    #[test]
+    fn test_validate_spoke_root_allowlisted_empty_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let err =
+            validate_spoke_root_allowlisted(&[], dir.path()).unwrap_err();
+        assert!(err.contains("No automation spoke roots"));
+    }
+
+    #[test]
+    fn test_validate_spoke_root_not_absolute() {
+        let err = validate_spoke_root_allowlisted(&[PathBuf::from("/tmp")], Path::new("relative"))
+            .unwrap_err();
+        assert!(err.contains("absolute"));
     }
 }
