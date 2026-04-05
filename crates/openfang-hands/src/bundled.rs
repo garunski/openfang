@@ -446,6 +446,8 @@ mod tests {
             "backlog_task_list",
             "backlog_task_view",
             "backlog_task_edit",
+            "record_git_action",
+            "record_pipeline_outcome",
         ] {
             assert!(
                 def.tools.contains(&tool.to_string()),

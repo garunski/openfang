@@ -292,7 +292,7 @@ pub async fn execute_tool(
         }
 
         "enforce_quality_gate" => {
-            return match tool_enforce_quality_gate(input, kernel).await {
+            return match tool_enforce_quality_gate(input, kernel, caller_agent_id).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -307,7 +307,7 @@ pub async fn execute_tool(
         }
 
         "trigger_cursor_worker" => {
-            return match tool_trigger_cursor_worker(input, kernel).await {
+            return match tool_trigger_cursor_worker(input, kernel, caller_agent_id).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -364,7 +364,7 @@ pub async fn execute_tool(
             };
         }
         "backlog_task_edit" => {
-            return match tool_backlog_task_edit(input, kernel).await {
+            return match tool_backlog_task_edit(input, kernel, caller_agent_id).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -393,6 +393,36 @@ pub async fn execute_tool(
         }
         "backlog_doc_list" => {
             return match tool_backlog_doc_list(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+
+        "record_git_action" => {
+            return match tool_record_git_action(input, kernel, caller_agent_id).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+
+        "record_pipeline_outcome" => {
+            return match tool_record_pipeline_outcome(input, kernel, caller_agent_id).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -760,26 +790,28 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "enforce_quality_gate".to_string(),
-            description: "Run the spoke quality gate (`mise run 001-qa`) on an allowlisted absolute spoke root. Returns JSON with exit_code, stdout, stderr.".to_string(),
+            description: "Run the spoke quality gate (`mise run 001-qa`) on an allowlisted absolute spoke root. Returns JSON with exit_code, stdout, stderr. Emits a structured pipeline audit line (JSON) with target `openfang_pipeline_audit`.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "spoke_root": { "type": "string", "description": "Absolute path to the spoke repository root" }
+                    "spoke_root": { "type": "string", "description": "Absolute path to the spoke repository root" },
+                    "task_id": { "type": "string", "description": "Backlog task id for audit correlation (e.g. TASK-4); default unknown if omitted" }
                 },
                 "required": ["spoke_root"]
             }),
         },
         ToolDefinition {
             name: "trigger_cursor_worker".to_string(),
-            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Maps to `cursor agent -d <workspace> -p <prompt> --mode <mode> -o json` plus optional allowlisted flags. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
+            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Maps to `cursor agent -d <workspace> -p <prompt> --mode <mode> -o json` plus optional allowlisted flags. In `agent` mode the prompt always includes the implementation contract referencing `.cursor/skills/implement/SKILL.md`. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string", "description": "Absolute path to the spoke repository root (allowlisted)" },
                     "prompt": { "type": "string", "description": "Task text / instructions for the agent" },
                     "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor agent mode (default: agent)" },
-                    "behavior": { "type": "string", "description": "Skill reference or expectation text appended to the prompt" },
-                    "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI flags allowlisted by OpenFang (e.g. --yolo, --force)" }
+                    "behavior": { "type": "string", "description": "Extra expectations after the default agent contract. In `agent` mode, OpenFang always appends a mandatory contract that references `.cursor/skills/implement/SKILL.md` in the workspace; use this field for spoke-specific notes (e.g. gate stderr on retry)." },
+                    "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI flags allowlisted by OpenFang (e.g. --yolo, --force)" },
+                    "task_id": { "type": "string", "description": "Backlog task id for audit correlation; default unknown if omitted" }
                 },
                 "required": ["workspace", "prompt"]
             }),
@@ -858,6 +890,37 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "properties": {
                     "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
                 }
+            }),
+        },
+        ToolDefinition {
+            name: "record_git_action".to_string(),
+            description: "Record a Git pipeline step (branch, commit, push, PR) as one structured JSON audit line; call after the git operation succeeds or fails. Requires allowlisted spoke_root.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Backlog task id for correlation" },
+                    "spoke_root": { "type": "string", "description": "Absolute spoke root (allowlisted)" },
+                    "action": { "type": "string", "enum": ["branch", "commit", "push", "pr"], "description": "Git step category" },
+                    "result": { "type": "string", "description": "Outcome summary (e.g. ok, failed, denied)" },
+                    "branch_name": { "type": "string", "description": "Branch name when relevant" },
+                    "commit_sha": { "type": "string", "description": "Commit hash when relevant" },
+                    "pr_url": { "type": "string", "description": "Pull request URL when relevant" }
+                },
+                "required": ["task_id", "spoke_root", "action", "result"]
+            }),
+        },
+        ToolDefinition {
+            name: "record_pipeline_outcome".to_string(),
+            description: "Record end-of-run pipeline outcome (success, retries used, optional rollback target status) as structured JSON for audit correlation.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Backlog task id" },
+                    "success": { "type": "boolean", "description": "Whether the pipeline run ultimately succeeded" },
+                    "retry_count": { "type": "integer", "description": "Number of Cursor/gate retry rounds consumed" },
+                    "rollback_to_status": { "type": "string", "description": "Backlog status moved to on rollback (e.g. Ready for Dev)" }
+                },
+                "required": ["task_id", "success", "retry_count"]
             }),
         },
         // --- Inter-agent tools ---
@@ -1830,6 +1893,7 @@ const ENFORCE_QA_GATE_TIMEOUT_SECS: u64 = 3600;
 async fn tool_enforce_quality_gate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
     let spoke_root = input["spoke_root"]
@@ -1840,6 +1904,7 @@ async fn tool_enforce_quality_gate(
         &kh.automation_spoke_roots(),
         path,
     )?;
+    let task_id = optional_pipeline_task_id(input);
 
     let mut cmd = tokio::process::Command::new("mise");
     cmd.args(["run", "001-qa"]);
@@ -1871,6 +1936,12 @@ async fn tool_enforce_quality_gate(
     });
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
     let failed = exit_code != 0;
+    crate::pipeline_audit::log_quality_gate(
+        task_id,
+        resolved.display().to_string(),
+        exit_code,
+        pipeline_tool_actor(caller_agent_id),
+    );
     Ok((json, failed))
 }
 
@@ -1879,6 +1950,29 @@ const CURSOR_AGENT_ALLOWLISTED_FLAGS: &[&str] = &["--yolo", "--force"];
 
 /// Timeout for Cursor Agent CLI runs (build/test-scale work).
 const TRIGGER_CURSOR_WORKER_TIMEOUT_SECS: u64 = 3600;
+
+/// Default implementation contract for `trigger_cursor_worker` in `agent` mode.
+/// Full text lives at `.cursor/skills/implement/SKILL.md` in the workspace; spokes should vendor that file.
+const CURSOR_IMPLEMENT_CONTRACT_REF: &str = "Follow the implementation behavior contract in `.cursor/skills/implement/SKILL.md` in this workspace (read it at the start of the run). If that file is missing, still: read the task markdown from the path or task id in the prompt, implement until every acceptance criterion is satisfied, run `mise run 001-qa` from this workspace root before you finish, and honor `.cursorignore` and `.cursor/rules`.";
+
+/// Builds the `-p` payload for Cursor Agent CLI. In `agent` mode, always appends the implementation contract;
+/// optional `behavior` adds project-specific expectations after it.
+fn compose_trigger_cursor_worker_prompt(prompt: &str, mode: &str, behavior: Option<&str>) -> String {
+    let extra = behavior.map(str::trim).filter(|s| !s.is_empty());
+    if mode == "agent" {
+        let mut block = String::from("--- Behavior / expectations ---\n");
+        block.push_str(CURSOR_IMPLEMENT_CONTRACT_REF);
+        if let Some(b) = extra {
+            block.push_str("\n\n--- Additional behavior ---\n");
+            block.push_str(b);
+        }
+        format!("{prompt}\n\n{block}")
+    } else if let Some(b) = extra {
+        format!("{prompt}\n\n--- Behavior / expectations ---\n{b}")
+    } else {
+        prompt.to_string()
+    }
+}
 
 fn parse_cursor_agent_extra_flags(input: &serde_json::Value) -> Result<Vec<String>, String> {
     match input.get("flags") {
@@ -1909,8 +2003,10 @@ fn parse_cursor_agent_extra_flags(input: &serde_json::Value) -> Result<Vec<Strin
 async fn tool_trigger_cursor_worker(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
+    let task_id = optional_pipeline_task_id(input);
     let workspace = input["workspace"]
         .as_str()
         .ok_or_else(|| "Missing required parameter 'workspace'".to_string())?;
@@ -1923,12 +2019,11 @@ async fn tool_trigger_cursor_worker(
             "invalid mode '{mode}'; allowed: agent, plan, ask"
         ));
     }
-    let full_prompt = match input["behavior"].as_str() {
-        Some(b) if !b.is_empty() => {
-            format!("{prompt}\n\n--- Behavior / expectations ---\n{b}")
-        }
-        _ => prompt.to_string(),
-    };
+    let full_prompt = compose_trigger_cursor_worker_prompt(
+        prompt,
+        mode,
+        input.get("behavior").and_then(|v| v.as_str()),
+    );
     let extra_flags = parse_cursor_agent_extra_flags(input)?;
 
     let path = Path::new(workspace);
@@ -1985,6 +2080,13 @@ async fn tool_trigger_cursor_worker(
     });
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
     let failed = exit_code != 0;
+    crate::pipeline_audit::log_cursor_worker(
+        task_id,
+        resolved.display().to_string(),
+        mode.to_string(),
+        exit_code,
+        pipeline_tool_actor(caller_agent_id),
+    );
     Ok((json, failed))
 }
 
@@ -2110,6 +2212,28 @@ fn backlog_task_id_param(input: &serde_json::Value) -> Result<String, String> {
         }
     }
     Err("Missing required parameter 'task_id'".to_string())
+}
+
+fn optional_pipeline_task_id(input: &serde_json::Value) -> String {
+    if let Some(s) = input.get("task_id").and_then(|v| v.as_str()) {
+        let t = s.trim();
+        if !t.is_empty() {
+            return t.to_string();
+        }
+    }
+    if let Some(n) = input.get("task_id").and_then(|v| v.as_u64()) {
+        return n.to_string();
+    }
+    if let Some(i) = input.get("task_id").and_then(|v| v.as_i64()) {
+        if i >= 0 {
+            return i.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+fn pipeline_tool_actor(caller_agent_id: Option<&str>) -> String {
+    caller_agent_id.unwrap_or("unknown").to_string()
 }
 
 fn normalize_backlog_priority(s: &str) -> Result<String, String> {
@@ -2261,6 +2385,7 @@ async fn tool_backlog_task_view(
 async fn tool_backlog_task_edit(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
     let id = backlog_task_id_param(input)?;
@@ -2269,7 +2394,24 @@ async fn tool_backlog_task_edit(
         optional_backlog_root_param(input),
     )?;
 
-    let mut args: Vec<String> = vec!["task".into(), "edit".into(), id];
+    let to_status = input
+        .get("status")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+
+    let from_status = if to_status.is_some() {
+        let view_args = vec!["task".into(), id.clone(), "--plain".into()];
+        match run_backlog_cli(&cwd, &view_args).await {
+            Ok((0, stdout, _)) => crate::pipeline_audit::parse_backlog_plain_status(&stdout),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let mut args: Vec<String> = vec!["task".into(), "edit".into(), id.clone()];
     if let Some(s) = input.get("status").and_then(|v| v.as_str()) {
         if !s.is_empty() {
             args.push("-s".into());
@@ -2308,10 +2450,124 @@ async fn tool_backlog_task_edit(
     args.push("--plain".into());
 
     let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    if code == 0 {
+        if let Some(ts) = to_status {
+            crate::pipeline_audit::log_backlog_status_transition(
+                id,
+                from_status,
+                ts,
+                pipeline_tool_actor(caller_agent_id),
+            );
+        }
+    }
     let parsed = serde_json::json!({
         "headline": stdout.lines().next().unwrap_or(""),
     });
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_record_git_action(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?
+        .to_string();
+    let spoke_root = input["spoke_root"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
+    let action = input["action"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'action'".to_string())?;
+    if !matches!(action, "branch" | "commit" | "push" | "pr") {
+        return Err(format!(
+            "invalid action '{action}'; allowed: branch, commit, push, pr"
+        ));
+    }
+    let result = input["result"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'result'".to_string())?;
+    let path = Path::new(spoke_root);
+    let resolved = openfang_types::config::validate_spoke_root_allowlisted(
+        &kh.automation_spoke_roots(),
+        path,
+    )?;
+    let branch_name = input
+        .get("branch_name")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let commit_sha = input
+        .get("commit_sha")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let pr_url = input
+        .get("pr_url")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    crate::pipeline_audit::emit(crate::pipeline_audit::PipelineAuditEvent::GitAction {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        task_id,
+        spoke_root: resolved.display().to_string(),
+        action: action.to_string(),
+        result: result.to_string(),
+        branch_name,
+        commit_sha,
+        pr_url,
+        actor: pipeline_tool_actor(caller_agent_id),
+        tool: "record_git_action".to_string(),
+    });
+    Ok((serde_json::json!({ "ok": true }).to_string(), false))
+}
+
+async fn tool_record_pipeline_outcome(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<(String, bool), String> {
+    let _kh = require_kernel(kernel)?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?
+        .to_string();
+    let success = input["success"]
+        .as_bool()
+        .ok_or_else(|| "Missing required boolean parameter 'success'".to_string())?;
+    let retry_count = input["retry_count"]
+        .as_u64()
+        .or_else(|| input["retry_count"].as_i64().filter(|&i| i >= 0).map(|i| i as u64))
+        .ok_or_else(|| "Missing required integer parameter 'retry_count'".to_string())?;
+    let retry_count: u32 = retry_count.try_into().map_err(|_| {
+        "retry_count out of range for u32".to_string()
+    })?;
+    let rollback_to_status = input
+        .get("rollback_to_status")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    crate::pipeline_audit::emit(crate::pipeline_audit::PipelineAuditEvent::PipelineRunOutcome {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        task_id,
+        success,
+        retry_count,
+        rollback_to_status,
+        actor: pipeline_tool_actor(caller_agent_id),
+        tool: "record_pipeline_outcome".to_string(),
+    });
+    Ok((serde_json::json!({ "ok": true }).to_string(), false))
 }
 
 async fn tool_backlog_doc_create(
@@ -4169,6 +4425,8 @@ mod tests {
         assert!(names.contains(&"backlog_task_edit"));
         assert!(names.contains(&"backlog_doc_create"));
         assert!(names.contains(&"backlog_doc_list"));
+        assert!(names.contains(&"record_git_action"));
+        assert!(names.contains(&"record_pipeline_outcome"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
         assert!(names.contains(&"agent_list"));
@@ -4601,6 +4859,108 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("invalid mode"), "{}", result.content);
+    }
+
+    #[test]
+    fn compose_trigger_cursor_worker_prompt_agent_includes_skill_ref() {
+        let s = compose_trigger_cursor_worker_prompt("do the task", "agent", None);
+        assert!(s.contains("do the task"));
+        assert!(s.contains(".cursor/skills/implement/SKILL.md"));
+        assert!(s.contains("mise run 001-qa"));
+        assert!(s.contains(".cursor/rules"));
+    }
+
+    #[test]
+    fn compose_trigger_cursor_worker_prompt_agent_appends_extra_behavior() {
+        let s = compose_trigger_cursor_worker_prompt("p", "agent", Some("fix clippy"));
+        assert!(s.contains(".cursor/skills/implement/SKILL.md"));
+        assert!(s.contains("fix clippy"));
+        assert!(s.contains("--- Additional behavior ---"));
+    }
+
+    #[test]
+    fn compose_trigger_cursor_worker_prompt_plan_no_default_contract() {
+        let s = compose_trigger_cursor_worker_prompt("only", "plan", None);
+        assert_eq!(s, "only");
+    }
+
+    #[test]
+    fn compose_trigger_cursor_worker_prompt_plan_with_behavior() {
+        let s = compose_trigger_cursor_worker_prompt("only", "plan", Some("extra"));
+        assert!(s.contains("only"));
+        assert!(s.contains("extra"));
+        assert!(!s.contains("implement/SKILL.md"));
+    }
+
+    #[tokio::test]
+    async fn test_record_pipeline_and_git_audit_tools() {
+        crate::pipeline_audit::clear_pipeline_audit_test_buffer();
+        let tmp = tempfile::tempdir().unwrap();
+        let allow = tmp.path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![allow.clone()],
+            backlog_roots: vec![],
+        });
+        let r1 = execute_tool(
+            "t1",
+            "record_pipeline_outcome",
+            &serde_json::json!({
+                "task_id": "TASK-7",
+                "success": false,
+                "retry_count": 2,
+                "rollback_to_status": "Ready for Dev"
+            }),
+            Some(&k),
+            None,
+            Some("coordinator-hand"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(!r1.is_error, "{}", r1.content);
+        let r2 = execute_tool(
+            "t2",
+            "record_git_action",
+            &serde_json::json!({
+                "task_id": "TASK-1",
+                "spoke_root": allow.to_str().unwrap(),
+                "action": "commit",
+                "result": "ok",
+                "commit_sha": "deadbeef"
+            }),
+            Some(&k),
+            None,
+            Some("agent-z"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(!r2.is_error, "{}", r2.content);
+        let rows = crate::pipeline_audit::take_pipeline_audit_test_buffer();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["event"], "pipeline_run_outcome");
+        assert_eq!(rows[0]["task_id"], "TASK-7");
+        assert_eq!(rows[0]["actor"], "coordinator-hand");
+        assert_eq!(rows[1]["event"], "git_action");
+        assert_eq!(rows[1]["commit_sha"], "deadbeef");
     }
 
     #[test]
