@@ -5954,6 +5954,10 @@ impl KernelHandle for OpenFangKernel {
         self.config.automation.spoke_roots.clone()
     }
 
+    fn automation_backlog_roots(&self) -> Vec<std::path::PathBuf> {
+        self.config.automation.backlog_roots.clone()
+    }
+
     fn kill_agent(&self, agent_id: &str) -> Result<(), String> {
         let id: AgentId = agent_id
             .parse()

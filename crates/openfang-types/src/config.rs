@@ -1142,9 +1142,77 @@ pub struct AutomationConfig {
     /// Absolute spoke repository roots allowed for `enforce_quality_gate` and `trigger_cursor_worker`.
     #[serde(default)]
     pub spoke_roots: Vec<PathBuf>,
-    /// Absolute backlog roots (reserved for future backlog native tools).
+    /// Absolute backlog repository roots for native `backlog_task_*` tools.
     #[serde(default)]
     pub backlog_roots: Vec<PathBuf>,
+}
+
+/// Validate `backlog_root` is absolute, exists, and lies under one of `allowlisted_roots`.
+pub fn validate_backlog_root_allowlisted(
+    allowlisted_roots: &[PathBuf],
+    backlog_root: &std::path::Path,
+) -> Result<PathBuf, String> {
+    if !backlog_root.is_absolute() {
+        return Err("backlog_root must be an absolute path".to_string());
+    }
+    if allowlisted_roots.is_empty() {
+        return Err(
+            "No automation backlog roots configured. Add paths to [automation].backlog_roots in config.toml."
+                .to_string(),
+        );
+    }
+    let canon = std::fs::canonicalize(backlog_root).map_err(|e| {
+        format!("backlog_root does not exist or is not accessible: {e}")
+    })?;
+    for root in allowlisted_roots {
+        if !root.is_absolute() {
+            continue;
+        }
+        let Ok(root_canon) = std::fs::canonicalize(root) else {
+            continue;
+        };
+        if canon.strip_prefix(&root_canon).is_ok() {
+            return Ok(canon);
+        }
+    }
+    Err(format!(
+        "backlog_root '{}' is not under any path in [automation].backlog_roots ({} configured root(s))",
+        canon.display(),
+        allowlisted_roots.len()
+    ))
+}
+
+/// Resolve working directory for Backlog CLI: single configured root, or an explicit allowlisted path.
+pub fn resolve_automation_backlog_cwd(
+    allowlisted_roots: &[PathBuf],
+    backlog_root_param: Option<&str>,
+) -> Result<PathBuf, String> {
+    if allowlisted_roots.is_empty() {
+        return Err(
+            "No automation backlog roots configured. Add paths to [automation].backlog_roots in config.toml."
+                .to_string(),
+        );
+    }
+    match backlog_root_param {
+        Some(p) => validate_backlog_root_allowlisted(allowlisted_roots, std::path::Path::new(p)),
+        None => {
+            if allowlisted_roots.len() != 1 {
+                return Err(
+                    "Multiple [automation].backlog_roots entries are configured; pass backlog_root (absolute path under an allowlisted root) on this tool call."
+                        .to_string(),
+                );
+            }
+            let root = &allowlisted_roots[0];
+            if !root.is_absolute() {
+                return Err(
+                    "backlog_roots entries must be absolute paths in config.toml.".to_string(),
+                );
+            }
+            std::fs::canonicalize(root).map_err(|e| {
+                format!("backlog root does not exist or is not accessible: {e}")
+            })
+        }
+    }
 }
 
 /// Validate `spoke_root` is absolute, exists, and lies under one of `allowlisted_roots`.
@@ -4325,5 +4393,32 @@ mod tests {
         let err = validate_spoke_root_allowlisted(&[PathBuf::from("/tmp")], Path::new("relative"))
             .unwrap_err();
         assert!(err.contains("absolute"));
+    }
+
+    #[test]
+    fn test_validate_backlog_root_allowlisted_accepts_child() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let child = dir.path().join("nested");
+        std::fs::create_dir_all(&child).unwrap();
+        let allow = vec![root.clone()];
+        let got = validate_backlog_root_allowlisted(&allow, child.as_path()).unwrap();
+        assert_eq!(got, child.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_resolve_automation_backlog_cwd_single_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let got = resolve_automation_backlog_cwd(std::slice::from_ref(&root), None).unwrap();
+        assert_eq!(got, root);
+    }
+
+    #[test]
+    fn test_resolve_automation_backlog_cwd_requires_param_when_multiple() {
+        let a = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let b = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let err = resolve_automation_backlog_cwd(&[a, b], None).unwrap_err();
+        assert!(err.contains("Multiple"));
     }
 }

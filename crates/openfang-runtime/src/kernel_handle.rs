@@ -264,4 +264,9 @@ pub trait KernelHandle: Send + Sync {
     fn automation_spoke_roots(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+
+    /// Allowlisted backlog roots for native `backlog_task_*` tools (`[automation].backlog_roots`).
+    fn automation_backlog_roots(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
 }

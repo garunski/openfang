@@ -12,7 +12,7 @@ use openfang_types::tool::{ToolDefinition, ToolResult};
 use openfang_types::tool_compat::normalize_tool_name;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use tracing::{debug, warn};
 
 /// Maximum inter-agent call depth to prevent infinite recursion (A->B->C->...).
@@ -308,6 +308,63 @@ pub async fn execute_tool(
 
         "trigger_cursor_worker" => {
             return match tool_trigger_cursor_worker(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+
+        "backlog_task_create" => {
+            return match tool_backlog_task_create(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "backlog_task_list" => {
+            return match tool_backlog_task_list(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "backlog_task_view" => {
+            return match tool_backlog_task_view(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "backlog_task_edit" => {
+            return match tool_backlog_task_edit(input, kernel).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -697,6 +754,58 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI flags allowlisted by OpenFang (e.g. --yolo, --force)" }
                 },
                 "required": ["workspace", "prompt"]
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_task_create".to_string(),
+            description: "Create a Backlog.md task via `backlog task create` in an allowlisted backlog root. Returns structured JSON (exit_code, stdout, stderr, parsed hints).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Task title" },
+                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Label strings" },
+                    "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Task priority" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                },
+                "required": ["title"]
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_task_list".to_string(),
+            description: "List tasks via `backlog task list --plain`. Returns structured JSON including parsed sections and tasks.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                }
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_task_view".to_string(),
+            description: "Show one task via `backlog task <id> --plain`. Returns structured JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task id (e.g. TASK-4 or 4)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                },
+                "required": ["task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_task_edit".to_string(),
+            description: "Edit a task via `backlog task edit` with optional status, assignee, labels (add), and dependencies.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Task id (e.g. TASK-4 or 4)" },
+                    "status": { "type": "string", "description": "New status" },
+                    "assignee": { "type": "string", "description": "Assignee" },
+                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels to add (--add-label each)" },
+                    "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Dependency task ids (passed to --dep)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                },
+                "required": ["task_id"]
             }),
         },
         // --- Inter-agent tools ---
@@ -1825,6 +1934,296 @@ async fn tool_trigger_cursor_worker(
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
     let failed = exit_code != 0;
     Ok((json, failed))
+}
+
+// ---------------------------------------------------------------------------
+// Backlog.md CLI tools (`backlog task ...`)
+// ---------------------------------------------------------------------------
+
+static BACKLOG_LIST_TASK_LINE: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
+    regex_lite::Regex::new(r"^\s*\[(HIGH|MEDIUM|LOW)\]\s+(TASK-\d+)\s+-\s+(.+)$")
+        .expect("backlog list task line regex")
+});
+
+const BACKLOG_CLI_TIMEOUT_SECS: u64 = 300;
+
+pub(crate) fn parse_backlog_task_list_plain(text: &str) -> serde_json::Value {
+    let mut sections: Vec<serde_json::Value> = Vec::new();
+    let mut section_name = String::new();
+    let mut tasks: Vec<serde_json::Value> = Vec::new();
+
+    let flush = |sn: &mut String, ts: &mut Vec<serde_json::Value>, sec: &mut Vec<serde_json::Value>| {
+        if sn.is_empty() && ts.is_empty() {
+            return;
+        }
+        sec.push(serde_json::json!({
+            "section": std::mem::take(sn),
+            "tasks": std::mem::take(ts),
+        }));
+    };
+
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        if line.ends_with(':') && !line.contains('[') {
+            flush(&mut section_name, &mut tasks, &mut sections);
+            section_name = line[..line.len() - 1].trim().to_string();
+            continue;
+        }
+        if let Some(caps) = BACKLOG_LIST_TASK_LINE.captures(line) {
+            let priority = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+            let id = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+            let title = caps.get(3).map(|m| m.as_str()).unwrap_or("");
+            tasks.push(serde_json::json!({
+                "priority": priority,
+                "id": id,
+                "title": title,
+            }));
+        }
+    }
+    flush(&mut section_name, &mut tasks, &mut sections);
+    serde_json::json!({ "sections": sections })
+}
+
+fn parse_backlog_created_task_id(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let t = line.trim();
+        if let Some(rest) = t.strip_prefix("Task ") {
+            return rest.split_whitespace().next().map(std::string::ToString::to_string);
+        }
+    }
+    None
+}
+
+fn optional_backlog_root_param(input: &serde_json::Value) -> Option<&str> {
+    input
+        .get("backlog_root")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn backlog_task_id_param(input: &serde_json::Value) -> Result<String, String> {
+    if let Some(s) = input.get("task_id").and_then(|v| v.as_str()) {
+        let t = s.trim();
+        if t.is_empty() {
+            return Err("task_id must be non-empty".to_string());
+        }
+        return Ok(t.to_string());
+    }
+    if let Some(n) = input.get("task_id").and_then(|v| v.as_u64()) {
+        return Ok(n.to_string());
+    }
+    if let Some(i) = input.get("task_id").and_then(|v| v.as_i64()) {
+        if i >= 0 {
+            return Ok(i.to_string());
+        }
+    }
+    Err("Missing required parameter 'task_id'".to_string())
+}
+
+fn normalize_backlog_priority(s: &str) -> Result<String, String> {
+    let p = s.to_ascii_lowercase();
+    match p.as_str() {
+        "high" | "medium" | "low" => Ok(p),
+        _ => Err(format!(
+            "invalid priority '{s}'; use high, medium, or low"
+        )),
+    }
+}
+
+async fn run_backlog_cli(cwd: &Path, args: &[String]) -> Result<(i32, String, String), String> {
+    let mut cmd = tokio::process::Command::new("backlog");
+    for a in args {
+        cmd.arg(a);
+    }
+    cmd.current_dir(cwd);
+    cmd.stdin(std::process::Stdio::null());
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(BACKLOG_CLI_TIMEOUT_SECS),
+        cmd.output(),
+    )
+    .await
+    .map_err(|_| {
+        format!("backlog CLI timed out after {BACKLOG_CLI_TIMEOUT_SECS}s")
+    })?
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            "backlog CLI not found on PATH (install backlog.md / mise tool 'backlog')".to_string()
+        } else {
+            format!("Failed to run backlog: {e}")
+        }
+    })?;
+
+    let code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    Ok((code, stdout, stderr))
+}
+
+fn backlog_tool_json_response(
+    exit_code: i32,
+    stdout: &str,
+    stderr: &str,
+    parsed: serde_json::Value,
+) -> Result<(String, bool), String> {
+    let body = serde_json::json!({
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "parsed": parsed,
+    });
+    let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
+    Ok((json, exit_code != 0))
+}
+
+async fn tool_backlog_task_create(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let title = input["title"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'title'".to_string())?;
+    if title.trim().is_empty() {
+        return Err("title must be non-empty".to_string());
+    }
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+
+    let mut args: Vec<String> = vec![
+        "task".into(),
+        "create".into(),
+        title.to_string(),
+        "--plain".into(),
+    ];
+    if let Some(p) = input.get("priority").and_then(|v| v.as_str()) {
+        let np = normalize_backlog_priority(p)?;
+        args.push("--priority".into());
+        args.push(np);
+    }
+    if let Some(arr) = input.get("labels").and_then(|v| v.as_array()) {
+        if !arr.is_empty() {
+            let joined: Vec<String> = arr
+                .iter()
+                .filter_map(|v| {
+                    v.as_str()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                })
+                .collect();
+            if !joined.is_empty() {
+                args.push("-l".into());
+                args.push(joined.join(","));
+            }
+        }
+    }
+
+    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let parsed = serde_json::json!({
+        "created_task_id": parse_backlog_created_task_id(&stdout),
+    });
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_task_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+    let args = vec![
+        "task".into(),
+        "list".into(),
+        "--plain".into(),
+    ];
+    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let parsed = parse_backlog_task_list_plain(&stdout);
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_task_view(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let id = backlog_task_id_param(input)?;
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+    let args = vec!["task".into(), id, "--plain".into()];
+    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let headline = stdout.lines().next().unwrap_or("").to_string();
+    let parsed = serde_json::json!({ "headline": headline });
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_task_edit(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let id = backlog_task_id_param(input)?;
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+
+    let mut args: Vec<String> = vec!["task".into(), "edit".into(), id];
+    if let Some(s) = input.get("status").and_then(|v| v.as_str()) {
+        if !s.is_empty() {
+            args.push("-s".into());
+            args.push(s.to_string());
+        }
+    }
+    if let Some(a) = input.get("assignee").and_then(|v| v.as_str()) {
+        if !a.is_empty() {
+            args.push("-a".into());
+            args.push(a.to_string());
+        }
+    }
+    if let Some(arr) = input.get("labels").and_then(|v| v.as_array()) {
+        for v in arr {
+            if let Some(lab) = v.as_str().map(str::trim).filter(|s| !s.is_empty()) {
+                args.push("--add-label".into());
+                args.push(lab.to_string());
+            }
+        }
+    }
+    if let Some(arr) = input.get("dependencies").and_then(|v| v.as_array()) {
+        let deps: Vec<String> = arr
+            .iter()
+            .filter_map(|v| {
+                v.as_str()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+            })
+            .collect();
+        if !deps.is_empty() {
+            args.push("--dep".into());
+            args.push(deps.join(","));
+        }
+    }
+    args.push("--plain".into());
+
+    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let parsed = serde_json::json!({
+        "headline": stdout.lines().next().unwrap_or(""),
+    });
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
 
 // ---------------------------------------------------------------------------
@@ -3518,6 +3917,7 @@ mod tests {
     #[derive(Clone)]
     struct QaGateStubKernel {
         roots: Vec<PathBuf>,
+        backlog_roots: Vec<PathBuf>,
     }
 
     #[async_trait::async_trait]
@@ -3589,6 +3989,9 @@ mod tests {
         fn automation_spoke_roots(&self) -> Vec<PathBuf> {
             self.roots.clone()
         }
+        fn automation_backlog_roots(&self) -> Vec<PathBuf> {
+            self.backlog_roots.clone()
+        }
     }
 
     #[test]
@@ -3605,6 +4008,10 @@ mod tests {
         assert!(names.contains(&"shell_exec"));
         assert!(names.contains(&"enforce_quality_gate"));
         assert!(names.contains(&"trigger_cursor_worker"));
+        assert!(names.contains(&"backlog_task_create"));
+        assert!(names.contains(&"backlog_task_list"));
+        assert!(names.contains(&"backlog_task_view"));
+        assert!(names.contains(&"backlog_task_edit"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
         assert!(names.contains(&"agent_list"));
@@ -3721,7 +4128,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_enforce_quality_gate_empty_allowlist() {
-        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel { roots: vec![] });
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![],
+        });
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().canonicalize().unwrap();
         let result = execute_tool(
@@ -3760,6 +4170,7 @@ mod tests {
         let target = other.path().canonicalize().unwrap();
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![allow],
+            backlog_roots: vec![],
         });
         let result = execute_tool(
             "test-id",
@@ -3795,6 +4206,7 @@ mod tests {
         let allow = dir.path().canonicalize().unwrap();
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![allow],
+            backlog_roots: vec![],
         });
         let result = execute_tool(
             "test-id",
@@ -3857,7 +4269,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_trigger_cursor_worker_empty_allowlist() {
-        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel { roots: vec![] });
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![],
+        });
         let tmp = tempfile::tempdir().unwrap();
         let p = tmp.path().canonicalize().unwrap();
         let result = execute_tool(
@@ -3895,6 +4310,7 @@ mod tests {
         let target = other.path().canonicalize().unwrap();
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![allow],
+            backlog_roots: vec![],
         });
         let result = execute_tool(
             "test-id",
@@ -3929,6 +4345,7 @@ mod tests {
         let allow = dir.path().canonicalize().unwrap();
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![allow],
+            backlog_roots: vec![],
         });
         let result = execute_tool(
             "test-id",
@@ -3963,6 +4380,7 @@ mod tests {
         let allow = dir.path().canonicalize().unwrap();
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![allow.clone()],
+            backlog_roots: vec![],
         });
         let result = execute_tool(
             "test-id",
@@ -3998,6 +4416,7 @@ mod tests {
         let allow = dir.path().canonicalize().unwrap();
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![allow.clone()],
+            backlog_roots: vec![],
         });
         let result = execute_tool(
             "test-id",
@@ -4025,6 +4444,141 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("invalid mode"), "{}", result.content);
+    }
+
+    #[test]
+    fn test_parse_backlog_task_list_plain_fixture() {
+        let sample = "New:\n  [HIGH] TASK-8 - Title one\n\nReady for Dev:\n  [MEDIUM] TASK-4 - Other\n";
+        let v = parse_backlog_task_list_plain(sample);
+        let sections = v["sections"].as_array().unwrap();
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0]["section"], "New");
+        let tasks0 = sections[0]["tasks"].as_array().unwrap();
+        assert_eq!(tasks0[0]["id"], "TASK-8");
+        assert_eq!(tasks0[0]["priority"], "HIGH");
+    }
+
+    #[tokio::test]
+    async fn test_backlog_task_list_requires_kernel() {
+        let result = execute_tool(
+            "test-id",
+            "backlog_task_list",
+            &serde_json::json!({}),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Kernel"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_backlog_task_list_no_backlog_roots() {
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![],
+        });
+        let result = execute_tool(
+            "test-id",
+            "backlog_task_list",
+            &serde_json::json!({}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("No automation backlog roots"),
+            "{}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_backlog_task_list_multiple_roots_needs_param() {
+        let a = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let b = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![a, b],
+        });
+        let result = execute_tool(
+            "test-id",
+            "backlog_task_list",
+            &serde_json::json!({}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Multiple"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_backlog_task_view_missing_task_id() {
+        let root = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![root],
+        });
+        let result = execute_tool(
+            "test-id",
+            "backlog_task_view",
+            &serde_json::json!({}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("task_id"), "{}", result.content);
     }
 
     #[tokio::test]
