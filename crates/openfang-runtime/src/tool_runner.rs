@@ -377,6 +377,34 @@ pub async fn execute_tool(
                 },
             };
         }
+        "backlog_doc_create" => {
+            return match tool_backlog_doc_create(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "backlog_doc_list" => {
+            return match tool_backlog_doc_list(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
 
         // Inter-agent tools (require kernel handle)
         "agent_send" => tool_agent_send(input, kernel).await,
@@ -806,6 +834,30 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
                 },
                 "required": ["task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_doc_create".to_string(),
+            description: "Create a Backlog.md document under backlog/docs via `backlog doc create` (doc flow, not tasks). Requires allowlisted backlog root.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "title": { "type": "string", "description": "Document title" },
+                    "path": { "type": "string", "description": "Relative path under backlog/docs (category/subcategory, e.g. overview/openfang)" },
+                    "doc_type": { "type": "string", "description": "Document type (e.g. technical, guide)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                },
+                "required": ["title", "path", "doc_type"]
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_doc_list".to_string(),
+            description: "List Backlog.md documents via `backlog doc list --plain` (doc flow, not tasks). Returns structured JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                }
             }),
         },
         // --- Inter-agent tools ---
@@ -1937,12 +1989,16 @@ async fn tool_trigger_cursor_worker(
 }
 
 // ---------------------------------------------------------------------------
-// Backlog.md CLI tools (`backlog task ...`)
+// Backlog.md CLI tools (`backlog task ...`, `backlog doc ...`)
 // ---------------------------------------------------------------------------
 
 static BACKLOG_LIST_TASK_LINE: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
     regex_lite::Regex::new(r"^\s*\[(HIGH|MEDIUM|LOW)\]\s+(TASK-\d+)\s+-\s+(.+)$")
         .expect("backlog list task line regex")
+});
+
+static BACKLOG_DOC_LIST_LINE: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
+    regex_lite::Regex::new(r"^(\S+)\s+-\s+(\d+)\s+-\s+(.+)$").expect("backlog doc list line regex")
 });
 
 const BACKLOG_CLI_TIMEOUT_SECS: u64 = 300;
@@ -1987,6 +2043,24 @@ pub(crate) fn parse_backlog_task_list_plain(text: &str) -> serde_json::Value {
     serde_json::json!({ "sections": sections })
 }
 
+pub(crate) fn parse_backlog_doc_list_plain(text: &str) -> serde_json::Value {
+    let mut docs: Vec<serde_json::Value> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some(caps) = BACKLOG_DOC_LIST_LINE.captures(line) {
+            docs.push(serde_json::json!({
+                "doc_id": caps.get(1).map(|m| m.as_str()).unwrap_or(""),
+                "ordinal": caps.get(2).map(|m| m.as_str()).unwrap_or(""),
+                "title": caps.get(3).map(|m| m.as_str()).unwrap_or(""),
+            }));
+        }
+    }
+    serde_json::json!({ "docs": docs })
+}
+
 fn parse_backlog_created_task_id(text: &str) -> Option<String> {
     for line in text.lines() {
         let t = line.trim();
@@ -1995,6 +2069,20 @@ fn parse_backlog_created_task_id(text: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn validate_backlog_doc_relative_path(path: &str) -> Result<String, String> {
+    let t = path.trim();
+    if t.is_empty() {
+        return Err("path must be non-empty".to_string());
+    }
+    if t.starts_with('/') {
+        return Err("path must be relative (category/subcategory under backlog/docs/)".to_string());
+    }
+    if t.contains("..") {
+        return Err("path must not contain '..'".to_string());
+    }
+    Ok(t.to_string())
 }
 
 fn optional_backlog_root_param(input: &serde_json::Value) -> Option<&str> {
@@ -2223,6 +2311,73 @@ async fn tool_backlog_task_edit(
     let parsed = serde_json::json!({
         "headline": stdout.lines().next().unwrap_or(""),
     });
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_doc_create(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let title = input["title"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'title'".to_string())?;
+    if title.trim().is_empty() {
+        return Err("title must be non-empty".to_string());
+    }
+    let path = input["path"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'path'".to_string())?;
+    let path = validate_backlog_doc_relative_path(path)?;
+    let doc_type = input["doc_type"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'doc_type'".to_string())?;
+    if doc_type.trim().is_empty() {
+        return Err("doc_type must be non-empty".to_string());
+    }
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+    let docs_subpath = format!(
+        "backlog/docs/{}",
+        path.trim_start_matches('/').trim_end_matches('/')
+    );
+    let args: Vec<String> = vec![
+        "doc".into(),
+        "create".into(),
+        title.to_string(),
+        "-p".into(),
+        path,
+        "-t".into(),
+        doc_type.trim().to_string(),
+    ];
+    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let created = stdout.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix("Created document ")
+            .map(str::trim)
+            .map(std::string::ToString::to_string)
+    });
+    let parsed = serde_json::json!({
+        "created_doc_id": created,
+        "docs_subpath": docs_subpath,
+    });
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_doc_list(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+    let args = vec!["doc".into(), "list".into(), "--plain".into()];
+    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let parsed = parse_backlog_doc_list_plain(&stdout);
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
 
@@ -4012,6 +4167,8 @@ mod tests {
         assert!(names.contains(&"backlog_task_list"));
         assert!(names.contains(&"backlog_task_view"));
         assert!(names.contains(&"backlog_task_edit"));
+        assert!(names.contains(&"backlog_doc_create"));
+        assert!(names.contains(&"backlog_doc_list"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
         assert!(names.contains(&"agent_list"));
@@ -4447,6 +4604,17 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_backlog_doc_list_plain_fixture() {
+        let sample = "doc-1 - 1 - Alpha\n\ndoc-2 - 2 - Beta Gamma\n";
+        let v = parse_backlog_doc_list_plain(sample);
+        let docs = v["docs"].as_array().unwrap();
+        assert_eq!(docs.len(), 2);
+        assert_eq!(docs[0]["doc_id"], "doc-1");
+        assert_eq!(docs[0]["title"], "Alpha");
+        assert_eq!(docs[1]["title"], "Beta Gamma");
+    }
+
+    #[test]
     fn test_parse_backlog_task_list_plain_fixture() {
         let sample = "New:\n  [HIGH] TASK-8 - Title one\n\nReady for Dev:\n  [MEDIUM] TASK-4 - Other\n";
         let v = parse_backlog_task_list_plain(sample);
@@ -4456,6 +4624,67 @@ mod tests {
         let tasks0 = sections[0]["tasks"].as_array().unwrap();
         assert_eq!(tasks0[0]["id"], "TASK-8");
         assert_eq!(tasks0[0]["priority"], "HIGH");
+    }
+
+    #[tokio::test]
+    async fn test_backlog_doc_list_requires_kernel() {
+        let result = execute_tool(
+            "test-id",
+            "backlog_doc_list",
+            &serde_json::json!({}),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("Kernel"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_backlog_doc_create_rejects_absolute_path() {
+        let root = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![root],
+        });
+        let result = execute_tool(
+            "test-id",
+            "backlog_doc_create",
+            &serde_json::json!({
+                "title": "T",
+                "path": "/etc/passwd",
+                "doc_type": "technical"
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("relative"), "{}", result.content);
     }
 
     #[tokio::test]

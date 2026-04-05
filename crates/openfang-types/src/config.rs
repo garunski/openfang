@@ -1250,6 +1250,53 @@ pub fn validate_spoke_root_allowlisted(
     ))
 }
 
+fn path_is_under_any_canonical_root(canon: &std::path::Path, roots: &[PathBuf]) -> bool {
+    for root in roots {
+        if !root.is_absolute() {
+            continue;
+        }
+        let Ok(root_canon) = std::fs::canonicalize(root) else {
+            continue;
+        };
+        if canon.strip_prefix(&root_canon).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Canonicalize `candidate` when it exists and lies under `[automation].spoke_roots` or `[automation].backlog_roots`.
+///
+/// At least one of the two allowlists must be non-empty. Used for unified pipeline path checks (e.g. git tools).
+pub fn validate_automation_allowlisted_path(
+    spoke_roots: &[PathBuf],
+    backlog_roots: &[PathBuf],
+    candidate: &std::path::Path,
+) -> Result<PathBuf, String> {
+    if spoke_roots.is_empty() && backlog_roots.is_empty() {
+        return Err(
+            "No automation paths configured. Add [automation].spoke_roots and/or [automation].backlog_roots in config.toml."
+                .to_string(),
+        );
+    }
+    if !candidate.is_absolute() {
+        return Err("path must be an absolute path".to_string());
+    }
+    let canon = std::fs::canonicalize(candidate).map_err(|e| {
+        format!("path does not exist or is not accessible: {e}")
+    })?;
+    if path_is_under_any_canonical_root(&canon, spoke_roots)
+        || path_is_under_any_canonical_root(&canon, backlog_roots)
+    {
+        Ok(canon)
+    } else {
+        Err(format!(
+            "path '{}' is not under any [automation].spoke_roots or [automation].backlog_roots entry",
+            canon.display()
+        ))
+    }
+}
+
 /// Heartbeat monitor settings exposed in `[heartbeat]` config section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HeartbeatSettings {
@@ -1491,6 +1538,18 @@ impl Default for KernelConfig {
 }
 
 impl KernelConfig {
+    /// Canonical path when `candidate` is under `automation.spoke_roots` or `automation.backlog_roots`.
+    pub fn validate_automation_allowlisted_path(
+        &self,
+        candidate: &std::path::Path,
+    ) -> Result<PathBuf, String> {
+        validate_automation_allowlisted_path(
+            &self.automation.spoke_roots,
+            &self.automation.backlog_roots,
+            candidate,
+        )
+    }
+
     /// Resolved workspaces root directory.
     pub fn effective_workspaces_dir(&self) -> PathBuf {
         self.workspaces_dir
@@ -4420,5 +4479,77 @@ mod tests {
         let b = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
         let err = resolve_automation_backlog_cwd(&[a, b], None).unwrap_err();
         assert!(err.contains("Multiple"));
+    }
+
+    #[test]
+    fn test_validate_automation_allowlisted_path_accepts_spoke_or_backlog() {
+        let spoke = tempfile::tempdir().unwrap();
+        let backlog = tempfile::tempdir().unwrap();
+        let spoke_root = spoke.path().canonicalize().unwrap();
+        let backlog_root = backlog.path().canonicalize().unwrap();
+        let child_spoke = spoke.path().join("nested");
+        std::fs::create_dir_all(&child_spoke).unwrap();
+        let child_bl = backlog.path().join("docs");
+        std::fs::create_dir_all(&child_bl).unwrap();
+
+        let got = validate_automation_allowlisted_path(
+            std::slice::from_ref(&spoke_root),
+            std::slice::from_ref(&backlog_root),
+            child_spoke.as_path(),
+        )
+        .unwrap();
+        assert_eq!(got, child_spoke.canonicalize().unwrap());
+
+        let got2 = validate_automation_allowlisted_path(
+            std::slice::from_ref(&spoke_root),
+            std::slice::from_ref(&backlog_root),
+            child_bl.as_path(),
+        )
+        .unwrap();
+        assert_eq!(got2, child_bl.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn test_validate_automation_allowlisted_path_rejects_outside() {
+        let spoke = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let spoke_root = spoke.path().canonicalize().unwrap();
+        let err = validate_automation_allowlisted_path(
+            std::slice::from_ref(&spoke_root),
+            &[],
+            other.path(),
+        )
+        .unwrap_err();
+        assert!(err.contains("not under any"));
+    }
+
+    #[test]
+    fn test_validate_automation_allowlisted_path_both_lists_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let err = validate_automation_allowlisted_path(&[], &[], dir.path()).unwrap_err();
+        assert!(err.contains("No automation paths configured"));
+    }
+
+    #[test]
+    fn test_validate_automation_allowlisted_path_requires_absolute() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let err = validate_automation_allowlisted_path(std::slice::from_ref(&root), &[], Path::new("relative"))
+            .unwrap_err();
+        assert!(err.contains("absolute"));
+    }
+
+    #[test]
+    fn test_kernel_config_validate_automation_allowlisted_path() {
+        let mut config = KernelConfig::default();
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().canonicalize().unwrap();
+        let nested = base.path().join("sub");
+        std::fs::create_dir_all(&nested).unwrap();
+        config.automation.backlog_roots = vec![root];
+        let got = config
+            .validate_automation_allowlisted_path(nested.as_path())
+            .unwrap();
+        assert_eq!(got, nested.canonicalize().unwrap());
     }
 }

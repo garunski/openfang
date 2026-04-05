@@ -19,6 +19,12 @@ decay_rate = 0.05                         # Memory confidence decay rate
 listen_addr = "127.0.0.1:4200"           # OFP listen address
 # shared_secret = ""                      # Required for P2P authentication
 
+# Pipeline allowlists: absolute paths for native tools (quality gate, Cursor worker, backlog/doc CLI).
+# A repo may be listed in spoke_roots, backlog_roots, or both; tools validate against the relevant list.
+# [automation]
+# spoke_roots = ["/home/you/code/my-spoke"]
+# backlog_roots = ["/home/you/code/my-spoke"]
+
 # Session compaction (LLM-based context management)
 # [compaction]
 # threshold = 80                          # Compact when messages exceed this count

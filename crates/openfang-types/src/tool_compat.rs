@@ -63,6 +63,8 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "backlog_task_list"
             | "backlog_task_view"
             | "backlog_task_edit"
+            | "backlog_doc_create"
+            | "backlog_doc_list"
             | "web_search"
             | "web_fetch"
             | "browser_navigate"
