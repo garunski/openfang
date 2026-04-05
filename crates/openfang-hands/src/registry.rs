@@ -648,7 +648,7 @@ mod tests {
     fn load_bundled_hands() {
         let reg = HandRegistry::new();
         let count = reg.load_bundled();
-        assert_eq!(count, 9);
+        assert_eq!(count, 10);
         assert!(!reg.list_definitions().is_empty());
 
         // Clip hand should be loaded
@@ -666,6 +666,8 @@ mod tests {
 
         // Browser hand should be loaded
         assert!(reg.get_definition("browser").is_some());
+
+        assert!(reg.get_definition("pipeline-coordinator").is_some());
     }
 
     #[test]

@@ -24,6 +24,12 @@ listen_addr = "127.0.0.1:4200"           # OFP listen address
 # [automation]
 # spoke_roots = ["/home/you/code/my-spoke"]
 # backlog_roots = ["/home/you/code/my-spoke"]
+# max_retries = 2                         # Retries after failed quality gate (default: 2)
+#
+# [automation.model_routing]
+# planning = "premium"                    # Default phases: planning / implementation / retry
+# implementation = "default"
+# retry = "default"
 
 # Session compaction (LLM-based context management)
 # [compaction]

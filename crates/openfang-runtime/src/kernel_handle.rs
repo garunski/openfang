@@ -269,4 +269,14 @@ pub trait KernelHandle: Send + Sync {
     fn automation_backlog_roots(&self) -> Vec<PathBuf> {
         Vec::new()
     }
+
+    /// `[automation].max_retries` for pipeline / coordinator retry after failed quality gate.
+    fn automation_max_retries(&self) -> u32 {
+        2
+    }
+
+    /// `[automation].model_routing` model id for a pipeline phase (e.g. `planning`, `implementation`).
+    fn automation_model_for_phase(&self, phase: &str) -> String {
+        openfang_types::config::default_automation_model_for_phase(phase).to_string()
+    }
 }

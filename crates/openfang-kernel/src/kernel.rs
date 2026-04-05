@@ -5958,6 +5958,14 @@ impl KernelHandle for OpenFangKernel {
         self.config.automation.backlog_roots.clone()
     }
 
+    fn automation_max_retries(&self) -> u32 {
+        self.config.automation.max_retries
+    }
+
+    fn automation_model_for_phase(&self, phase: &str) -> String {
+        self.config.automation.model_for_phase(phase).to_string()
+    }
+
     fn kill_agent(&self, agent_id: &str) -> Result<(), String> {
         let id: AgentId = agent_id
             .parse()

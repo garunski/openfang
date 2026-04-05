@@ -50,6 +50,11 @@ pub fn bundled_hands() -> Vec<(&'static str, &'static str, &'static str)> {
             include_str!("../bundled/infisical-sync/HAND.toml"),
             include_str!("../bundled/infisical-sync/SKILL.md"),
         ),
+        (
+            "pipeline-coordinator",
+            include_str!("../bundled/pipeline-coordinator/HAND.toml"),
+            include_str!("../bundled/pipeline-coordinator/SKILL.md"),
+        ),
     ]
 }
 
@@ -81,7 +86,7 @@ mod tests {
     #[test]
     fn bundled_hands_count() {
         let hands = bundled_hands();
-        assert_eq!(hands.len(), 9);
+        assert_eq!(hands.len(), 10);
     }
 
     #[test]
@@ -420,6 +425,48 @@ mod tests {
         assert!(
             def.agent.temperature < 0.2,
             "security hand should use low temperature"
+        );
+    }
+
+    #[test]
+    fn parse_pipeline_coordinator_hand() {
+        let (id, toml_content, skill_content) = bundled_hands()
+            .into_iter()
+            .find(|(id, _, _)| *id == "pipeline-coordinator")
+            .expect("pipeline-coordinator hand must be in bundled_hands()");
+        let def = parse_bundled(id, toml_content, skill_content).unwrap();
+        assert_eq!(def.id, "pipeline-coordinator");
+        assert_eq!(def.name, "Pipeline Coordinator Hand");
+        assert_eq!(def.category, crate::HandCategory::Development);
+        assert!(def.skill_content.is_some());
+        for tool in [
+            "enforce_quality_gate",
+            "trigger_cursor_worker",
+            "backlog_task_create",
+            "backlog_task_list",
+            "backlog_task_view",
+            "backlog_task_edit",
+        ] {
+            assert!(
+                def.tools.contains(&tool.to_string()),
+                "pipeline-coordinator must declare {tool}"
+            );
+        }
+        assert!(
+            !def.dashboard.metrics.is_empty(),
+            "must have dashboard metrics"
+        );
+        assert!(
+            !def.agent.system_prompt.is_empty(),
+            "must have system_prompt"
+        );
+        assert!(
+            def.agent.system_prompt.contains("enforce_quality_gate"),
+            "system_prompt should reference quality gate"
+        );
+        assert!(
+            def.agent.system_prompt.contains("max_retries"),
+            "system_prompt should reference max_retries"
         );
     }
 

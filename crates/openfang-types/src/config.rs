@@ -1135,8 +1135,31 @@ pub struct KernelConfig {
     pub automation: AutomationConfig,
 }
 
+fn default_automation_max_retries() -> u32 {
+    2
+}
+
+fn default_automation_model_routing() -> HashMap<String, String> {
+    [
+        ("planning".to_string(), "premium".to_string()),
+        ("implementation".to_string(), "default".to_string()),
+        ("retry".to_string(), "default".to_string()),
+    ]
+    .into_iter()
+    .collect()
+}
+
+/// Built-in default model id when `[automation].model_routing` has no entry for `phase`.
+pub fn default_automation_model_for_phase(phase: &str) -> &'static str {
+    match phase {
+        "planning" => "premium",
+        "implementation" | "retry" => "default",
+        _ => "default",
+    }
+}
+
 /// Automation / pipeline configuration (`[automation]` in config.toml).
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AutomationConfig {
     /// Absolute spoke repository roots allowed for `enforce_quality_gate` and `trigger_cursor_worker`.
@@ -1145,6 +1168,33 @@ pub struct AutomationConfig {
     /// Absolute backlog repository roots for native `backlog_task_*` tools.
     #[serde(default)]
     pub backlog_roots: Vec<PathBuf>,
+    /// Max pipeline retries after a failed quality gate (coordinator / hand).
+    #[serde(default = "default_automation_max_retries")]
+    pub max_retries: u32,
+    /// Pipeline phase → model identifier (e.g. `planning`, `implementation`, `retry`).
+    #[serde(default = "default_automation_model_routing")]
+    pub model_routing: HashMap<String, String>,
+}
+
+impl Default for AutomationConfig {
+    fn default() -> Self {
+        Self {
+            spoke_roots: Vec::new(),
+            backlog_roots: Vec::new(),
+            max_retries: default_automation_max_retries(),
+            model_routing: default_automation_model_routing(),
+        }
+    }
+}
+
+impl AutomationConfig {
+    /// Resolved model identifier for a pipeline phase (configured or built-in default).
+    pub fn model_for_phase(&self, phase: &str) -> &str {
+        self.model_routing
+            .get(phase)
+            .map(|s| s.as_str())
+            .unwrap_or_else(|| default_automation_model_for_phase(phase))
+    }
 }
 
 /// Validate `backlog_root` is absolute, exists, and lies under one of `allowlisted_roots`.
@@ -1550,6 +1600,16 @@ impl KernelConfig {
         )
     }
 
+    /// `[automation].max_retries` (default 2).
+    pub fn automation_max_retries(&self) -> u32 {
+        self.automation.max_retries
+    }
+
+    /// `[automation].model_routing` lookup for a pipeline phase.
+    pub fn automation_model_for_phase(&self, phase: &str) -> &str {
+        self.automation.model_for_phase(phase)
+    }
+
     /// Resolved workspaces root directory.
     pub fn effective_workspaces_dir(&self) -> PathBuf {
         self.workspaces_dir
@@ -1666,9 +1726,11 @@ impl std::fmt::Debug for KernelConfig {
             .field(
                 "automation",
                 &format!(
-                    "{} spoke root(s), {} backlog root(s)",
+                    "{} spoke root(s), {} backlog root(s), max_retries={}, {} model route(s)",
                     self.automation.spoke_roots.len(),
-                    self.automation.backlog_roots.len()
+                    self.automation.backlog_roots.len(),
+                    self.automation.max_retries,
+                    self.automation.model_routing.len()
                 ),
             )
             .finish()
@@ -4416,6 +4478,55 @@ mod tests {
         let toml_str = toml::to_string(&config).unwrap();
         let back: KernelConfig = toml::from_str(&toml_str).unwrap();
         assert_eq!(back.automation.spoke_roots, vec![root]);
+    }
+
+    #[test]
+    fn test_automation_max_retries_default() {
+        assert_eq!(AutomationConfig::default().max_retries, 2);
+        assert_eq!(KernelConfig::default().automation_max_retries(), 2);
+    }
+
+    #[test]
+    fn test_automation_max_retries_in_toml() {
+        let toml_str = r#"
+            [automation]
+            max_retries = 5
+        "#;
+        let config: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.automation.max_retries, 5);
+        assert_eq!(config.automation_max_retries(), 5);
+    }
+
+    #[test]
+    fn test_automation_max_retries_omitted_in_section() {
+        let toml_str = r#"
+            [automation]
+        "#;
+        let config: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.automation.max_retries, 2);
+    }
+
+    #[test]
+    fn test_automation_model_routing_defaults() {
+        let a = AutomationConfig::default();
+        assert_eq!(a.model_for_phase("planning"), "premium");
+        assert_eq!(a.model_for_phase("implementation"), "default");
+        assert_eq!(a.model_for_phase("retry"), "default");
+        assert_eq!(a.model_for_phase("unknown"), "default");
+        assert_eq!(KernelConfig::default().automation_model_for_phase("planning"), "premium");
+    }
+
+    #[test]
+    fn test_automation_model_routing_toml_override() {
+        let toml_str = r#"
+            [automation.model_routing]
+            planning = "claude-opus"
+            implementation = "groq-fast"
+        "#;
+        let config: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.automation_model_for_phase("planning"), "claude-opus");
+        assert_eq!(config.automation_model_for_phase("implementation"), "groq-fast");
+        assert_eq!(config.automation_model_for_phase("retry"), "default");
     }
 
     #[test]
