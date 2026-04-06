@@ -129,6 +129,8 @@ pub struct OpenFangKernel {
     pub delivery_tracker: DeliveryTracker,
     /// Cron job scheduler.
     pub cron_scheduler: crate::cron::CronScheduler,
+    /// Registered multi-repo projects (file-backed).
+    pub project_store: crate::project_store::ProjectStore,
     /// Execution approval manager.
     pub approval_manager: crate::approval::ApprovalManager,
     /// Agent bindings for multi-account routing (Mutex for runtime add/remove).
@@ -1028,6 +1030,18 @@ impl OpenFangKernel {
             }
         }
 
+        let project_store = crate::project_store::ProjectStore::new(&config.home_dir);
+        match project_store.load() {
+            Ok(count) => {
+                if count > 0 {
+                    info!("Loaded {count} project(s) from disk");
+                }
+            }
+            Err(e) => {
+                warn!("Failed to load projects: {e}");
+            }
+        }
+
         // Initialize execution approval manager
         let approval_manager = crate::approval::ApprovalManager::new(config.approval.clone());
 
@@ -1072,6 +1086,7 @@ impl OpenFangKernel {
             effective_mcp_servers: std::sync::RwLock::new(all_mcp_servers),
             delivery_tracker: DeliveryTracker::new(),
             cron_scheduler,
+            project_store,
             approval_manager,
             bindings: std::sync::Mutex::new(initial_bindings),
             broadcast: initial_broadcast,

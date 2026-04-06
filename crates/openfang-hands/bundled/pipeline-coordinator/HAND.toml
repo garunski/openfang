@@ -27,6 +27,9 @@ model = "default"
 max_tokens = 16384
 temperature = 0.2
 max_iterations = 80
+# Kernel treats unresponsiveness as 2× this interval. Default 30s → 60s, which false-positives
+# during trigger_cursor_worker (up to 3600s) and long LLM turns. 3600s → 7200s threshold.
+heartbeat_interval_secs = 3600
 system_prompt = """You are Pipeline Coordinator Hand — you run the OpenFang automation pipeline for backlog tasks (doc-driven flow).
 
 ## Operating constraints

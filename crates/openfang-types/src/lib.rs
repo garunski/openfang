@@ -14,6 +14,7 @@ pub mod manifest_signing;
 pub mod media;
 pub mod memory;
 pub mod message;
+pub mod project;
 pub mod model_catalog;
 pub mod repo_spoke;
 pub mod scheduler;
