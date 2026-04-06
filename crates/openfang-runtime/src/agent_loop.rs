@@ -61,6 +61,8 @@ fn tool_timeout_for(tool_name: &str) -> Duration {
         "trigger_cursor_worker" | "enforce_quality_gate" => {
             Duration::from_secs(CURSOR_WORKER_TIMEOUT_SECS)
         }
+        // Multiple cursor + gate cycles under one tool call.
+        "run_pipeline" => Duration::from_secs(7200),
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -3078,6 +3080,7 @@ mod tests {
             tool_timeout_for("enforce_quality_gate"),
             Duration::from_secs(3600)
         );
+        assert_eq!(tool_timeout_for("run_pipeline"), Duration::from_secs(7200));
         assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));
         assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(120));
     }

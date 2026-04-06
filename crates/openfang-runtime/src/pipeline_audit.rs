@@ -192,6 +192,25 @@ pub fn log_cursor_worker(
     });
 }
 
+pub fn log_pipeline_run_outcome(
+    task_id: impl Into<String>,
+    success: bool,
+    retry_count: u32,
+    rollback_to_status: Option<String>,
+    actor: impl Into<String>,
+    tool: impl Into<String>,
+) {
+    emit(PipelineAuditEvent::PipelineRunOutcome {
+        timestamp: Utc::now().to_rfc3339(),
+        task_id: task_id.into(),
+        success,
+        retry_count,
+        rollback_to_status,
+        actor: actor.into(),
+        tool: tool.into(),
+    });
+}
+
 /// Parse `status:` from YAML front matter in `backlog task <id> --plain` output.
 pub fn parse_backlog_plain_status(text: &str) -> Option<String> {
     let mut in_fm = false;

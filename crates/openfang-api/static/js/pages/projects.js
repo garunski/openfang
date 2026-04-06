@@ -47,6 +47,9 @@ function projectsPage() {
     registerForm: { name: '', path: '' },
     registerSubmitting: false,
     registerError: '',
+    bindAgentForm: { agent_id: '' },
+    bindAgentSubmitting: false,
+    bindAgentError: '',
     taskModalOpen: false,
     taskModalTitle: '',
     taskModalLoading: false,
@@ -100,6 +103,8 @@ function projectsPage() {
       this.detailSpokes = [];
       this.detailAgents = [];
       this.detailPipelines = [];
+      this.bindAgentForm = { agent_id: '' };
+      this.bindAgentError = '';
       this.detailErrors = {
         backlog: '',
         spokes: '',
@@ -276,6 +281,51 @@ function projectsPage() {
         this.registerError = e.message || 'Registration failed';
       }
       this.registerSubmitting = false;
+    },
+
+    async bindProjectAgent() {
+      if (!this.selectedProject) return;
+      var aid = (this.bindAgentForm.agent_id || '').trim();
+      if (!aid) {
+        this.bindAgentError = 'Agent id is required';
+        return;
+      }
+      this.bindAgentSubmitting = true;
+      this.bindAgentError = '';
+      try {
+        await OpenFangAPI.post(
+          '/api/projects/' + encodeURIComponent(this.selectedProject.id) + '/agents',
+          { agent_id: aid }
+        );
+        OpenFangToast.success('Agent bound to project');
+        this.bindAgentForm.agent_id = '';
+        this.setDetailLoaded('agents', false);
+        await this.loadDetailTab('agents', true);
+      } catch (e) {
+        this.bindAgentError = e.message || 'Bind failed';
+      }
+      this.bindAgentSubmitting = false;
+    },
+
+    async unbindProjectAgent(agent) {
+      if (!this.selectedProject || !agent || !agent.agent_id) return;
+      if (agent.binding !== 'explicit') return;
+      this.bindAgentSubmitting = true;
+      this.bindAgentError = '';
+      try {
+        await OpenFangAPI.del(
+          '/api/projects/' +
+            encodeURIComponent(this.selectedProject.id) +
+            '/agents/' +
+            encodeURIComponent(agent.agent_id)
+        );
+        OpenFangToast.success('Binding removed');
+        this.setDetailLoaded('agents', false);
+        await this.loadDetailTab('agents', true);
+      } catch (e) {
+        this.bindAgentError = e.message || 'Unbind failed';
+      }
+      this.bindAgentSubmitting = false;
     },
 
     priorityClass(p) {

@@ -59,6 +59,7 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "shell_exec"
             | "enforce_quality_gate"
             | "trigger_cursor_worker"
+            | "run_pipeline"
             | "record_git_action"
             | "record_pipeline_outcome"
             | "backlog_task_create"

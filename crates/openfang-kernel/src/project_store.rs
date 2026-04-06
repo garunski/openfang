@@ -147,6 +147,59 @@ impl ProjectStore {
         Ok(updated)
     }
 
+    /// Append `agent_id` (UUID string) to [`Project::bound_agents`] if not already present.
+    pub fn bind_agent(&self, project_id: ProjectId, agent_id: String) -> OpenFangResult<()> {
+        let id_norm = agent_id.trim();
+        if id_norm.is_empty() {
+            return Err(OpenFangError::InvalidInput(
+                "agent_id must be non-empty".into(),
+            ));
+        }
+        let id_norm = id_norm.to_string();
+        let mut map = self
+            .projects
+            .write()
+            .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
+        let project = map
+            .get_mut(&project_id)
+            .ok_or_else(|| OpenFangError::InvalidInput(format!("Unknown project id {project_id}")))?;
+        if project.bound_agents.iter().any(|a| a == &id_norm) {
+            return Err(OpenFangError::InvalidInput(
+                "Agent already bound to project".into(),
+            ));
+        }
+        project.bound_agents.push(id_norm);
+        project.updated_at = chrono::Utc::now();
+        drop(map);
+        self.persist()
+    }
+
+    /// Remove `agent_id` from [`Project::bound_agents`].
+    pub fn unbind_agent(&self, project_id: ProjectId, agent_id: &str) -> OpenFangResult<()> {
+        let needle = agent_id.trim();
+        if needle.is_empty() {
+            return Err(OpenFangError::InvalidInput(
+                "agent_id must be non-empty".into(),
+            ));
+        }
+        let mut map = self
+            .projects
+            .write()
+            .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
+        let project = map
+            .get_mut(&project_id)
+            .ok_or_else(|| OpenFangError::InvalidInput(format!("Unknown project id {project_id}")))?;
+        let pos = project
+            .bound_agents
+            .iter()
+            .position(|a| a == needle)
+            .ok_or_else(|| OpenFangError::InvalidInput("Agent binding not found".into()))?;
+        project.bound_agents.remove(pos);
+        project.updated_at = chrono::Utc::now();
+        drop(map);
+        self.persist()
+    }
+
     pub fn remove(&self, id: ProjectId) -> OpenFangResult<Project> {
         let mut map = self
             .projects
@@ -354,6 +407,25 @@ mod tests {
         let id = store.register(sample_project("z", p)).unwrap();
         store.remove(id).unwrap();
         assert!(store.get(id).is_none());
+    }
+
+    #[test]
+    fn bind_and_unbind_agent_roundtrip() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("r");
+        std::fs::create_dir_all(&p).unwrap();
+        let store = ProjectStore::new(dir.path());
+        let id = store.register(sample_project("n1", p)).unwrap();
+        store.bind_agent(id, "a1-uuid".into()).unwrap();
+        let loaded = store.get(id).unwrap();
+        assert_eq!(loaded.bound_agents, vec!["a1-uuid".to_string()]);
+        store.unbind_agent(id, "a1-uuid").unwrap();
+        assert!(store.get(id).unwrap().bound_agents.is_empty());
+        store.bind_agent(id, "a1-uuid".into()).unwrap();
+        let err2 = store.bind_agent(id, "a1-uuid".into()).unwrap_err();
+        assert!(err2.to_string().contains("already bound"), "{err2}");
+        let err3 = store.unbind_agent(id, "missing").unwrap_err();
+        assert!(err3.to_string().contains("binding not found"), "{err3}");
     }
 
     #[test]

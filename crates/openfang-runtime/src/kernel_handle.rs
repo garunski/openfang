@@ -275,6 +275,12 @@ pub trait KernelHandle: Send + Sync {
         2
     }
 
+    /// Effective max retries: `ProjectPipelineOverrides.max_retries` when set for `project_id`, else [`Self::automation_max_retries`].
+    fn automation_effective_max_retries(&self, project_id: Option<&str>) -> u32 {
+        let _ = project_id;
+        self.automation_max_retries()
+    }
+
     /// `[automation].model_routing` model id for a pipeline phase (e.g. `planning`, `implementation`).
     fn automation_model_for_phase(&self, phase: &str) -> String {
         openfang_types::config::default_automation_model_for_phase(phase).to_string()

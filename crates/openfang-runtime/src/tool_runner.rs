@@ -321,6 +321,21 @@ pub async fn execute_tool(
             };
         }
 
+        "run_pipeline" => {
+            return match tool_run_pipeline(input, kernel, caller_agent_id).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+
         "backlog_task_create" => {
             return match tool_backlog_task_create(input, kernel).await {
                 Ok((content, is_error)) => ToolResult {
@@ -814,6 +829,26 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "task_id": { "type": "string", "description": "Backlog task id for audit correlation; default unknown if omitted" }
                 },
                 "required": ["workspace", "prompt"]
+            }),
+        },
+        ToolDefinition {
+            name: "run_pipeline".to_string(),
+            description: "Run the automation pipeline in Rust: repeated `trigger_cursor_worker` then `enforce_quality_gate` until the gate passes or `max_retries` is exhausted. Emits the same `QualityGate`, `CursorWorker`, and `PipelineRunOutcome` audit events as the standalone tools. Provide either `workspace` or `task_labels` (with a `repo:<spoke>` label) to resolve the spoke root.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "task_id": { "type": "string", "description": "Backlog task id for audit correlation" },
+                    "workspace": { "type": "string", "description": "Absolute allowlisted spoke root (omit if task_labels resolves it)" },
+                    "task_labels": { "type": "array", "items": { "type": "string" }, "description": "Task labels including exactly one repo:<spoke> when workspace is omitted" },
+                    "prompt": { "type": "string", "description": "Initial Cursor prompt (gate stderr is appended automatically on retries)" },
+                    "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor mode (default: agent)" },
+                    "behavior": { "type": "string", "description": "Optional extra behavior passed to each Cursor invocation" },
+                    "flags": { "type": "array", "items": { "type": "string" }, "description": "Allowlisted extra cursor agent flags" },
+                    "max_retries": { "type": "integer", "description": "Extra Cursor rounds after a failed gate; default from kernel / project pipeline_overrides" },
+                    "project_id": { "type": "string", "description": "Registered project UUID for pipeline_overrides.max_retries when set" },
+                    "rollback_to_status": { "type": "string", "description": "Recorded on failure outcome (e.g. Ready for Dev); does not edit the backlog task" }
+                },
+                "required": ["task_id", "prompt"]
             }),
         },
         ToolDefinition {
@@ -1887,9 +1922,6 @@ async fn tool_shell_exec(
     }
 }
 
-/// Timeout for full workspace build + test + clippy via mise.
-const ENFORCE_QA_GATE_TIMEOUT_SECS: u64 = 3600;
-
 async fn tool_enforce_quality_gate(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
@@ -1899,105 +1931,18 @@ async fn tool_enforce_quality_gate(
     let spoke_root = input["spoke_root"]
         .as_str()
         .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
-    let path = Path::new(spoke_root);
-    let resolved = openfang_types::config::validate_spoke_root_allowlisted(
-        &kh.automation_spoke_roots(),
-        path,
-    )?;
     let task_id = optional_pipeline_task_id(input);
-
-    let mut cmd = tokio::process::Command::new("mise");
-    cmd.args(["run", "001-qa"]);
-    cmd.current_dir(&resolved);
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(ENFORCE_QA_GATE_TIMEOUT_SECS),
-        cmd.output(),
-    )
-    .await
-    .map_err(|_| {
-        format!(
-            "enforce_quality_gate timed out after {ENFORCE_QA_GATE_TIMEOUT_SECS}s"
-        )
-    })?
-    .map_err(|e| format!("Failed to run mise: {e}"))?;
-
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-
+    let actor = pipeline_tool_actor(caller_agent_id);
+    let out = crate::pipeline_steps::run_quality_gate(kh.as_ref(), spoke_root, &task_id, &actor)
+        .await?;
     let body = serde_json::json!({
-        "exit_code": exit_code,
-        "stdout": stdout,
-        "stderr": stderr,
+        "exit_code": out.exit_code,
+        "stdout": out.stdout,
+        "stderr": out.stderr,
     });
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    let failed = exit_code != 0;
-    crate::pipeline_audit::log_quality_gate(
-        task_id,
-        resolved.display().to_string(),
-        exit_code,
-        pipeline_tool_actor(caller_agent_id),
-    );
+    let failed = out.exit_code != 0;
     Ok((json, failed))
-}
-
-/// Extra `cursor agent` argv tokens permitted via the `flags` tool parameter (AC #8).
-const CURSOR_AGENT_ALLOWLISTED_FLAGS: &[&str] = &["--yolo", "--force"];
-
-/// Timeout for Cursor Agent CLI runs (build/test-scale work).
-const TRIGGER_CURSOR_WORKER_TIMEOUT_SECS: u64 = 3600;
-
-/// Default implementation contract for `trigger_cursor_worker` in `agent` mode.
-/// Full text lives at `.cursor/skills/implement/SKILL.md` in the workspace; spokes should vendor that file.
-const CURSOR_IMPLEMENT_CONTRACT_REF: &str = "Follow the implementation behavior contract in `.cursor/skills/implement/SKILL.md` in this workspace (read it at the start of the run). If that file is missing, still: read the task markdown from the path or task id in the prompt, implement until every acceptance criterion is satisfied, run `mise run 001-qa` from this workspace root before you finish, and honor `.cursorignore` and `.cursor/rules`.";
-
-/// Builds the `-p` payload for Cursor Agent CLI. In `agent` mode, always appends the implementation contract;
-/// optional `behavior` adds project-specific expectations after it.
-fn compose_trigger_cursor_worker_prompt(prompt: &str, mode: &str, behavior: Option<&str>) -> String {
-    let extra = behavior.map(str::trim).filter(|s| !s.is_empty());
-    if mode == "agent" {
-        let mut block = String::from("--- Behavior / expectations ---\n");
-        block.push_str(CURSOR_IMPLEMENT_CONTRACT_REF);
-        if let Some(b) = extra {
-            block.push_str("\n\n--- Additional behavior ---\n");
-            block.push_str(b);
-        }
-        format!("{prompt}\n\n{block}")
-    } else if let Some(b) = extra {
-        format!("{prompt}\n\n--- Behavior / expectations ---\n{b}")
-    } else {
-        prompt.to_string()
-    }
-}
-
-fn parse_cursor_agent_extra_flags(input: &serde_json::Value) -> Result<Vec<String>, String> {
-    match input.get("flags") {
-        None => Ok(Vec::new()),
-        Some(v) if v.is_null() => Ok(Vec::new()),
-        Some(v) => {
-            let arr = v
-                .as_array()
-                .ok_or_else(|| "flags must be a JSON array of strings".to_string())?;
-            let mut out = Vec::with_capacity(arr.len());
-            for item in arr {
-                let s = item
-                    .as_str()
-                    .ok_or_else(|| "flags must be a JSON array of strings".to_string())?;
-                if !CURSOR_AGENT_ALLOWLISTED_FLAGS.contains(&s) {
-                    return Err(format!(
-                        "flag '{s}' is not allowlisted; allowed: {}",
-                        CURSOR_AGENT_ALLOWLISTED_FLAGS.join(", ")
-                    ));
-                }
-                out.push(s.to_string());
-            }
-            Ok(out)
-        }
-    }
 }
 
 async fn tool_trigger_cursor_worker(
@@ -2014,80 +1959,142 @@ async fn tool_trigger_cursor_worker(
         .as_str()
         .ok_or_else(|| "Missing required parameter 'prompt'".to_string())?;
     let mode = input["mode"].as_str().unwrap_or("agent");
-    if !matches!(mode, "agent" | "plan" | "ask") {
-        return Err(format!(
-            "invalid mode '{mode}'; allowed: agent, plan, ask"
-        ));
-    }
-    let full_prompt = compose_trigger_cursor_worker_prompt(
+    let extra_flags = crate::pipeline_steps::parse_cursor_agent_extra_flags(input)?;
+    let actor = pipeline_tool_actor(caller_agent_id);
+    let out = crate::pipeline_steps::run_cursor_worker(
+        kh.as_ref(),
+        workspace,
+        &task_id,
         prompt,
         mode,
         input.get("behavior").and_then(|v| v.as_str()),
-    );
-    let extra_flags = parse_cursor_agent_extra_flags(input)?;
-
-    let path = Path::new(workspace);
-    let resolved = openfang_types::config::validate_spoke_root_allowlisted(
-        &kh.automation_spoke_roots(),
-        path,
-    )?;
-
-    let mut cmd = tokio::process::Command::new("cursor");
-    cmd.args(["agent", "-d"])
-        .arg(&resolved)
-        .arg("-p")
-        .arg(&full_prompt)
-        .arg("--mode")
-        .arg(mode)
-        .args(["-o", "json"]);
-    for f in &extra_flags {
-        cmd.arg(f);
-    }
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(TRIGGER_CURSOR_WORKER_TIMEOUT_SECS),
-        cmd.output(),
+        &extra_flags,
+        &actor,
     )
-    .await
-    .map_err(|_| {
-        format!(
-            "trigger_cursor_worker timed out after {TRIGGER_CURSOR_WORKER_TIMEOUT_SECS}s"
-        )
-    })?
-    .map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "cursor CLI not found on PATH (install Cursor and ensure `cursor` is available)"
-                .to_string()
-        } else {
-            format!("Failed to run cursor agent: {e}")
-        }
-    })?;
-
-    let exit_code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let structured_output: Option<serde_json::Value> =
-        serde_json::from_str(stdout.trim()).ok();
-
+    .await?;
     let body = serde_json::json!({
-        "exit_code": exit_code,
-        "stdout": stdout,
-        "stderr": stderr,
-        "structured_output": structured_output,
+        "exit_code": out.exit_code,
+        "stdout": out.stdout,
+        "stderr": out.stderr,
+        "structured_output": out.structured_output,
     });
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
-    let failed = exit_code != 0;
-    crate::pipeline_audit::log_cursor_worker(
-        task_id,
-        resolved.display().to_string(),
-        mode.to_string(),
-        exit_code,
-        pipeline_tool_actor(caller_agent_id),
-    );
+    let failed = out.exit_code != 0;
     Ok((json, failed))
+}
+
+fn resolve_pipeline_workspace(
+    input: &serde_json::Value,
+    kh: &dyn KernelHandle,
+) -> Result<String, String> {
+    if let Some(w) = input
+        .get("workspace")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return Ok(w.to_string());
+    }
+    let labels_val = input.get("task_labels").ok_or_else(|| {
+        "Provide 'workspace' or 'task_labels' (array with repo:<spoke>)".to_string()
+    })?;
+    let arr = labels_val
+        .as_array()
+        .ok_or_else(|| "task_labels must be a JSON array of strings".to_string())?;
+    let labels: Vec<String> = arr
+        .iter()
+        .filter_map(|v| {
+            v.as_str()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from)
+        })
+        .collect();
+    if labels.is_empty() {
+        return Err("task_labels must be non-empty when workspace is omitted".to_string());
+    }
+    let p = openfang_types::repo_spoke::resolve_spoke_workspace_from_task_labels(
+        &kh.automation_spoke_roots(),
+        &labels,
+    )?;
+    Ok(p.display().to_string())
+}
+
+async fn tool_run_pipeline(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?
+        .to_string();
+    let workspace = resolve_pipeline_workspace(input, kh.as_ref())?;
+    let prompt = input["prompt"]
+        .as_str()
+        .ok_or_else(|| "Missing required parameter 'prompt'".to_string())?;
+    let project_id = input
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let max_retries = if let Some(n) = input.get("max_retries").and_then(|v| v.as_u64()) {
+        n as u32
+    } else {
+        kh.automation_effective_max_retries(project_id)
+    };
+    let mode = input["mode"].as_str().unwrap_or("agent");
+    let behavior = input.get("behavior").and_then(|v| v.as_str());
+    let extra_flags = crate::pipeline_steps::parse_cursor_agent_extra_flags(input)?;
+    let rollback = input
+        .get("rollback_to_status")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let runner = crate::pipeline_runner::PipelineRunner::new(
+        kh.clone(),
+        caller_agent_id.map(String::from),
+    );
+    match runner
+        .run(
+            &task_id,
+            &workspace,
+            prompt,
+            max_retries,
+            mode,
+            behavior,
+            &extra_flags,
+            rollback,
+        )
+        .await
+    {
+        Ok(ok) => {
+            let body = serde_json::json!({
+                "ok": true,
+                "retry_count": ok.retry_count,
+                "gate": {
+                    "exit_code": ok.gate.exit_code,
+                    "stdout": ok.gate.stdout,
+                    "stderr": ok.gate.stderr,
+                },
+            });
+            Ok((serde_json::to_string(&body).map_err(|e| e.to_string())?, false))
+        }
+        Err(e) => {
+            let body = serde_json::json!({
+                "ok": false,
+                "retry_count": e.retry_count,
+                "last_gate_exit_code": e.last_gate_exit_code,
+                "last_gate_stdout": e.last_gate_stdout,
+                "last_gate_stderr": e.last_gate_stderr,
+                "rollback_to_status": rollback,
+            });
+            Ok((serde_json::to_string(&body).map_err(|e| e.to_string())?, true))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -4419,6 +4426,7 @@ mod tests {
         assert!(names.contains(&"shell_exec"));
         assert!(names.contains(&"enforce_quality_gate"));
         assert!(names.contains(&"trigger_cursor_worker"));
+        assert!(names.contains(&"run_pipeline"));
         assert!(names.contains(&"backlog_task_create"));
         assert!(names.contains(&"backlog_task_list"));
         assert!(names.contains(&"backlog_task_view"));
@@ -4859,37 +4867,6 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("invalid mode"), "{}", result.content);
-    }
-
-    #[test]
-    fn compose_trigger_cursor_worker_prompt_agent_includes_skill_ref() {
-        let s = compose_trigger_cursor_worker_prompt("do the task", "agent", None);
-        assert!(s.contains("do the task"));
-        assert!(s.contains(".cursor/skills/implement/SKILL.md"));
-        assert!(s.contains("mise run 001-qa"));
-        assert!(s.contains(".cursor/rules"));
-    }
-
-    #[test]
-    fn compose_trigger_cursor_worker_prompt_agent_appends_extra_behavior() {
-        let s = compose_trigger_cursor_worker_prompt("p", "agent", Some("fix clippy"));
-        assert!(s.contains(".cursor/skills/implement/SKILL.md"));
-        assert!(s.contains("fix clippy"));
-        assert!(s.contains("--- Additional behavior ---"));
-    }
-
-    #[test]
-    fn compose_trigger_cursor_worker_prompt_plan_no_default_contract() {
-        let s = compose_trigger_cursor_worker_prompt("only", "plan", None);
-        assert_eq!(s, "only");
-    }
-
-    #[test]
-    fn compose_trigger_cursor_worker_prompt_plan_with_behavior() {
-        let s = compose_trigger_cursor_worker_prompt("only", "plan", Some("extra"));
-        assert!(s.contains("only"));
-        assert!(s.contains("extra"));
-        assert!(!s.contains("implement/SKILL.md"));
     }
 
     #[tokio::test]

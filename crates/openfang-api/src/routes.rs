@@ -18,7 +18,7 @@ use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
 use openfang_types::error::OpenFangError;
 use serde::Deserialize;
 use openfang_types::project::{Project, ProjectId, ProjectPatch, SpokeDescriptor};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
@@ -1180,6 +1180,55 @@ fn project_store_error_response(
     }
 }
 
+fn project_agent_binding_error_response(
+    e: OpenFangError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match &e {
+        OpenFangError::InvalidInput(msg) if msg == "Agent already bound to project" => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        OpenFangError::InvalidInput(msg) if msg == "Agent binding not found" => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        OpenFangError::InvalidInput(msg) if msg.starts_with("Unknown project id") => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        ),
+        OpenFangError::InvalidInput(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        other => {
+            tracing::warn!(%other, "project agent bind/unbind failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+        }
+    }
+}
+
+fn project_agent_row_json(
+    entry: &openfang_types::agent::AgentEntry,
+    pairs: &[(String, PathBuf)],
+    binding: &str,
+) -> serde_json::Value {
+    let spoke_name = entry
+        .manifest
+        .workspace
+        .as_ref()
+        .and_then(|ws| crate::project_scoped::workspace_spoke_name(ws, pairs));
+    serde_json::json!({
+        "agent_id": entry.id.to_string(),
+        "name": entry.name,
+        "state": entry.state,
+        "spoke_name": spoke_name,
+        "binding": binding,
+    })
+}
+
 fn project_detail_json(p: &Project) -> serde_json::Value {
     let spokes: Vec<serde_json::Value> = p
         .spokes
@@ -1204,6 +1253,7 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "path": p.path,
         "backlog_root": p.backlog_root(),
         "spokes": spokes,
+        "bound_agents": p.bound_agents,
         "pipeline_overrides": p.pipeline_overrides,
         "created_at": p.created_at.to_rfc3339(),
         "updated_at": p.updated_at.to_rfc3339(),
@@ -1560,7 +1610,7 @@ pub struct ListProjectPipelinesQuery {
     pub limit: Option<u32>,
 }
 
-/// GET /api/projects/:id/agents — agents whose workspace lies under a project spoke.
+/// GET /api/projects/:id/agents — explicit bindings plus workspace-matched agents.
 pub async fn list_project_agents(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -1577,22 +1627,128 @@ pub async fn list_project_agents(
             .into_response();
     };
     let pairs = crate::project_scoped::resolved_spoke_pairs(&project);
-    let mut rows = Vec::new();
+    let mut by_id: HashMap<String, serde_json::Value> = HashMap::new();
+
+    for aid_str in &project.bound_agents {
+        let Ok(aid) = aid_str.parse::<AgentId>() else {
+            continue;
+        };
+        let Some(entry) = state.kernel.registry.get(aid) else {
+            continue;
+        };
+        by_id.insert(
+            entry.id.to_string(),
+            project_agent_row_json(&entry, &pairs, "explicit"),
+        );
+    }
+
+    let explicit_ids: HashSet<String> = by_id.keys().cloned().collect();
     for entry in state.kernel.registry.list() {
+        let id_str = entry.id.to_string();
+        if explicit_ids.contains(&id_str) {
+            continue;
+        }
         let Some(ws) = entry.manifest.workspace.as_ref() else {
             continue;
         };
-        let Some(spoke_name) = crate::project_scoped::workspace_spoke_name(ws, &pairs) else {
+        if crate::project_scoped::workspace_spoke_name(ws, &pairs).is_none() {
             continue;
-        };
-        rows.push(serde_json::json!({
-            "agent_id": entry.id.to_string(),
-            "name": entry.name,
-            "state": entry.state,
-            "spoke_name": spoke_name,
-        }));
+        }
+        by_id.insert(id_str, project_agent_row_json(&entry, &pairs, "implicit"));
     }
+
+    let mut rows: Vec<serde_json::Value> = by_id.into_values().collect();
+    rows.sort_by(|a, b| {
+        let na = a["name"].as_str().unwrap_or("");
+        let nb = b["name"].as_str().unwrap_or("");
+        na.cmp(nb)
+    });
     Json(rows).into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BindProjectAgentRequest {
+    pub agent_id: String,
+}
+
+/// POST /api/projects/:id/agents — bind an existing agent to the project.
+pub async fn bind_project_agent(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<BindProjectAgentRequest>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if state.kernel.project_store.get(pid).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    }
+    let aid: AgentId = match req.agent_id.trim().parse() {
+        Ok(id) => id,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid agent_id"})),
+            )
+                .into_response();
+        }
+    };
+    let Some(entry) = state.kernel.registry.get(aid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Agent not found"})),
+        )
+            .into_response();
+    };
+    match state.kernel.project_store.bind_agent(pid, aid.to_string()) {
+        Ok(()) => {
+            let Some(project) = state.kernel.project_store.get(pid) else {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Project missing after bind"})),
+                )
+                    .into_response();
+            };
+            let pairs = crate::project_scoped::resolved_spoke_pairs(&project);
+            (
+                StatusCode::OK,
+                Json(project_agent_row_json(&entry, &pairs, "explicit")),
+            )
+                .into_response()
+        }
+        Err(e) => project_agent_binding_error_response(e).into_response(),
+    }
+}
+
+/// DELETE /api/projects/:id/agents/:agent_id — remove explicit binding.
+pub async fn unbind_project_agent(
+    State(state): State<Arc<AppState>>,
+    Path((id, agent_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if state.kernel.project_store.get(pid).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    }
+    match state.kernel.project_store.unbind_agent(pid, &agent_id) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"ok": true, "agent_id": agent_id.trim()})),
+        )
+            .into_response(),
+        Err(e) => project_agent_binding_error_response(e).into_response(),
+    }
 }
 
 /// GET /api/projects/:id/spokes — spoke paths, mise.toml, latest quality gate from pipeline audit ring.

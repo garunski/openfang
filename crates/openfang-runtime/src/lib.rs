@@ -12,6 +12,8 @@ pub mod agent_loop;
 pub mod apply_patch;
 pub mod audit;
 pub mod pipeline_audit;
+mod pipeline_steps;
+pub mod pipeline_runner;
 pub mod auth_cooldown;
 pub mod browser;
 pub mod command_lane;

@@ -5981,6 +5981,20 @@ impl KernelHandle for OpenFangKernel {
         self.config.automation.max_retries
     }
 
+    fn automation_effective_max_retries(&self, project_id: Option<&str>) -> u32 {
+        let base = self.automation_max_retries();
+        let Some(pid) = project_id.map(str::trim).filter(|s| !s.is_empty()) else {
+            return base;
+        };
+        let Ok(id) = pid.parse::<openfang_types::project::ProjectId>() else {
+            return base;
+        };
+        self.project_store
+            .get(id)
+            .and_then(|p| p.pipeline_overrides.max_retries)
+            .unwrap_or(base)
+    }
+
     fn automation_model_for_phase(&self, phase: &str) -> String {
         self.config.automation.model_for_phase(phase).to_string()
     }

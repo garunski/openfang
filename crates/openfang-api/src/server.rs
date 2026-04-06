@@ -382,7 +382,11 @@ pub async fn build_router(
         )
         .route(
             "/api/projects/{id}/agents",
-            axum::routing::get(routes::list_project_agents),
+            axum::routing::get(routes::list_project_agents).post(routes::bind_project_agent),
+        )
+        .route(
+            "/api/projects/{id}/agents/{agent_id}",
+            axum::routing::delete(routes::unbind_project_agent),
         )
         .route(
             "/api/projects/{id}/spokes",

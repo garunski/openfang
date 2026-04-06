@@ -440,6 +440,7 @@ mod tests {
         assert_eq!(def.category, crate::HandCategory::Development);
         assert!(def.skill_content.is_some());
         for tool in [
+            "run_pipeline",
             "enforce_quality_gate",
             "trigger_cursor_worker",
             "backlog_task_create",

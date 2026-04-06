@@ -3045,9 +3045,17 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('agents')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.agents && !detailErrors.agents">
+                  <div class="flex flex-wrap gap-2 items-end mb-4">
+                    <div class="form-group mb-0" style="min-width:14rem">
+                      <label class="text-xs text-dim">Bind agent (UUID)</label>
+                      <input class="form-input text-xs font-mono" x-model="bindAgentForm.agent_id" placeholder="agent id" :disabled="bindAgentSubmitting">
+                    </div>
+                    <button type="button" class="btn btn-sm" @click="bindProjectAgent()" :disabled="bindAgentSubmitting">Bind</button>
+                  </div>
+                  <p class="text-xs text-danger mb-2" x-show="bindAgentError" x-text="bindAgentError"></p>
                   <div class="table-wrap" x-show="detailAgents.length">
                     <table>
-                      <thead><tr><th>Agent</th><th>Name</th><th>State</th><th>Spoke</th></tr></thead>
+                      <thead><tr><th>Agent</th><th>Name</th><th>State</th><th>Spoke</th><th>Binding</th><th></th></tr></thead>
                       <tbody>
                         <template x-for="a in detailAgents" :key="a.agent_id">
                           <tr>
@@ -3055,13 +3063,17 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                             <td x-text="a.name || '—'"></td>
                             <td><span class="badge badge-info" x-text="String(a.state)"></span></td>
                             <td class="text-xs" x-text="a.spoke_name || '—'"></td>
+                            <td><span class="badge" :class="a.binding === 'explicit' ? 'badge-warn' : 'badge-dim'" x-text="a.binding || '—'"></span></td>
+                            <td>
+                              <button type="button" class="btn btn-ghost btn-sm" x-show="a.binding === 'explicit'" @click="unbindProjectAgent(a)" :disabled="bindAgentSubmitting">Remove</button>
+                            </td>
                           </tr>
                         </template>
                       </tbody>
                     </table>
                   </div>
                   <div class="empty-state py-8" x-show="!detailAgents.length">
-                    <p class="text-dim text-sm">No agents with a workspace mapped to this project's spokes.</p>
+                    <p class="text-dim text-sm">No agents in scope. Bind an agent by id or set agent workspace under a project spoke.</p>
                   </div>
                 </div>
               </div>

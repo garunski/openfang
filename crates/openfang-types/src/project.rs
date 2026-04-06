@@ -84,6 +84,9 @@ pub struct Project {
     pub path: PathBuf,
     pub spokes: Vec<SpokeDescriptor>,
     pub pipeline_overrides: ProjectPipelineOverrides,
+    /// Explicitly bound agent UUID strings (dashboard / API); persisted in `projects.json`.
+    #[serde(default)]
+    pub bound_agents: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -97,6 +100,7 @@ impl Default for Project {
             path: PathBuf::new(),
             spokes: Vec::new(),
             pipeline_overrides: ProjectPipelineOverrides::default(),
+            bound_agents: Vec::new(),
             created_at: now,
             updated_at: now,
         }
@@ -170,6 +174,13 @@ mod tests {
         let id = ProjectId::new();
         let s = id.to_string();
         assert_eq!(id, s.parse::<ProjectId>().unwrap());
+    }
+
+    #[test]
+    fn project_json_default_bound_agents_when_omitted() {
+        let j = r#"{"id":"550e8400-e29b-41d4-a716-446655440000","name":"n","path":"/p","spokes":[],"pipeline_overrides":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
+        let p: Project = serde_json::from_str(j).unwrap();
+        assert!(p.bound_agents.is_empty());
     }
 
     #[test]

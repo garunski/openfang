@@ -17,6 +17,7 @@ use openfang_runtime::pipeline_audit;
 use openfang_types::agent::AgentId;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
+use uuid::Uuid;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -177,7 +178,11 @@ async fn start_test_server_with_provider(
         )
         .route(
             "/api/projects/{id}/agents",
-            axum::routing::get(routes::list_project_agents),
+            axum::routing::get(routes::list_project_agents).post(routes::bind_project_agent),
+        )
+        .route(
+            "/api/projects/{id}/agents/{agent_id}",
+            axum::routing::delete(routes::unbind_project_agent),
         )
         .route(
             "/api/projects/{id}/spokes",
@@ -1283,7 +1288,99 @@ async fn test_project_scoped_agents_spokes_pipelines() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let scoped: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert!(scoped.iter().any(|a| a["spoke_name"] == "mainspoke"));
+    let implicit_row = scoped
+        .iter()
+        .find(|a| a["spoke_name"] == "mainspoke")
+        .expect("implicit workspace match");
+    assert_eq!(implicit_row["binding"], "implicit");
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/agents",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "agent_id": first_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let bound: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(bound["binding"], "explicit");
+    assert_eq!(bound["agent_id"], first_id);
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/agents",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "agent_id": first_id }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 409);
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/agents",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "agent_id": Uuid::nil().to_string() }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    let projects_json = std::fs::read_to_string(home.join("projects.json")).unwrap();
+    assert!(
+        projects_json.contains("bound_agents") && projects_json.contains(first_id),
+        "{projects_json}"
+    );
+
+    let resp = client
+        .get(format!("{}/api/projects/{}/agents", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let scoped2: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let ex = scoped2
+        .iter()
+        .find(|a| a["agent_id"].as_str() == Some(first_id))
+        .unwrap();
+    assert_eq!(ex["binding"], "explicit");
+
+    let resp = client
+        .delete(format!(
+            "{}/api/projects/{}/agents/{}",
+            server.base_url, pid, first_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .get(format!("{}/api/projects/{}/agents", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let scoped3: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let im = scoped3
+        .iter()
+        .find(|a| a["agent_id"].as_str() == Some(first_id))
+        .expect("still implicit via workspace");
+    assert_eq!(im["binding"], "implicit");
+
+    let resp = client
+        .delete(format!(
+            "{}/api/projects/{}/agents/{}",
+            server.base_url, pid, first_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
 
     let resp = client
         .get(format!("{}/api/projects/{}/spokes", server.base_url, pid))
