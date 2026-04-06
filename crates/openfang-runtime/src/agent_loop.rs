@@ -49,11 +49,18 @@ const TOOL_TIMEOUT_SECS: u64 = 120;
 /// target, so these need a significantly longer timeout than regular tools.
 const AGENT_TOOL_TIMEOUT_SECS: u64 = 600;
 
+/// Timeout for Cursor worker invocations (seconds).
+/// Cursor agent runs compile, test, and iterate — they need the full hour.
+const CURSOR_WORKER_TIMEOUT_SECS: u64 = 3600;
+
 /// Returns the appropriate timeout duration for a given tool name.
 /// Inter-agent calls get a longer timeout since they may trigger full agent loops.
 fn tool_timeout_for(tool_name: &str) -> Duration {
     match tool_name {
         "agent_send" | "agent_spawn" => Duration::from_secs(AGENT_TOOL_TIMEOUT_SECS),
+        "trigger_cursor_worker" | "enforce_quality_gate" => {
+            Duration::from_secs(CURSOR_WORKER_TIMEOUT_SECS)
+        }
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -3056,12 +3063,21 @@ mod tests {
     fn test_tool_timeout_constant() {
         assert_eq!(TOOL_TIMEOUT_SECS, 120);
         assert_eq!(AGENT_TOOL_TIMEOUT_SECS, 600);
+        assert_eq!(CURSOR_WORKER_TIMEOUT_SECS, 3600);
     }
 
     #[test]
     fn test_tool_timeout_for_agent_tools() {
         assert_eq!(tool_timeout_for("agent_send"), Duration::from_secs(600));
         assert_eq!(tool_timeout_for("agent_spawn"), Duration::from_secs(600));
+        assert_eq!(
+            tool_timeout_for("trigger_cursor_worker"),
+            Duration::from_secs(3600)
+        );
+        assert_eq!(
+            tool_timeout_for("enforce_quality_gate"),
+            Duration::from_secs(3600)
+        );
         assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));
         assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(120));
     }
