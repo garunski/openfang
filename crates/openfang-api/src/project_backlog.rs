@@ -1,25 +1,18 @@
 //! Scan `backlog/tasks` and `backlog/docs` for backlog.md-style markdown.
 
+use openfang_types::backlog::parser::{extract_section, parse_acceptance_criteria, parse_frontmatter};
 use serde_json::{json, Value as JsonValue};
 use std::fs;
 use std::path::Path;
 
 /// Split YAML frontmatter (`---` … `---`) from body. Normalizes `\r\n`.
 pub fn split_frontmatter(content: &str) -> Result<(serde_yaml::Value, String), String> {
-    let content = content.replace("\r\n", "\n");
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return Err("missing opening ---".into());
-    }
-    let after_open = &trimmed[3..];
-    let end = after_open
-        .find("\n---")
-        .ok_or_else(|| "missing closing ---".to_string())?;
-    let yaml_raw = &after_open[..end];
-    let body = after_open[end + 4..].trim_start().to_string();
-    let fm: serde_yaml::Value =
-        serde_yaml::from_str(yaml_raw).map_err(|e| format!("YAML: {e}"))?;
-    Ok((fm, body))
+    let (map, body) = parse_frontmatter(content).map_err(|e| e.to_string())?;
+    let mapping: serde_yaml::Mapping = map
+        .into_iter()
+        .map(|(k, v)| (serde_yaml::Value::String(k), v))
+        .collect();
+    Ok((serde_yaml::Value::Mapping(mapping), body))
 }
 
 fn yaml_to_json(v: &serde_yaml::Value) -> JsonValue {
@@ -80,48 +73,17 @@ fn mapping_labels(m: &serde_yaml::Mapping) -> Vec<String> {
     }
 }
 
-/// Extract `<!-- SECTION:{key}:BEGIN -->` … `<!-- SECTION:{key}:END -->` (key is uppercased in files).
-pub fn extract_section(body: &str, key: &str) -> Option<String> {
-    let body = body.replace("\r\n", "\n");
-    let begin = format!("<!-- SECTION:{key}:BEGIN -->");
-    let end = format!("<!-- SECTION:{key}:END -->");
-    let start = body.find(&begin)? + begin.len();
-    let rest = &body[start..];
-    let e = rest.find(&end)?;
-    Some(rest[..e].trim().to_string())
-}
-
-/// Parse `<!-- AC:BEGIN -->` … `<!-- AC:END -->` into checkbox items.
-pub fn parse_acceptance_criteria(body: &str) -> Vec<JsonValue> {
-    let body = body.replace("\r\n", "\n");
-    let Some(start) = body.find("<!-- AC:BEGIN -->") else {
-        return Vec::new();
-    };
-    let after = &body[start + "<!-- AC:BEGIN -->".len()..];
-    let Some(end) = after.find("<!-- AC:END -->") else {
-        return Vec::new();
-    };
-    let block = &after[..end];
-    let mut out = Vec::new();
-    for (idx, line) in block.lines().enumerate() {
-        let t = line.trim();
-        if !t.starts_with("- [") {
-            continue;
-        }
-        let after_dash = &t[3..];
-        let Some(rb) = after_dash.find(']') else {
-            continue;
-        };
-        let inside = &after_dash[..rb];
-        let checked = inside.contains('x') || inside.contains('X');
-        let text = after_dash[rb + 1..].trim().to_string();
-        out.push(json!({
-            "index": idx,
-            "checked": checked,
-            "text": text,
-        }));
-    }
-    out
+fn ac_items_to_json(items: Vec<openfang_types::backlog::AcceptanceCriterion>) -> Vec<JsonValue> {
+    items
+        .into_iter()
+        .map(|c| {
+            json!({
+                "index": c.index,
+                "checked": c.checked,
+                "text": c.text,
+            })
+        })
+        .collect()
 }
 
 fn norm_task_id(s: &str) -> String {
@@ -254,7 +216,7 @@ pub fn get_task_detail(backlog_root: &Path, task_id: &str) -> Result<Option<Json
         }
         let fm_json = yaml_to_json(&fm);
         let description = extract_section(&body, "DESCRIPTION").unwrap_or_default();
-        let ac = parse_acceptance_criteria(&body);
+        let ac = ac_items_to_json(parse_acceptance_criteria(&body));
         return Ok(Some(json!({
             "frontmatter": fm_json,
             "description": description,
@@ -336,6 +298,7 @@ pub fn list_docs(backlog_root: &Path) -> Result<Vec<DocEntry>, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openfang_types::backlog::parser::{extract_section, parse_acceptance_criteria};
     use tempfile::tempdir;
 
     #[test]
@@ -362,8 +325,8 @@ Hello
         );
         let ac = parse_acceptance_criteria(body);
         assert_eq!(ac.len(), 2);
-        assert_eq!(ac[0]["checked"], false);
-        assert_eq!(ac[1]["checked"], true);
+        assert!(!ac[0].checked);
+        assert!(ac[1].checked);
     }
 
     #[test]

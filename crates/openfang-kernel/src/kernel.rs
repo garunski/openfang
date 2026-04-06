@@ -131,6 +131,8 @@ pub struct OpenFangKernel {
     pub cron_scheduler: crate::cron::CronScheduler,
     /// Registered multi-repo projects (file-backed).
     pub project_store: crate::project_store::ProjectStore,
+    /// Parsed backlog cache per project (lazy load via [`crate::backlog_store::BacklogStore`]).
+    pub backlog_store: Arc<crate::backlog_store::BacklogStore>,
     /// Execution approval manager.
     pub approval_manager: crate::approval::ApprovalManager,
     /// Agent bindings for multi-account routing (Mutex for runtime add/remove).
@@ -1031,6 +1033,7 @@ impl OpenFangKernel {
         }
 
         let project_store = crate::project_store::ProjectStore::new(&config.home_dir);
+        let backlog_store = Arc::new(crate::backlog_store::BacklogStore::new());
         match project_store.load() {
             Ok(count) => {
                 if count > 0 {
@@ -1087,6 +1090,7 @@ impl OpenFangKernel {
             delivery_tracker: DeliveryTracker::new(),
             cron_scheduler,
             project_store,
+            backlog_store,
             approval_manager,
             bindings: std::sync::Mutex::new(initial_bindings),
             broadcast: initial_broadcast,

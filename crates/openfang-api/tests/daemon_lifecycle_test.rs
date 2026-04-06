@@ -7,7 +7,8 @@ use axum::Router;
 use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_api::server::{read_daemon_info, DaemonInfo};
-use openfang_kernel::OpenFangKernel;
+use openfang_kernel::{BacklogWatcherManager, OpenFangKernel};
+use openfang_types::project::ProjectId;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,6 +18,25 @@ use tower_http::trace::TraceLayer;
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+fn test_backlog_ws_deps() -> (
+    tokio::sync::broadcast::Sender<String>,
+    Arc<BacklogWatcherManager>,
+) {
+    let (tx, _) = tokio::sync::broadcast::channel::<String>(32);
+    let t2 = tx.clone();
+    let sink: Arc<dyn Fn(ProjectId, &'static str) + Send + Sync> = Arc::new(move |pid, ent| {
+        let _ = t2.send(
+            serde_json::json!({
+                "type": "backlog-updated",
+                "project_id": pid.to_string(),
+                "entity_type": ent,
+            })
+            .to_string(),
+        );
+    });
+    (tx, Arc::new(BacklogWatcherManager::new(sink)))
+}
 
 /// Test DaemonInfo serialization and deserialization round-trip.
 #[test]
@@ -105,6 +125,8 @@ async fn test_full_daemon_lifecycle() {
     let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();
+    let backlog_store = kernel.backlog_store.clone();
+    let (backlog_feed_tx, backlog_watcher) = test_backlog_ws_deps();
 
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
@@ -116,6 +138,9 @@ async fn test_full_daemon_lifecycle() {
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        backlog_store,
+        backlog_feed_tx,
+        backlog_watcher,
     });
 
     let app = Router::new()
@@ -186,6 +211,7 @@ async fn test_full_daemon_lifecycle() {
     let _ = std::fs::remove_file(&daemon_info_path);
     assert!(!daemon_info_path.exists());
 
+    state.backlog_watcher.stop_all();
     kernel.shutdown();
 }
 
@@ -231,6 +257,8 @@ async fn test_server_immediate_responsiveness() {
 
     let kernel = OpenFangKernel::boot_with_config(config).unwrap();
     let kernel = Arc::new(kernel);
+    let backlog_store = kernel.backlog_store.clone();
+    let (backlog_feed_tx, backlog_watcher) = test_backlog_ws_deps();
 
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
@@ -242,11 +270,14 @@ async fn test_server_immediate_responsiveness() {
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        backlog_store,
+        backlog_feed_tx,
+        backlog_watcher,
     });
 
     let app = Router::new()
         .route("/api/health", axum::routing::get(routes::health))
-        .with_state(state);
+        .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -272,5 +303,6 @@ async fn test_server_immediate_responsiveness() {
         latency.as_millis()
     );
 
+    state.backlog_watcher.stop_all();
     kernel.shutdown();
 }

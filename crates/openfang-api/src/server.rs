@@ -7,7 +7,8 @@ use crate::routes::{self, AppState};
 use crate::webchat;
 use crate::ws;
 use axum::Router;
-use openfang_kernel::OpenFangKernel;
+use openfang_kernel::{BacklogWatcherManager, OpenFangKernel};
+use openfang_types::project::ProjectId;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -42,6 +43,19 @@ pub async fn build_router(
     let bridge = channel_bridge::start_channel_bridge(kernel.clone()).await;
 
     let channels_config = kernel.config.channels.clone();
+    let (backlog_feed_tx, _) = tokio::sync::broadcast::channel::<String>(256);
+    let tx_sink = backlog_feed_tx.clone();
+    let sink: std::sync::Arc<dyn Fn(ProjectId, &'static str) + Send + Sync> =
+        std::sync::Arc::new(move |pid, ent| {
+            let body = serde_json::json!({
+                "type": "backlog-updated",
+                "project_id": pid.to_string(),
+                "entity_type": ent,
+            })
+            .to_string();
+            let _ = tx_sink.send(body);
+        });
+    let backlog_watcher = std::sync::Arc::new(BacklogWatcherManager::new(sink));
     let state = Arc::new(AppState {
         kernel: kernel.clone(),
         started_at: Instant::now(),
@@ -52,6 +66,9 @@ pub async fn build_router(
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(kernel.config.budget.clone())),
+        backlog_store: kernel.backlog_store.clone(),
+        backlog_feed_tx,
+        backlog_watcher,
     });
 
     // CORS: allow localhost origins by default. If API key is set, the API
@@ -249,6 +266,7 @@ pub async fn build_router(
             axum::routing::post(routes::upload_file),
         )
         .route("/api/agents/{id}/ws", axum::routing::get(ws::agent_ws))
+        .route("/api/backlog/ws", axum::routing::get(ws::backlog_feed_ws))
         // Upload serving
         .route(
             "/api/uploads/{file_id}",
@@ -373,6 +391,77 @@ pub async fn build_router(
         .route(
             "/api/projects/{id}/pipelines",
             axum::routing::get(routes::list_project_pipelines),
+        )
+        // Backlog.md-style task API (cached via BacklogStore)
+        .route(
+            "/api/projects/{id}/backlog/config",
+            axum::routing::get(routes::backlog_get_config),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/reorder",
+            axum::routing::post(routes::backlog_reorder_tasks),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/{task_id}/complete",
+            axum::routing::post(routes::backlog_complete_task),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/{task_id}",
+            axum::routing::get(routes::backlog_get_task)
+                .put(routes::backlog_put_task)
+                .delete(routes::backlog_delete_task),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks",
+            axum::routing::get(routes::backlog_list_tasks).post(routes::backlog_create_task),
+        )
+        .route(
+            "/api/projects/{id}/backlog/docs/{doc_id}",
+            axum::routing::get(routes::backlog_get_doc).put(routes::backlog_update_doc),
+        )
+        .route(
+            "/api/projects/{id}/backlog/docs",
+            axum::routing::get(routes::backlog_list_docs_tree).post(routes::backlog_create_doc),
+        )
+        .route(
+            "/api/projects/{id}/backlog/completed",
+            axum::routing::get(routes::backlog_list_completed),
+        )
+        .route(
+            "/api/projects/{id}/backlog/milestones/archived",
+            axum::routing::get(routes::backlog_list_archived_milestones),
+        )
+        .route(
+            "/api/projects/{id}/backlog/milestones/{milestone_id}/archive",
+            axum::routing::post(routes::backlog_archive_milestone),
+        )
+        .route(
+            "/api/projects/{id}/backlog/milestones",
+            axum::routing::get(routes::backlog_list_milestones).post(routes::backlog_create_milestone),
+        )
+        .route(
+            "/api/projects/{id}/backlog/drafts/{draft_id}/promote",
+            axum::routing::post(routes::backlog_promote_draft),
+        )
+        .route(
+            "/api/projects/{id}/backlog/drafts",
+            axum::routing::get(routes::backlog_list_drafts),
+        )
+        .route(
+            "/api/projects/{id}/backlog/decisions/{decision_id}",
+            axum::routing::get(routes::backlog_get_decision).put(routes::backlog_update_decision),
+        )
+        .route(
+            "/api/projects/{id}/backlog/decisions",
+            axum::routing::get(routes::backlog_list_decisions).post(routes::backlog_create_decision),
+        )
+        .route(
+            "/api/projects/{id}/backlog/search",
+            axum::routing::get(routes::backlog_search),
+        )
+        .route(
+            "/api/projects/{id}/backlog/statistics",
+            axum::routing::get(routes::backlog_statistics),
         )
         // Skills endpoints
         .route("/api/skills", axum::routing::get(routes::list_skills))
@@ -890,6 +979,8 @@ pub async fn run_daemon(
     )
     .with_graceful_shutdown(shutdown_signal(api_shutdown))
     .await?;
+
+    state.backlog_watcher.stop_all();
 
     // Clean up daemon info file
     if let Some(info_path) = daemon_info_path {

@@ -8,7 +8,8 @@
 use axum::Router;
 use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
-use openfang_kernel::OpenFangKernel;
+use openfang_kernel::{BacklogWatcherManager, OpenFangKernel};
+use openfang_types::project::ProjectId;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -19,6 +20,25 @@ use tower_http::trace::TraceLayer;
 // Test infrastructure (mirrors api_integration_test.rs)
 // ---------------------------------------------------------------------------
 
+fn test_backlog_ws_deps() -> (
+    tokio::sync::broadcast::Sender<String>,
+    Arc<BacklogWatcherManager>,
+) {
+    let (tx, _) = tokio::sync::broadcast::channel::<String>(32);
+    let t2 = tx.clone();
+    let sink: Arc<dyn Fn(ProjectId, &'static str) + Send + Sync> = Arc::new(move |pid, ent| {
+        let _ = t2.send(
+            serde_json::json!({
+                "type": "backlog-updated",
+                "project_id": pid.to_string(),
+                "entity_type": ent,
+            })
+            .to_string(),
+        );
+    });
+    (tx, Arc::new(BacklogWatcherManager::new(sink)))
+}
+
 struct TestServer {
     base_url: String,
     state: Arc<AppState>,
@@ -27,6 +47,7 @@ struct TestServer {
 
 impl Drop for TestServer {
     fn drop(&mut self) {
+        self.state.backlog_watcher.stop_all();
         self.state.kernel.shutdown();
     }
 }
@@ -49,6 +70,8 @@ async fn start_test_server() -> TestServer {
     let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
     let kernel = Arc::new(kernel);
     kernel.set_self_handle();
+    let backlog_store = kernel.backlog_store.clone();
+    let (backlog_feed_tx, backlog_watcher) = test_backlog_ws_deps();
 
     let state = Arc::new(AppState {
         kernel,
@@ -60,6 +83,9 @@ async fn start_test_server() -> TestServer {
         clawhub_cache: dashmap::DashMap::new(),
         provider_probe_cache: openfang_runtime::provider_health::ProbeCache::new(),
         budget_config: Arc::new(tokio::sync::RwLock::new(Default::default())),
+        backlog_store,
+        backlog_feed_tx,
+        backlog_watcher,
     });
 
     let app = Router::new()

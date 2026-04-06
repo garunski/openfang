@@ -2583,15 +2583,58 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <button type="button" class="btn btn-ghost btn-sm mb-2" @click="backToList()">&larr; Back to Projects</button>
               <h2 x-text="selectedProject.name"></h2>
               <p class="text-xs text-dim mt-1" :title="selectedProject.path" x-text="selectedProject.path"></p>
+              <div class="relative mt-3" style="max-width:520px" @click.outside="backlogSearchOpen = false">
+                <input
+                  type="search"
+                  class="form-input"
+                  style="width:100%"
+                  placeholder="Search backlog (tasks, docs, decisions)…"
+                  x-model="backlogSearchQuery"
+                  @focus="backlogSearchOpen = true"
+                  @input="onBacklogSearchInput()"
+                  autocomplete="off"
+                >
+                <div
+                  class="card p-0 absolute left-0 right-0 mt-1 z-50"
+                  style="max-height:280px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.25)"
+                  x-show="backlogSearchOpen && (backlogSearchLoading || backlogSearchQuery.trim())"
+                >
+                  <div class="p-3 text-sm text-dim" x-show="backlogSearchLoading">Searching…</div>
+                  <div
+                    class="p-3 text-sm text-dim"
+                    x-show="!backlogSearchLoading && backlogSearchQuery.trim() && !backlogSearchResults.length"
+                  >No results.</div>
+                  <template x-for="(hit, idx) in backlogSearchResults" :key="idx">
+                    <button
+                      type="button"
+                      class="w-full text-left p-3"
+                      style="border:none;border-bottom:1px solid var(--border);background:transparent;cursor:pointer"
+                      @click="openBacklogSearchHit(hit)"
+                    >
+                      <div class="flex gap-2 items-center flex-wrap">
+                        <span class="badge badge-info" x-text="backlogSearchTypeLabel(hit)"></span>
+                        <span class="text-sm" style="font-weight:600" x-text="backlogSearchHitTitle(hit)"></span>
+                      </div>
+                      <p class="text-xs text-dim mt-1" x-text="backlogSearchHitExcerpt(hit)"></p>
+                    </button>
+                  </template>
+                </div>
+              </div>
             </div>
             <div class="page-body">
               <div class="tabs">
-                <div class="tab" :class="{ active: detailTab === 'backlog' }" @click="onDetailTabChange('backlog')">Backlog</div>
+                <div class="tab" :class="{ active: detailTab === 'backlog' }" @click="onDetailTabChange('backlog')">List</div>
+                <div class="tab" :class="{ active: detailTab === 'board' }" @click="onDetailTabChange('board')">Board</div>
+                <div class="tab" :class="{ active: detailTab === 'docs' }" @click="onDetailTabChange('docs')">Docs</div>
+                <div class="tab" :class="{ active: detailTab === 'decisions' }" @click="onDetailTabChange('decisions')">Decisions</div>
+                <div class="tab" :class="{ active: detailTab === 'drafts' }" @click="onDetailTabChange('drafts')">Drafts</div>
+                <div class="tab" :class="{ active: detailTab === 'milestones' }" @click="onDetailTabChange('milestones')">Milestones</div>
                 <div class="tab" :class="{ active: detailTab === 'spokes' }" @click="onDetailTabChange('spokes')">Spokes</div>
                 <div class="tab" :class="{ active: detailTab === 'agents' }" @click="onDetailTabChange('agents')">Agents</div>
                 <div class="tab" :class="{ active: detailTab === 'pipelines' }" @click="onDetailTabChange('pipelines')">Pipelines</div>
               </div>
 
+              <!-- task list table (TASK-33) -->
               <div x-show="detailTab === 'backlog'" class="mt-4">
                 <div x-show="detailLoading.backlog" class="loading-state"><div class="spinner"></div><span>Loading tasks...</span></div>
                 <div x-show="detailErrors.backlog && !detailLoading.backlog" class="error-state">
@@ -2600,26 +2643,63 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('backlog')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.backlog && !detailErrors.backlog">
+                  <div class="flex flex-wrap gap-2 mb-3" style="align-items:flex-end">
+                    <div class="form-group" style="margin:0;min-width:140px">
+                      <label class="text-xs text-dim">Status</label>
+                      <select class="form-input" x-model="listFilterStatus">
+                        <option value="">All</option>
+                        <template x-for="st in listStatusFilterOptions()" :key="String(st)">
+                          <option :value="st" x-text="st"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <div class="form-group" style="margin:0;min-width:120px">
+                      <label class="text-xs text-dim">Priority</label>
+                      <select class="form-input" x-model="listFilterPriority">
+                        <option value="">All</option>
+                        <template x-for="pr in listPriorityFilterOptions()" :key="pr">
+                          <option :value="pr" x-text="pr"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <div class="form-group" style="margin:0;min-width:160px">
+                      <label class="text-xs text-dim">Labels (multi)</label>
+                      <select class="form-input" multiple size="3" x-model="listFilterLabels">
+                        <template x-for="lb in listUniqueLabels" :key="lb">
+                          <option :value="lb" x-text="lb"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <div class="form-group" style="margin:0;min-width:160px;flex:1">
+                      <label class="text-xs text-dim">Assignee contains</label>
+                      <input class="form-input" type="search" x-model="listFilterAssignee" placeholder="name…">
+                    </div>
+                  </div>
                   <div class="table-wrap" x-show="detailTasks.length">
-                    <table>
-                      <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Labels</th></tr></thead>
+                    <table class="task-list-table">
+                      <thead>
+                        <tr>
+                          <th class="th-sortable" @click="listToggleSort('id')"><span x-text="'ID' + listSortIndicator('id')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('title')"><span x-text="'Title' + listSortIndicator('title')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('status')"><span x-text="'Status' + listSortIndicator('status')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('priority')"><span x-text="'Priority' + listSortIndicator('priority')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('labels')"><span x-text="'Labels' + listSortIndicator('labels')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('assignee')"><span x-text="'Assignee' + listSortIndicator('assignee')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('created')"><span x-text="'Created' + listSortIndicator('created')"></span></th>
+                          <th class="th-sortable" @click="listToggleSort('deps')"><span x-text="'Deps' + listSortIndicator('deps')"></span></th>
+                        </tr>
+                      </thead>
                       <tbody>
-                        <template x-for="t in detailTasks" :key="t.id">
-                          <tr style="cursor:pointer" @click="openTaskDetail(t)" role="button" tabindex="0" @keydown.enter="openTaskDetail(t)">
+                        <template x-for="t in listTableRows()" :key="t.id">
+                          <tr style="cursor:pointer" @click="openBacklogTaskDetail(t)" role="button" tabindex="0" @keydown.enter="openBacklogTaskDetail(t)">
                             <td class="text-xs font-mono" x-text="t.id"></td>
                             <td x-text="t.title || '—'"></td>
                             <td><span class="badge" :class="statusClass(t.status)" x-text="t.status || '—'"></span></td>
                             <td><span class="badge" :class="priorityClass(t.priority)" x-text="t.priority || '—'"></span></td>
-                            <td class="text-xs">
-                              <template x-if="Array.isArray(t.labels) && t.labels.length">
-                                <span>
-                                  <template x-for="lb in t.labels" :key="lb">
-                                    <span class="badge badge-dim mr-1" style="margin-bottom:2px" x-text="lb"></span>
-                                  </template>
-                                </span>
-                              </template>
-                              <span x-show="!t.labels || !t.labels.length" class="text-dim">—</span>
-                            </td>
+                            <td class="text-xs" x-text="listLabelsStr(t)"></td>
+                            <td class="text-xs" x-text="listAssigneeStr(t)"></td>
+                            <td class="text-xs" x-text="listCreatedStr(t)"></td>
+                            <td class="text-xs text-dim" x-text="listDepsCount(t)"></td>
                           </tr>
                         </template>
                       </tbody>
@@ -2627,6 +2707,296 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                   <div class="empty-state py-8" x-show="!detailTasks.length">
                     <p class="text-dim text-sm">No tasks in <code style="color:var(--accent)">backlog/tasks</code> for this project.</p>
+                  </div>
+                  <p class="text-xs text-dim mt-2" x-show="detailTasks.length && !listTableRows().length">No tasks match filters.</p>
+                </div>
+              </div>
+
+              <!-- kanban board view (grep: kanban board) -->
+              <div x-show="detailTab === 'board'" class="mt-4">
+                <div x-show="boardLoading" class="loading-state"><div class="spinner"></div><span>Loading board...</span></div>
+                <div x-show="boardError && !boardLoading" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="boardError"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="loadBoardData(true)">Retry</button>
+                </div>
+                <div x-show="!boardLoading && !boardError">
+                  <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+                    <span class="text-sm text-dim">Kanban board — drag cards between columns or reorder within a column.</span>
+                    <button type="button" class="btn btn-primary btn-sm" @click="boardOpenNewTask()">New Task</button>
+                  </div>
+                  <div class="kanban-board" x-show="boardStatuses.length">
+                    <template x-for="st in boardStatuses" :key="String(st)">
+                      <div class="kanban-column" @dragover="boardAllowDrop($event)" @drop="boardDropOnColumn(st, $event)">
+                        <div class="kanban-column-header">
+                          <span x-text="st"></span>
+                          <span class="kanban-column-count" x-text="boardColumnCount(st)"></span>
+                        </div>
+                        <div class="kanban-column-body">
+                          <template x-for="task in boardTasksForStatus(st)" :key="task.id">
+                            <div
+                              class="kanban-card"
+                              draggable="true"
+                              @dragstart="boardDragStart(task, st, $event)"
+                              @dragend="boardDragEnd()"
+                              @dragover="boardAllowDrop($event)"
+                              @drop="boardDropOnCard(st, task.id, $event)"
+                              @click="boardCardClick(task)"
+                            >
+                              <div class="kanban-card-title" x-text="task.title || task.id"></div>
+                              <span
+                                class="kanban-prio"
+                                x-show="task.priority"
+                                :class="boardPriorityClass(task.priority)"
+                                x-text="task.priority"
+                              ></span>
+                              <div class="kanban-card-meta">
+                                <template x-if="Array.isArray(task.labels) && task.labels.length">
+                                  <span>
+                                    <template x-for="lb in task.labels" :key="lb">
+                                      <span class="kanban-label-chip" style="margin-right:4px" x-text="lb"></span>
+                                    </template>
+                                  </span>
+                                </template>
+                                <template x-if="Array.isArray(task.assignee) && task.assignee.length">
+                                  <span class="flex" style="align-items:center;gap:4px">
+                                    <template x-for="an in task.assignee" :key="an">
+                                      <span class="kanban-assignee" :title="an" x-text="boardAssigneeInitials(an)"></span>
+                                    </template>
+                                  </span>
+                                </template>
+                                <span
+                                  class="kanban-deps-badge"
+                                  x-show="Array.isArray(task.dependencies) && task.dependencies.length"
+                                  x-text="'deps: ' + task.dependencies.length"
+                                ></span>
+                              </div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="empty-state py-8" x-show="boardStatuses.length && !boardTasks.length">
+                    <p class="text-dim text-sm">No tasks yet. Use <strong>New Task</strong> or add markdown files under <code style="color:var(--accent)">backlog/tasks</code>.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'docs'" class="mt-4">
+                <div x-show="detailLoading.docs" class="loading-state"><div class="spinner"></div><span>Loading docs...</span></div>
+                <div x-show="detailErrors.docs && !detailLoading.docs" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.docs"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('docs')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.docs && !detailErrors.docs" class="flex gap-4" style="align-items:stretch;min-height:280px">
+                  <div class="doc-tree-panel" style="width:280px;flex-shrink:0;border-right:1px solid var(--border);padding-right:12px;overflow:auto;max-height:70vh">
+                    <template x-for="row in docNavRows()" :key="row.kind === 'folder' ? row.path : row.doc.id">
+                      <div class="mb-1" :style="'padding-left:' + (row.depth * 14) + 'px'">
+                        <template x-if="row.kind === 'folder'">
+                          <button type="button" class="btn btn-ghost btn-sm" style="width:100%;justify-content:flex-start" @click="docToggleFolder(row.path)">
+                            <span class="text-dim mr-1" x-text="docFolderGlyph(row.path)"></span>
+                            <span x-text="row.name"></span>
+                          </button>
+                        </template>
+                        <template x-if="row.kind === 'doc'">
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm"
+                            style="width:100%;justify-content:flex-start"
+                            :class="{ 'bg-panel': docsSelectedDoc && docsSelectedDoc.id === row.doc.id }"
+                            @click="docsSelectDoc(row.doc.id)"
+                            x-text="row.doc.title || row.doc.id"
+                          ></button>
+                        </template>
+                      </div>
+                    </template>
+                    <div class="empty-state py-6" x-show="!docTreeHasAny()">
+                      <p class="text-dim text-sm">No documents in <code style="color:var(--accent)">backlog/docs</code>.</p>
+                    </div>
+                  </div>
+                  <div class="flex-1 min-w-0 overflow-auto" style="max-height:70vh">
+                    <div x-show="docsDocLoading" class="loading-state"><div class="spinner"></div><span>Loading document...</span></div>
+                    <div x-show="docsDocError && !docsDocLoading" class="error-state">
+                      <span class="error-icon">!</span>
+                      <p x-text="docsDocError"></p>
+                    </div>
+                    <template x-if="docsSelectedDoc && !docsDocLoading && !docsDocError">
+                      <div>
+                        <h3 class="text-lg mb-2" x-text="docsSelectedDoc.title || docsSelectedDoc.id"></h3>
+                        <div class="flex flex-wrap gap-2 text-xs text-dim mb-3">
+                          <span class="font-mono" x-text="'id: ' + docsSelectedDoc.id"></span>
+                          <span x-show="docsSelectedDoc.type" x-text="'type: ' + docsSelectedDoc.type"></span>
+                          <span x-show="docsSelectedDoc.createdDate" x-text="'created: ' + docsSelectedDoc.createdDate"></span>
+                          <span x-show="docsSelectedDoc.updatedDate" x-text="'updated: ' + docsSelectedDoc.updatedDate"></span>
+                          <span x-text="'tags: ' + docsTagsStr(docsSelectedDoc)"></span>
+                        </div>
+                        <div class="message-bubble markdown-body" x-html="docsSelectedBodyHtml()"></div>
+                      </div>
+                    </template>
+                    <p class="text-dim text-sm" x-show="docTreeHasAny() && !docsSelectedDoc && !docsDocLoading && !docsDocError">Select a document from the tree.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'decisions'" class="mt-4">
+                <div x-show="detailLoading.decisions" class="loading-state"><div class="spinner"></div><span>Loading decisions...</span></div>
+                <div x-show="detailErrors.decisions && !detailLoading.decisions" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.decisions"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('decisions')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.decisions && !detailErrors.decisions" class="flex gap-4" style="align-items:stretch;min-height:280px">
+                  <div style="width:340px;flex-shrink:0;border-right:1px solid var(--border);padding-right:12px;overflow:auto;max-height:70vh">
+                    <div class="table-wrap" x-show="detailDecisions.length">
+                      <table>
+                        <thead><tr><th>ID</th><th>Title</th><th>Date</th><th>Status</th></tr></thead>
+                        <tbody>
+                          <template x-for="r in detailDecisions" :key="r.id">
+                            <tr
+                              style="cursor:pointer"
+                              :class="{ 'bg-panel': decisionsRowActive(r) }"
+                              @click="decisionsSelectRow(r)"
+                              role="button"
+                              tabindex="0"
+                              @keydown.enter="decisionsSelectRow(r)"
+                            >
+                              <td class="text-xs font-mono" x-text="r.id"></td>
+                              <td x-text="r.title || '—'"></td>
+                              <td class="text-xs" x-text="r.date || '—'"></td>
+                              <td><span class="badge" :class="decisionStatusClass(r.status)" x-text="r.status || '—'"></span></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="empty-state py-6" x-show="!detailDecisions.length">
+                      <p class="text-dim text-sm">No decisions in <code style="color:var(--accent)">backlog/decisions</code>.</p>
+                    </div>
+                  </div>
+                  <div class="flex-1 min-w-0 overflow-auto" style="max-height:70vh">
+                    <div x-show="decisionsDetailLoading" class="loading-state"><div class="spinner"></div><span>Loading decision...</span></div>
+                    <div x-show="decisionsDetailError && !decisionsDetailLoading" class="error-state">
+                      <span class="error-icon">!</span>
+                      <p x-text="decisionsDetailError"></p>
+                    </div>
+                    <template x-if="decisionsSelected && !decisionsDetailLoading && !decisionsDetailError">
+                      <div>
+                        <h3 class="text-lg mb-1" x-text="decisionsSelected.title || decisionsSelected.id"></h3>
+                        <div class="flex flex-wrap gap-2 text-xs text-dim mb-4">
+                          <span class="font-mono" x-text="'id: ' + decisionsSelected.id"></span>
+                          <span x-show="decisionsSelected.date" x-text="'date: ' + decisionsSelected.date"></span>
+                          <span class="badge" :class="decisionStatusClass(decisionsSelected.status)" x-text="decisionsSelected.status || '—'"></span>
+                        </div>
+                        <h4 class="text-sm font-semibold mt-3 mb-1">Context</h4>
+                        <div class="message-bubble markdown-body mb-4" x-html="decisionSectionHtml('context')"></div>
+                        <h4 class="text-sm font-semibold mt-3 mb-1">Decision</h4>
+                        <div class="message-bubble markdown-body mb-4" x-html="decisionSectionHtml('decision')"></div>
+                        <h4 class="text-sm font-semibold mt-3 mb-1">Consequences</h4>
+                        <div class="message-bubble markdown-body mb-4" x-html="decisionSectionHtml('consequences')"></div>
+                        <h4 class="text-sm font-semibold mt-3 mb-1">Alternatives</h4>
+                        <div class="message-bubble markdown-body" x-html="decisionSectionHtml('alternatives')"></div>
+                      </div>
+                    </template>
+                    <p class="text-dim text-sm" x-show="detailDecisions.length && !decisionsSelected && !decisionsDetailLoading && !decisionsDetailError">Select a decision from the list.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'drafts'" class="mt-4">
+                <div x-show="detailLoading.drafts" class="loading-state"><div class="spinner"></div><span>Loading drafts...</span></div>
+                <div x-show="detailErrors.drafts && !detailLoading.drafts" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.drafts"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('drafts')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.drafts && !detailErrors.drafts">
+                  <p class="text-xs text-danger mb-2" x-show="draftPromoteError" x-text="draftPromoteError"></p>
+                  <div class="table-wrap" x-show="detailDrafts.length">
+                    <table>
+                      <thead><tr><th>Title</th><th>Priority</th><th>Created</th><th></th></tr></thead>
+                      <tbody>
+                        <template x-for="d in detailDrafts" :key="d.id">
+                          <tr>
+                            <td x-text="d.title || d.id || '—'"></td>
+                            <td><span class="badge" :class="priorityClass(d.priority)" x-text="d.priority || '—'"></span></td>
+                            <td class="text-xs" x-text="draftCreatedDisplay(d)"></td>
+                            <td>
+                              <button
+                                type="button"
+                                class="btn btn-primary btn-sm"
+                                :disabled="draftPromotingId === d.id"
+                                @click="draftPromoteToTask(d)"
+                                x-text="draftPromotingId === d.id ? 'Promoting…' : 'Promote to Task'"
+                              ></button>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="empty-state py-8" x-show="!detailDrafts.length">
+                    <p class="text-dim text-sm">No drafts in <code style="color:var(--accent)">backlog/drafts</code>.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'milestones'" class="mt-4">
+                <div x-show="detailLoading.milestones" class="loading-state"><div class="spinner"></div><span>Loading milestones...</span></div>
+                <div x-show="detailErrors.milestones && !detailLoading.milestones" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.milestones"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('milestones')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.milestones && !detailErrors.milestones">
+                  <p class="text-sm text-dim mb-3">Progress uses tasks whose <code style="color:var(--accent)">milestone</code> field matches the milestone id (same as API).</p>
+                  <div class="flex flex-col gap-3" x-show="detailMilestones.length">
+                    <template x-for="m in detailMilestones" :key="m.id">
+                      <div class="card" style="padding:12px">
+                        <div class="flex justify-between items-start gap-2 flex-wrap">
+                          <div class="min-w-0 flex-1">
+                            <div class="font-semibold" x-text="m.title || m.id"></div>
+                            <p class="text-xs text-dim mt-1" x-show="milestoneDescPreview(m)" x-text="milestoneDescPreview(m)"></p>
+                          </div>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm flex-shrink-0"
+                            :disabled="milestoneArchiveBusyId === m.id"
+                            @click="milestoneArchive(m)"
+                            x-text="milestoneArchiveBusyId === m.id ? 'Archiving…' : 'Archive'"
+                          ></button>
+                        </div>
+                        <div class="mt-2 text-xs text-dim">
+                          <span x-text="(m.taskDone != null ? m.taskDone : 0) + ' / ' + (m.taskTotal != null ? m.taskTotal : 0) + ' tasks done'"></span>
+                        </div>
+                        <div class="progress-bar mt-2">
+                          <div class="progress-bar-fill" :style="'width:' + milestoneProgressPct(m) + '%'"></div>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="empty-state py-6" x-show="!detailMilestones.length">
+                    <p class="text-dim text-sm">No active milestones in <code style="color:var(--accent)">backlog/milestones</code>.</p>
+                  </div>
+                  <div class="mt-6" x-show="detailArchivedMilestones.length">
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-sm mb-2"
+                      @click="milestonesArchivedOpen = !milestonesArchivedOpen"
+                    >
+                      <span x-text="milestonesArchivedOpen ? '\u25bc' : '\u25b6'"></span>
+                      <span class="ml-1">Archived milestones</span>
+                      <span class="text-dim ml-1" x-text="'(' + detailArchivedMilestones.length + ')'"></span>
+                    </button>
+                    <div class="flex flex-col gap-2" x-show="milestonesArchivedOpen">
+                      <template x-for="am in detailArchivedMilestones" :key="am.id">
+                        <div class="card" style="padding:10px;opacity:0.85">
+                          <div class="text-sm font-medium" x-text="am.title || am.id"></div>
+                          <p class="text-xs text-dim mt-1" x-show="milestoneDescPreview(am)" x-text="milestoneDescPreview(am)"></p>
+                        </div>
+                      </template>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -2744,16 +3114,130 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
         <template x-if="taskModalOpen">
           <div class="modal-overlay" @click.self="closeTaskModal()" @keydown.escape.window="closeTaskModal()">
-            <div class="modal" style="max-width:640px;max-height:85vh;overflow:auto">
-              <div class="modal-header">
-                <h3 x-text="taskModalTitle"></h3>
-                <button type="button" class="modal-close" @click="closeTaskModal()">&times;</button>
+            <div class="modal" style="max-width:720px;max-height:90vh;overflow:auto">
+              <div class="modal-header flex justify-between items-start gap-2 flex-wrap">
+                <h3 style="margin:0" x-text="taskModalTitle"></h3>
+                <div class="flex gap-2 flex-wrap" x-show="backlogDetailTask && !taskModalLoading && taskModalTaskActions">
+                  <template x-if="!taskDetailEditMode">
+                    <span>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="taskDetailEnterEdit()">Edit</button>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="backlogArchiveTask()">Archive</button>
+                      <button type="button" class="btn btn-primary btn-sm" @click="backlogCompleteTask()">Complete</button>
+                    </span>
+                  </template>
+                  <template x-if="taskDetailEditMode">
+                    <span>
+                      <button type="button" class="btn btn-primary btn-sm" :disabled="taskDetailSaving" @click="taskDetailSaveEdit()" x-text="taskDetailSaving ? 'Saving…' : 'Save'"></button>
+                      <button type="button" class="btn btn-ghost btn-sm" @click="taskDetailCancelEdit()">Cancel</button>
+                    </span>
+                  </template>
+                  <button type="button" class="modal-close" @click="closeTaskModal()">&times;</button>
+                </div>
               </div>
               <div class="modal-body">
                 <div x-show="taskModalLoading" class="loading-state py-6"><div class="spinner"></div><span>Loading task...</span></div>
                 <p class="text-danger text-sm" x-show="taskModalError && !taskModalLoading" x-text="taskModalError"></p>
-                <div x-show="!taskModalLoading && !taskModalError" class="task-detail-md" style="font-size:13px;line-height:1.5" x-html="taskDetailHtml"></div>
+                <div x-show="!taskModalLoading && !taskModalError && backlogDetailTask" class="task-detail-md" style="font-size:13px;line-height:1.5">
+                  <template x-if="!taskDetailEditMode">
+                    <div class="grid gap-2 mb-4" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));font-size:12px">
+                      <div><span class="text-dim">ID</span><br><code x-text="backlogDetailTask.id"></code></div>
+                      <div><span class="text-dim">Status</span><br><span x-text="backlogDetailTask.status || '—'"></span></div>
+                      <div><span class="text-dim">Priority</span><br><span x-text="backlogDetailTask.priority || '—'"></span></div>
+                      <div><span class="text-dim">Milestone</span><br><span x-text="backlogDetailTask.milestone || '—'"></span></div>
+                      <div style="grid-column:1/-1"><span class="text-dim">Assignee</span><br><span x-text="taskJoin(backlogDetailTask.assignee)"></span></div>
+                      <div style="grid-column:1/-1"><span class="text-dim">Labels</span><br><span x-text="taskJoin(backlogDetailTask.labels)"></span></div>
+                      <div style="grid-column:1/-1"><span class="text-dim">Dependencies</span><br><span x-text="taskJoin(backlogDetailTask.dependencies)"></span></div>
+                    </div>
+                  </template>
+                  <template x-if="taskDetailEditMode">
+                    <div class="form-group"><label>Status</label>
+                      <select class="form-input" x-model="taskEditForm.status">
+                        <template x-for="st in taskEditStatusOptions()" :key="String(st)">
+                          <option :value="st" x-text="st"></option>
+                        </template>
+                      </select>
+                    </div>
+                    <div class="form-group"><label>Priority</label>
+                      <select class="form-input" x-model="taskEditForm.priority">
+                        <option value="">(none)</option>
+                        <option value="high">high</option>
+                        <option value="medium">medium</option>
+                        <option value="low">low</option>
+                      </select>
+                    </div>
+                    <div class="form-group"><label>Assignees (one per line)</label>
+                      <textarea class="form-input" rows="3" x-model="taskEditForm.assigneeText"></textarea>
+                    </div>
+                    <div class="form-group"><label>Labels (comma-separated)</label>
+                      <input class="form-input" x-model="taskEditForm.labelsText">
+                    </div>
+                  </template>
+                  <template x-if="backlogDetailTask.description && !taskDetailEditMode">
+                    <h4 class="text-sm font-semibold mt-2">Description</h4>
+                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.description)"></div>
+                  </template>
+                  <template x-if="(backlogDetailTask.acceptanceCriteriaItems || []).length && !taskDetailEditMode && taskModalTaskActions">
+                    <h4 class="text-sm font-semibold mt-3">Acceptance criteria</h4>
+                    <div class="text-sm">
+                      <template x-for="(ac, idx) in backlogDetailTask.acceptanceCriteriaItems" :key="idx">
+                        <label class="flex gap-2 py-1 cursor-pointer" style="align-items:flex-start">
+                          <input type="checkbox" :checked="ac.checked" @click.prevent="toggleBacklogAc(idx)" style="margin-top:3px;flex-shrink:0">
+                          <span x-text="ac.text"></span>
+                        </label>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-if="(backlogDetailTask.acceptanceCriteriaItems || []).length && !taskDetailEditMode && !taskModalTaskActions">
+                    <h4 class="text-sm font-semibold mt-3">Acceptance criteria</h4>
+                    <ul class="text-sm text-dim pl-4" style="list-style:disc">
+                      <template x-for="(ac, idx) in backlogDetailTask.acceptanceCriteriaItems" :key="idx">
+                        <li x-text="(ac.checked ? '\u2713 ' : '') + ac.text"></li>
+                      </template>
+                    </ul>
+                  </template>
+                  <template x-if="backlogDetailTask.implementationPlan && !taskDetailEditMode">
+                    <h4 class="text-sm font-semibold mt-3">Implementation plan</h4>
+                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.implementationPlan)"></div>
+                  </template>
+                  <template x-if="backlogDetailTask.implementationNotes && !taskDetailEditMode">
+                    <h4 class="text-sm font-semibold mt-3">Implementation notes</h4>
+                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.implementationNotes)"></div>
+                  </template>
+                  <template x-if="backlogDetailTask.finalSummary && !taskDetailEditMode">
+                    <h4 class="text-sm font-semibold mt-3">Final summary</h4>
+                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.finalSummary)"></div>
+                  </template>
+                </div>
               </div>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="boardNewTaskOpen">
+          <div class="modal-overlay" @click.self="boardCloseNewTask()" @keydown.escape.window="boardCloseNewTask()">
+            <div class="modal">
+              <div class="modal-header">
+                <h3>New backlog task</h3>
+                <button type="button" class="modal-close" @click="boardCloseNewTask()">&times;</button>
+              </div>
+              <div class="form-group"><label>Title</label><input class="form-input" x-model="boardNewTask.title" placeholder="Task title"></div>
+              <div class="form-group"><label>Status</label>
+                <select class="form-input" x-model="boardNewTask.status">
+                  <template x-for="st in boardStatuses" :key="String(st)">
+                    <option :value="st" x-text="st"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="form-group"><label>Priority</label>
+                <select class="form-input" x-model="boardNewTask.priority">
+                  <option value="">(none)</option>
+                  <option value="high">high</option>
+                  <option value="medium">medium</option>
+                  <option value="low">low</option>
+                </select>
+              </div>
+              <p class="text-xs text-danger mb-2" x-show="boardNewTaskError" x-text="boardNewTaskError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="boardNewTaskSaving" @click="boardSubmitNewTask()" x-text="boardNewTaskSaving ? 'Creating...' : 'Create'"></button>
             </div>
           </div>
         </template>

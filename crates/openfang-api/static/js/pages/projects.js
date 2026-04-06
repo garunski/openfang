@@ -2,7 +2,8 @@
 'use strict';
 
 function projectsPage() {
-  return {
+  return Object.assign(
+    {
     projects: [],
     projectsLoading: false,
     projectsError: '',
@@ -12,9 +13,36 @@ function projectsPage() {
     detailSpokes: [],
     detailAgents: [],
     detailPipelines: [],
-    detailLoading: { backlog: false, spokes: false, agents: false, pipelines: false },
-    detailErrors: { backlog: '', spokes: '', agents: '', pipelines: '' },
-    _detailLoaded: { backlog: false, spokes: false, agents: false, pipelines: false },
+    detailLoading: {
+      backlog: false,
+      spokes: false,
+      agents: false,
+      pipelines: false,
+      docs: false,
+      decisions: false,
+      drafts: false,
+      milestones: false,
+    },
+    detailErrors: {
+      backlog: '',
+      spokes: '',
+      agents: '',
+      pipelines: '',
+      docs: '',
+      decisions: '',
+      drafts: '',
+      milestones: '',
+    },
+    _detailLoaded: {
+      backlog: false,
+      spokes: false,
+      agents: false,
+      pipelines: false,
+      docs: false,
+      decisions: false,
+      drafts: false,
+      milestones: false,
+    },
     registerModalOpen: false,
     registerForm: { name: '', path: '' },
     registerSubmitting: false,
@@ -27,6 +55,28 @@ function projectsPage() {
 
     init() {
       this.loadProjects();
+      if (typeof OpenFangAPI.backlogFeedEnsureConnected === 'function') {
+        OpenFangAPI.backlogFeedEnsureConnected();
+      }
+      if (!this._backlogLiveBound) {
+        this._backlogLiveBound = true;
+        var self = this;
+        window.addEventListener('openfang-backlog-updated', function (ev) {
+          self.onBacklogLiveUpdate(ev.detail);
+        });
+      }
+    },
+
+    async onBacklogLiveUpdate(detail) {
+      if (!detail || !this.selectedProject) return;
+      if (String(detail.project_id) !== String(this.selectedProject.id)) return;
+      var tabs = ['backlog', 'board', 'docs', 'decisions', 'drafts', 'milestones'];
+      var i;
+      for (i = 0; i < tabs.length; i++) {
+        this.setDetailLoaded(tabs[i], false);
+      }
+      if (typeof this.resetBoardCache === 'function') this.resetBoardCache();
+      await this.loadDetailTab(this.detailTab, true);
     },
 
     setDetailLoaded(tab, done) {
@@ -36,13 +86,49 @@ function projectsPage() {
     },
 
     resetDetailCache() {
-      this._detailLoaded = { backlog: false, spokes: false, agents: false, pipelines: false };
+      this._detailLoaded = {
+        backlog: false,
+        spokes: false,
+        agents: false,
+        pipelines: false,
+        docs: false,
+        decisions: false,
+        drafts: false,
+        milestones: false,
+      };
       this.detailTasks = [];
       this.detailSpokes = [];
       this.detailAgents = [];
       this.detailPipelines = [];
-      this.detailErrors = { backlog: '', spokes: '', agents: '', pipelines: '' };
-      this.detailLoading = { backlog: false, spokes: false, agents: false, pipelines: false };
+      this.detailErrors = {
+        backlog: '',
+        spokes: '',
+        agents: '',
+        pipelines: '',
+        docs: '',
+        decisions: '',
+        drafts: '',
+        milestones: '',
+      };
+      this.detailLoading = {
+        backlog: false,
+        spokes: false,
+        agents: false,
+        pipelines: false,
+        docs: false,
+        decisions: false,
+        drafts: false,
+        milestones: false,
+      };
+      if (typeof this.resetBoardCache === 'function') this.resetBoardCache();
+      if (typeof this.resetListFilters === 'function') this.resetListFilters();
+      if (typeof this.resetDocsCache === 'function') this.resetDocsCache();
+      if (typeof this.resetDecisionsCache === 'function') this.resetDecisionsCache();
+      if (typeof this.resetDraftsCache === 'function') this.resetDraftsCache();
+      if (typeof this.resetMilestonesCache === 'function') this.resetMilestonesCache();
+      if (typeof this.resetBacklogSearch === 'function') this.resetBacklogSearch();
+      this.backlogDetailTask = null;
+      this.taskDetailEditMode = false;
     },
 
     setDetailLoading(tab, v) {
@@ -74,6 +160,7 @@ function projectsPage() {
       this.detailTab = 'backlog';
       this.taskModalOpen = false;
       this.taskDetailHtml = '';
+      this.backlogDetailTask = null;
       this.resetDetailCache();
       this.loadDetailTab('backlog');
     },
@@ -82,6 +169,8 @@ function projectsPage() {
       this.selectedProject = null;
       this.taskModalOpen = false;
       this.taskDetailHtml = '';
+      this.backlogDetailTask = null;
+      if (typeof this.resetBacklogSearch === 'function') this.resetBacklogSearch();
     },
 
     retryLoad(tab) {
@@ -91,13 +180,41 @@ function projectsPage() {
 
     async loadDetailTab(tab, force) {
       if (!this.selectedProject) return;
+      if (tab === 'board') {
+        await this.loadBoardData(!!force);
+        return;
+      }
+      if (tab === 'docs') {
+        await this.loadDocsTab(!!force);
+        return;
+      }
+      if (tab === 'decisions') {
+        await this.loadDecisionsTab(!!force);
+        return;
+      }
+      if (tab === 'drafts') {
+        await this.loadDraftsTab(!!force);
+        return;
+      }
+      if (tab === 'milestones') {
+        await this.loadMilestonesTab(!!force);
+        return;
+      }
       if (!force && this._detailLoaded[tab]) return;
       var pid = this.selectedProject.id;
       this.setDetailLoading(tab, true);
       this.setDetailError(tab, '');
       try {
         if (tab === 'backlog') {
-          this.detailTasks = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/tasks');
+          var cfg = await OpenFangAPI.get(
+            '/api/projects/' + encodeURIComponent(pid) + '/backlog/config'
+          );
+          this.listConfigStatuses =
+            cfg && cfg.statuses && cfg.statuses.length ? cfg.statuses.slice() : [];
+          this.detailTasks = await OpenFangAPI.get(
+            '/api/projects/' + encodeURIComponent(pid) + '/backlog/tasks'
+          );
+          if (typeof this.rebuildListFilterOptions === 'function') this.rebuildListFilterOptions();
         } else if (tab === 'spokes') {
           this.detailSpokes = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/spokes');
         } else if (tab === 'agents') {
@@ -128,57 +245,6 @@ function projectsPage() {
       } catch (e) {
         this.setDetailError('spokes', e.message || 'Discover failed');
       }
-    },
-
-    formatTaskDetailHtml(d) {
-      if (!d) return '';
-      var h = '';
-      if (d.frontmatter && typeof d.frontmatter === 'object' && Object.keys(d.frontmatter).length) {
-        h += '<h4 class="text-sm font-semibold mt-0">Frontmatter</h4>';
-        h += '<pre class="text-xs overflow-auto max-h-40 p-2 rounded bg-surface-2">' +
-          escapeHtml(JSON.stringify(d.frontmatter, null, 2)) +
-          '</pre>';
-      }
-      if (d.description) {
-        h += '<h4 class="text-sm font-semibold">Description</h4>';
-        h += '<div class="message-bubble markdown-body">' + renderMarkdown(d.description) + '</div>';
-      }
-      if (d.acceptance_criteria && d.acceptance_criteria.length) {
-        h += '<h4 class="text-sm font-semibold">Acceptance criteria</h4><ul class="text-sm">';
-        for (var i = 0; i < d.acceptance_criteria.length; i++) {
-          var ac = d.acceptance_criteria[i];
-          h += '<li>' + escapeHtml(ac.text || '') + (ac.checked ? ' <span class="badge badge-success">done</span>' : '') + '</li>';
-        }
-        h += '</ul>';
-      }
-      return h || '<p class="text-dim text-sm">No description.</p>';
-    },
-
-    async openTaskDetail(task) {
-      if (!this.selectedProject || !task || !task.id) return;
-      this.taskModalOpen = true;
-      this.taskModalTitle = task.title || task.id;
-      this.taskModalLoading = true;
-      this.taskModalError = '';
-      this.taskDetailHtml = '';
-      try {
-        var d = await OpenFangAPI.get(
-          '/api/projects/' +
-            encodeURIComponent(this.selectedProject.id) +
-            '/tasks/' +
-            encodeURIComponent(task.id)
-        );
-        this.taskDetailHtml = this.formatTaskDetailHtml(d);
-      } catch (e) {
-        this.taskModalError = e.message || 'Failed to load task';
-      }
-      this.taskModalLoading = false;
-    },
-
-    closeTaskModal() {
-      this.taskModalOpen = false;
-      this.taskDetailHtml = '';
-      this.taskModalError = '';
     },
 
     openRegisterModal() {
@@ -242,6 +308,7 @@ function projectsPage() {
       return '\u2026' + path.slice(-(n - 1));
     },
 
+
     async deleteProject(project) {
       if (!project || !project.id) return;
       if (!window.confirm('Delete project "' + (project.name || project.id) + '"?')) return;
@@ -254,5 +321,15 @@ function projectsPage() {
         this.projectsError = e.message || 'Delete failed';
       }
     },
-  };
+  },
+    typeof backlogBoardMixins === 'function' ? backlogBoardMixins() : {},
+    typeof backlogListMixins === 'function' ? backlogListMixins() : {},
+    typeof backlogTaskDetailMixins === 'function' ? backlogTaskDetailMixins() : {},
+    typeof backlogDocsMixins === 'function' ? backlogDocsMixins() : {},
+    typeof backlogDecisionsMixins === 'function' ? backlogDecisionsMixins() : {},
+    typeof backlogDraftsMixins === 'function' ? backlogDraftsMixins() : {},
+    typeof backlogMilestonesMixins === 'function' ? backlogMilestonesMixins() : {},
+    typeof backlogSearchMixins === 'function' ? backlogSearchMixins() : {}
+  );
 }
+

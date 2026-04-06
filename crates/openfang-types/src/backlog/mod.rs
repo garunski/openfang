@@ -3,11 +3,15 @@
 //! Field names and shapes align with `MrLesk/Backlog.md` `src/types/index.ts`; serde uses
 //! `camelCase` on the wire unless noted.
 
+pub mod parser;
+pub mod reader;
+pub mod serializer;
+
 use serde::{Deserialize, Serialize};
 
 /// Global / project backlog configuration (`backlog.config.yml`).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct BacklogConfig {
     pub project_name: String,
     #[serde(default)]
@@ -47,32 +51,6 @@ pub struct BacklogConfig {
     pub on_status_change: Option<String>,
 }
 
-impl Default for BacklogConfig {
-    fn default() -> Self {
-        Self {
-            project_name: String::new(),
-            default_status: String::new(),
-            statuses: Vec::new(),
-            labels: Vec::new(),
-            task_prefix: String::new(),
-            date_format: String::new(),
-            definition_of_done: Vec::new(),
-            default_assignee: None,
-            default_reporter: None,
-            max_column_width: None,
-            default_editor: None,
-            auto_open_browser: None,
-            default_port: None,
-            remote_operations: None,
-            auto_commit: None,
-            bypass_git_hooks: None,
-            check_active_branches: None,
-            active_branch_days: None,
-            on_status_change: None,
-        }
-    }
-}
-
 /// Task priority (`high` | `medium` | `low` in JSON).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -83,7 +61,7 @@ pub enum TaskPriority {
 }
 
 /// Parsed acceptance / DoD checklist line.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AcceptanceCriterion {
     pub index: usize,
@@ -92,8 +70,8 @@ pub struct AcceptanceCriterion {
 }
 
 /// Full task record (frontmatter + parsed body sections).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct BacklogTask {
     pub id: String,
     pub title: String,
@@ -142,42 +120,13 @@ pub struct BacklogTask {
     pub implementation_notes: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_summary: Option<String>,
-}
-
-impl Default for BacklogTask {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            title: String::new(),
-            status: String::new(),
-            assignee: Vec::new(),
-            reporter: None,
-            created_date: String::new(),
-            updated_date: None,
-            labels: Vec::new(),
-            milestone: None,
-            dependencies: Vec::new(),
-            references: None,
-            documentation: None,
-            parent_task_id: None,
-            subtasks: None,
-            priority: None,
-            ordinal: None,
-            branch: None,
-            on_status_change: None,
-            raw_content: String::new(),
-            description: None,
-            acceptance_criteria: Vec::new(),
-            definition_of_done: Vec::new(),
-            implementation_plan: None,
-            implementation_notes: None,
-            final_summary: None,
-        }
-    }
+    /// Relative path from backlog root (set by filesystem reader only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
 }
 
 /// ADR / decision record.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklogDecision {
     pub id: String,
@@ -190,6 +139,9 @@ pub struct BacklogDecision {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alternatives: Option<String>,
     pub raw_content: String,
+    /// Relative path from backlog root (set by filesystem reader only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
 }
 
 /// Decision lifecycle in `decisions/*.md`.
@@ -203,17 +155,20 @@ pub enum DecisionStatus {
 }
 
 /// Milestone metadata file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklogMilestone {
     pub id: String,
     pub title: String,
     pub description: String,
     pub raw_content: String,
+    /// Relative path from backlog root (set by filesystem reader only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
 }
 
 /// Non-task markdown doc under `backlog/docs`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklogDocument {
     pub id: String,
@@ -228,6 +183,9 @@ pub struct BacklogDocument {
     pub raw_content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Relative path from backlog root to the markdown file (set by filesystem reader only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
 }
 
 /// Single hit from backlog search (mirrors `SearchResult` in Backlog.md).
@@ -237,18 +195,55 @@ pub enum BacklogSearchResult {
     Task {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         score: Option<f64>,
-        task: BacklogTask,
+        task: Box<BacklogTask>,
     },
     Document {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         score: Option<f64>,
-        document: BacklogDocument,
+        document: Box<BacklogDocument>,
     },
     Decision {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         score: Option<f64>,
-        decision: BacklogDecision,
+        decision: Box<BacklogDecision>,
     },
+}
+
+/// Full load of a `backlog/` directory tree.
+#[derive(Debug, Clone, Default)]
+pub struct BacklogSnapshot {
+    pub config: BacklogConfig,
+    pub tasks: Vec<BacklogTask>,
+    pub documents: Vec<BacklogDocument>,
+    pub decisions: Vec<BacklogDecision>,
+    pub drafts: Vec<BacklogTask>,
+    pub milestones: Vec<BacklogMilestone>,
+    pub completed: Vec<BacklogTask>,
+    pub archived_milestones: Vec<BacklogMilestone>,
+}
+
+/// One node in a nested docs tree (for UI).
+#[derive(Debug, Clone)]
+pub struct DocTreeNode {
+    pub name: String,
+    pub children: Vec<DocTreeNode>,
+    pub docs: Vec<BacklogDocument>,
+}
+
+/// Nested document tree built from [`BacklogDocument::path`] categories.
+#[derive(Debug, Clone)]
+pub struct DocTree {
+    pub root: DocTreeNode,
+}
+
+impl DocTreeNode {
+    pub fn root() -> Self {
+        Self {
+            name: String::new(),
+            children: Vec::new(),
+            docs: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -291,10 +286,10 @@ mod tests {
     fn backlog_search_result_roundtrip() {
         let r = BacklogSearchResult::Task {
             score: Some(1.5),
-            task: BacklogTask {
+            task: Box::new(BacklogTask {
                 id: "TASK-1".into(),
                 ..Default::default()
-            },
+            }),
         };
         let v = serde_json::to_value(&r).unwrap();
         let back: BacklogSearchResult = serde_json::from_value(v).unwrap();

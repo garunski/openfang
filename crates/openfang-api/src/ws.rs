@@ -29,6 +29,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -204,6 +205,89 @@ pub async fn agent_ws(
     let id_str = id.clone();
     ws.on_upgrade(move |socket| handle_agent_ws(socket, state, agent_id, id_str, guard))
         .into_response()
+}
+
+/// GET /api/backlog/ws — fan-out backlog filesystem update notifications (JSON text frames).
+pub async fn backlog_feed_ws(
+    ws: WebSocketUpgrade,
+    State(state): State<Arc<AppState>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    headers: axum::http::HeaderMap,
+    uri: axum::http::Uri,
+) -> impl IntoResponse {
+    let api_key_raw = &state.kernel.config.api_key;
+    let api_key = api_key_raw.trim();
+    if !api_key.is_empty() {
+        let ct_eq = |token: &str, key: &str| -> bool {
+            use subtle::ConstantTimeEq;
+            if token.len() != key.len() {
+                return false;
+            }
+            token.as_bytes().ct_eq(key.as_bytes()).into()
+        };
+
+        let header_auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(|token| ct_eq(token, api_key))
+            .unwrap_or(false);
+
+        let query_auth = uri
+            .query()
+            .and_then(|q| q.split('&').find_map(|pair| pair.strip_prefix("token=")))
+            .map(|token| ct_eq(token, api_key))
+            .unwrap_or(false);
+
+        if !header_auth && !query_auth {
+            warn!("Backlog WebSocket upgrade rejected: invalid auth");
+            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+        }
+    }
+
+    let ip = addr.ip();
+    let guard = match try_acquire_ws_slot(ip) {
+        Some(g) => g,
+        None => {
+            warn!(ip = %ip, "Backlog WebSocket rejected: too many connections from IP (max {MAX_WS_PER_IP})");
+            return axum::http::StatusCode::TOO_MANY_REQUESTS.into_response();
+        }
+    };
+
+    let rx = state.backlog_feed_tx.subscribe();
+    ws.on_upgrade(move |socket| handle_backlog_feed_ws(socket, rx, guard))
+        .into_response()
+}
+
+async fn handle_backlog_feed_ws(
+    socket: WebSocket,
+    mut rx: tokio::sync::broadcast::Receiver<String>,
+    _guard: WsConnectionGuard,
+) {
+    let (mut sink, mut stream) = socket.split();
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Ok(m) => {
+                        if sink.send(Message::Text(m.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(_) => break,
+                }
+            }
+            in_msg = stream.next() => {
+                match in_msg {
+                    None => break,
+                    Some(Ok(Message::Close(_))) => break,
+                    Some(Err(_)) => break,
+                    Some(Ok(_)) => {}
+                }
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

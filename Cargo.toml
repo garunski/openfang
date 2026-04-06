@@ -42,6 +42,7 @@ anyhow = "1"
 # Concurrency
 dashmap = "6"
 crossbeam = "0.8"
+notify = "7"
 
 # Logging / Tracing
 tracing = "0.1"

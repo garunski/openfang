@@ -8,6 +8,9 @@ description = "Core types and traits for the OpenFang Agent OS"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+walkdir = { workspace = true }
+regex-lite = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 thiserror = { workspace = true }

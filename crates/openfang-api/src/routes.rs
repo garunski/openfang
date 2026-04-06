@@ -11,7 +11,7 @@ use openfang_kernel::triggers::{TriggerId, TriggerPattern};
 use openfang_kernel::workflow::{
     ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
 };
-use openfang_kernel::OpenFangKernel;
+use openfang_kernel::{BacklogStore, BacklogWatcherManager, OpenFangKernel};
 use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
@@ -48,6 +48,12 @@ pub struct AppState {
     /// Thread-safe mutable budget config. Updated via PUT /api/budget.
     /// Initialized from `kernel.config.budget` at startup.
     pub budget_config: Arc<tokio::sync::RwLock<openfang_types::config::BudgetConfig>>,
+    /// In-memory backlog cache (shared with [`OpenFangKernel::backlog_store`]).
+    pub backlog_store: Arc<BacklogStore>,
+    /// Broadcast JSON lines for dashboard backlog live updates.
+    pub backlog_feed_tx: tokio::sync::broadcast::Sender<String>,
+    /// Per-project recursive `notify` watchers on `backlog/`.
+    pub backlog_watcher: Arc<BacklogWatcherManager>,
 }
 
 /// POST /api/agents — Spawn a new agent.
@@ -1128,7 +1134,7 @@ pub async fn delete_workflow(
 // Project routes
 // ---------------------------------------------------------------------------
 
-fn parse_project_id_param(
+pub(super) fn parse_project_id_param(
     id: &str,
 ) -> Result<ProjectId, (StatusCode, Json<serde_json::Value>)> {
     id.parse().map_err(|_| {
@@ -1138,6 +1144,19 @@ fn parse_project_id_param(
         )
     })
 }
+
+#[path = "backlog_routes.rs"]
+mod backlog_routes;
+
+pub use backlog_routes::{
+    backlog_archive_milestone, backlog_complete_task, backlog_create_decision, backlog_create_doc,
+    backlog_create_milestone, backlog_create_task, backlog_delete_task, backlog_get_config,
+    backlog_get_decision, backlog_get_doc, backlog_get_task, backlog_list_archived_milestones,
+    backlog_list_completed, backlog_list_decisions, backlog_list_docs_tree, backlog_list_drafts,
+    backlog_list_milestones, backlog_list_tasks, backlog_promote_draft, backlog_put_task,
+    backlog_reorder_tasks, backlog_search, backlog_statistics, backlog_update_decision,
+    backlog_update_doc,
+};
 
 fn project_store_error_response(
     e: OpenFangError,
@@ -1375,7 +1394,11 @@ pub async fn delete_project(
         Err(tup) => return tup,
     };
     match state.kernel.project_store.remove(pid) {
-        Ok(removed) => (StatusCode::OK, Json(project_detail_json(&removed))),
+        Ok(removed) => {
+            state.backlog_watcher.stop_watching(&pid);
+            state.backlog_store.unload(&pid);
+            (StatusCode::OK, Json(project_detail_json(&removed)))
+        }
         Err(e) => project_store_error_response(e),
     }
 }

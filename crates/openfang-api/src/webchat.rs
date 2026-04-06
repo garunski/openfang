@@ -150,6 +150,22 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/js/pages/overview.js"),
     "\n",
+    include_str!("../static/js/pages/backlog-board.js"),
+    "\n",
+    include_str!("../static/js/pages/backlog-list.js"),
+    "\n",
+    include_str!("../static/js/pages/task-detail-modal.js"),
+    "\n",
+    include_str!("../static/js/pages/backlog-docs.js"),
+    "\n",
+    include_str!("../static/js/pages/backlog-decisions.js"),
+    "\n",
+    include_str!("../static/js/pages/backlog-drafts.js"),
+    "\n",
+    include_str!("../static/js/pages/backlog-milestones.js"),
+    "\n",
+    include_str!("../static/js/pages/backlog-search.js"),
+    "\n",
     include_str!("../static/js/pages/projects.js"),
     "\n",
     include_str!("../static/js/katex.js"),
@@ -210,8 +226,34 @@ mod dashboard_embed_tests {
             "expected spokes discover action"
         );
         assert!(
-            super::WEBCHAT_HTML.contains("openTaskDetail"),
+            super::WEBCHAT_HTML.contains("openBacklogTaskDetail"),
             "expected backlog task drill-down"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("kanban") && super::WEBCHAT_HTML.contains("board"),
+            "expected kanban board in dashboard HTML"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("task-list-table")
+                && super::WEBCHAT_HTML.contains("openBacklogTaskDetail"),
+            "expected task list + backlog detail modal wiring"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("loadDocsTab")
+                && super::WEBCHAT_HTML.contains("docNavRows")
+                && super::WEBCHAT_HTML.contains("decisionsSelectRow"),
+            "expected backlog docs + decisions dashboard wiring"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("draftPromoteToTask")
+                && super::WEBCHAT_HTML.contains("milestoneArchive")
+                && super::WEBCHAT_HTML.contains("onBacklogSearchInput"),
+            "expected backlog drafts, milestones, and search wiring"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("/api/backlog/ws")
+                && super::WEBCHAT_HTML.contains("openfang-backlog-updated"),
+            "expected backlog live WebSocket client wiring"
         );
     }
 }

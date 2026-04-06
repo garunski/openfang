@@ -139,7 +139,61 @@ var OpenFangAPI = (function() {
   var _reconnectAttempt = 0;
   var _connectionListeners = [];
 
-  function setAuthToken(token) { _authToken = token; }
+  var _backlogWs = null;
+  var _backlogWsTimer = null;
+
+  function backlogFeedEnsureConnected() {
+    if (
+      _backlogWs &&
+      (_backlogWs.readyState === WebSocket.OPEN || _backlogWs.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+    try {
+      var url = WS_BASE + '/api/backlog/ws';
+      if (_authToken) url += '?token=' + encodeURIComponent(_authToken);
+      var socket = new WebSocket(url);
+      _backlogWs = socket;
+      socket.onmessage = function (ev) {
+        try {
+          var d = JSON.parse(ev.data);
+          if (d.type !== 'backlog-updated') return;
+          window.dispatchEvent(new CustomEvent('openfang-backlog-updated', { detail: d }));
+        } catch (e1) {}
+      };
+      socket.onclose = function () {
+        if (_backlogWs === socket) _backlogWs = null;
+        if (_backlogWsTimer) return;
+        _backlogWsTimer = setTimeout(function () {
+          _backlogWsTimer = null;
+          backlogFeedEnsureConnected();
+        }, 3000);
+      };
+      socket.onerror = function () {
+        try {
+          socket.close();
+        } catch (e2) {}
+      };
+    } catch (e) {}
+  }
+
+  function backlogFeedDisconnect() {
+    if (_backlogWsTimer) {
+      clearTimeout(_backlogWsTimer);
+      _backlogWsTimer = null;
+    }
+    if (_backlogWs) {
+      try {
+        _backlogWs.close();
+      } catch (e3) {}
+      _backlogWs = null;
+    }
+  }
+
+  function setAuthToken(token) {
+    _authToken = token;
+    backlogFeedEnsureConnected();
+  }
 
   function headers() {
     var h = { 'Content-Type': 'application/json' };
@@ -338,6 +392,8 @@ var OpenFangAPI = (function() {
     wsSend: wsSend,
     isWsConnected: isWsConnected,
     getConnectionState: getConnectionState,
-    onConnectionChange: onConnectionChange
+    onConnectionChange: onConnectionChange,
+    backlogFeedEnsureConnected: backlogFeedEnsureConnected,
+    backlogFeedDisconnect: backlogFeedDisconnect
   };
 })();

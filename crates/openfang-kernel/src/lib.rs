@@ -4,6 +4,8 @@
 //! and inter-agent communication.
 
 pub mod approval;
+pub mod backlog_store;
+pub mod backlog_watcher;
 pub mod auth;
 pub mod auto_reply;
 pub mod background;
@@ -27,4 +29,6 @@ pub mod wizard;
 pub mod workflow;
 
 pub use kernel::DeliveryTracker;
+pub use backlog_store::BacklogStore;
+pub use backlog_watcher::BacklogWatcherManager;
 pub use kernel::OpenFangKernel;
