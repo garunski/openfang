@@ -12,6 +12,8 @@ use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_api::ws;
 use openfang_kernel::OpenFangKernel;
+use openfang_runtime::pipeline_audit;
+use openfang_types::agent::AgentId;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 use std::time::Instant;
@@ -121,6 +123,44 @@ async fn start_test_server_with_provider(
             "/api/workflows/{id}/runs",
             axum::routing::get(routes::list_workflow_runs),
         )
+        .route(
+            "/api/projects",
+            axum::routing::get(routes::list_projects).post(routes::create_project),
+        )
+        .route(
+            "/api/projects/{id}",
+            axum::routing::get(routes::get_project)
+                .put(routes::update_project)
+                .delete(routes::delete_project),
+        )
+        .route(
+            "/api/projects/{id}/discover",
+            axum::routing::post(routes::discover_project_spokes),
+        )
+        .route(
+            "/api/projects/{id}/tasks/{task_id}",
+            axum::routing::get(routes::get_project_task),
+        )
+        .route(
+            "/api/projects/{id}/tasks",
+            axum::routing::get(routes::list_project_tasks),
+        )
+        .route(
+            "/api/projects/{id}/docs",
+            axum::routing::get(routes::list_project_docs),
+        )
+        .route(
+            "/api/projects/{id}/agents",
+            axum::routing::get(routes::list_project_agents),
+        )
+        .route(
+            "/api/projects/{id}/spokes",
+            axum::routing::get(routes::list_project_spokes),
+        )
+        .route(
+            "/api/projects/{id}/pipelines",
+            axum::routing::get(routes::list_project_pipelines),
+        )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
         .layer(TraceLayer::new_for_http())
@@ -208,6 +248,313 @@ async fn test_health_endpoint() {
     // Detailed fields should NOT appear in public health endpoint
     assert!(body["database"].is_null());
     assert!(body["agent_count"].is_null());
+}
+
+#[tokio::test]
+async fn test_projects_crud_api() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj_root = home.join("myproject");
+    std::fs::create_dir_all(proj_root.join("backlog")).unwrap();
+    let spoke_dir = proj_root.join("svc-a");
+    std::fs::create_dir_all(&spoke_dir).unwrap();
+    std::fs::write(spoke_dir.join("mise.toml"), "[tools]\n").unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "demo",
+            "path": proj_root.to_str().unwrap(),
+            "spokes": [{"name": "manual", "path": "rel", "labels": ["l1"]}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap().to_string();
+    assert_eq!(body["name"], "demo");
+    assert_eq!(body["spokes"].as_array().unwrap().len(), 1);
+
+    let resp = client
+        .get(format!("{}/api/projects", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let list: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0]["spoke_count"], 1);
+
+    let resp = client
+        .get(format!("{}/api/projects/{}", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert!(detail["backlog_root"].as_str().unwrap().contains("backlog"));
+    let spokes = detail["spokes"].as_array().unwrap();
+    assert!(!spokes[0]["path_resolved"].as_str().unwrap().is_empty());
+
+    let resp = client
+        .post(format!("{}/api/projects/{}/discover", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let disc: serde_json::Value = resp.json().await.unwrap();
+    let discovered = disc["spokes"].as_array().unwrap();
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0]["name"], "svc-a");
+
+    let resp = client
+        .put(format!("{}/api/projects/{}", server.base_url, pid))
+        .json(&serde_json::json!({ "name": "demo2" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let up: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(up["name"], "demo2");
+
+    let resp = client
+        .delete(format!("{}/api/projects/{}", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .get(format!("{}/api/projects/{}", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    let resp = client
+        .get(format!("{}/api/projects/not-a-uuid", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+}
+
+#[tokio::test]
+async fn test_project_backlog_endpoints() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj = home.join("backlog-proj");
+    let backlog = proj.join("backlog");
+    let tasks_dir = backlog.join("tasks");
+    let docs_dir = backlog.join("docs").join("guides");
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::create_dir_all(&docs_dir).unwrap();
+    std::fs::write(
+        tasks_dir.join("task-1 - Alpha.md"),
+        "---\nid: TASK-1\ntitle: Alpha\nstatus: Open\npriority: high\nlabels:\n  - rust\ncreated_date: '2026-01-02'\n---\n\n## Description\n\n<!-- SECTION:DESCRIPTION:BEGIN -->\nHello backlog\n<!-- SECTION:DESCRIPTION:END -->\n\n<!-- AC:BEGIN -->\n- [ ] #1 step\n<!-- AC:END -->\n",
+    )
+    .unwrap();
+    std::fs::write(
+        docs_dir.join("doc-1 - Overview.md"),
+        "---\nid: doc-1\ntitle: Overview\ntype: guide\n---\n\n# Hi\n",
+    )
+    .unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "bp",
+            "path": proj.to_str().unwrap(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!("{}/api/projects/{}/tasks", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let task_list: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(task_list.len(), 1);
+    assert_eq!(task_list[0]["id"], "TASK-1");
+    assert_eq!(task_list[0]["title"], "Alpha");
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/tasks?status=Open",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(resp.json::<Vec<serde_json::Value>>().await.unwrap().len(), 1);
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/tasks/TASK-1",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(detail["description"], "Hello backlog");
+    assert_eq!(detail["acceptance_criteria"][0]["text"], "#1 step");
+
+    let resp = client
+        .get(format!("{}/api/projects/{}/docs", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let docs: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(docs.len(), 1);
+    assert!(docs[0]["path"].as_str().unwrap().contains("guides/"));
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/00000000-0000-0000-0000-000000000099/tasks",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(err["error"], "Project not found");
+
+    let no_backlog = home.join("no-backlog-dir");
+    std::fs::create_dir_all(&no_backlog).unwrap();
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "nb",
+            "path": no_backlog.to_str().unwrap(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let nb: serde_json::Value = resp.json().await.unwrap();
+    let nb_id = nb["project_id"].as_str().unwrap();
+    let resp = client
+        .get(format!("{}/api/projects/{}/tasks", server.base_url, nb_id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+    assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["error"], "Backlog directory not found");
+}
+
+#[tokio::test]
+async fn test_project_scoped_agents_spokes_pipelines() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj_root = home.join("projscoped");
+    let spoke = proj_root.join("spoke-int");
+    std::fs::create_dir_all(&spoke).unwrap();
+    std::fs::write(spoke.join("mise.toml"), "[tools]\n").unwrap();
+    std::fs::create_dir_all(proj_root.join("backlog").join("tasks")).unwrap();
+    std::fs::write(
+        proj_root.join("backlog/tasks/task-77 - T.md"),
+        "---\nid: TASK-INT-SCOPED-77\ntitle: T\nstatus: Open\n---\n",
+    )
+    .unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "scoped",
+            "path": proj_root.to_str().unwrap(),
+            "spokes": [{"name": "mainspoke", "path": "spoke-int", "labels": []}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap();
+
+    let ag_list = client
+        .get(format!("{}/api/agents", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    let agents: Vec<serde_json::Value> = ag_list.json().await.unwrap();
+    let first_id = agents[0]["id"].as_str().unwrap();
+    let aid: AgentId = first_id.parse().unwrap();
+    server
+        .state
+        .kernel
+        .registry
+        .update_workspace(aid, Some(spoke.join("agent-ws")))
+        .unwrap();
+    std::fs::create_dir_all(spoke.join("agent-ws")).unwrap();
+
+    let resp = client
+        .get(format!("{}/api/projects/{}/agents", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let scoped: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(scoped.iter().any(|a| a["spoke_name"] == "mainspoke"));
+
+    let resp = client
+        .get(format!("{}/api/projects/{}/spokes", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let sp: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(sp.len(), 1);
+    assert_eq!(sp[0]["mise_toml_exists"], true);
+
+    pipeline_audit::clear_pipeline_audit_ring();
+    pipeline_audit::emit(pipeline_audit::PipelineAuditEvent::QualityGate {
+        timestamp: "2026-01-01T00:00:00Z".into(),
+        task_id: "TASK-INT-SCOPED-77".into(),
+        spoke_root: spoke.canonicalize().unwrap().to_string_lossy().into(),
+        exit_code: 0,
+        actor: "itest".into(),
+        tool: "enforce_quality_gate".into(),
+    });
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/pipelines?limit=5",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let pipes: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(
+        pipes.iter().any(|p| p["task_id"] == "TASK-INT-SCOPED-77"),
+        "{pipes:?}"
+    );
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/00000000-0000-0000-0000-000000000001/agents",
+            server.base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
 }
 
 #[tokio::test]

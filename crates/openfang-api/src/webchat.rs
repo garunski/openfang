@@ -150,6 +150,8 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/js/pages/overview.js"),
     "\n",
+    include_str!("../static/js/pages/projects.js"),
+    "\n",
     include_str!("../static/js/katex.js"),
     "\n",
     include_str!("../static/js/pages/chat.js"),
@@ -190,3 +192,26 @@ const WEBCHAT_HTML: &str = concat!(
     "\n</script>\n",
     "</body></html>"
 );
+
+#[cfg(test)]
+mod dashboard_embed_tests {
+    #[test]
+    fn projects_page_includes_detail_view() {
+        assert!(
+            super::WEBCHAT_HTML.contains("selectedProject"),
+            "expected Projects detail split (selectedProject)"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("loadDetailTab"),
+            "expected projects.js detail tab loader"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("discoverSpokes"),
+            "expected spokes discover action"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("openTaskDetail"),
+            "expected backlog task drill-down"
+        );
+    }
+}

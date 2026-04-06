@@ -4003,6 +4003,7 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
+ "serde_yaml",
  "sha2",
  "socket2 0.5.10",
  "subtle",

@@ -15,7 +15,11 @@ use openfang_kernel::OpenFangKernel;
 use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
+use openfang_types::error::OpenFangError;
+use serde::Deserialize;
+use openfang_types::project::{Project, ProjectId, ProjectPatch, SpokeDescriptor};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
@@ -1118,6 +1122,520 @@ pub async fn delete_workflow(
             Json(serde_json::json!({"error": "Workflow not found"})),
         )
     }
+}
+
+// ---------------------------------------------------------------------------
+// Project routes
+// ---------------------------------------------------------------------------
+
+fn parse_project_id_param(
+    id: &str,
+) -> Result<ProjectId, (StatusCode, Json<serde_json::Value>)> {
+    id.parse().map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid project ID"})),
+        )
+    })
+}
+
+fn project_store_error_response(
+    e: OpenFangError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match &e {
+        OpenFangError::InvalidInput(msg) if msg.starts_with("Unknown project id") => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        ),
+        OpenFangError::InvalidInput(msg) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        ),
+        other => {
+            tracing::warn!(%other, "project_store operation failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Internal error"})),
+            )
+        }
+    }
+}
+
+fn project_detail_json(p: &Project) -> serde_json::Value {
+    let spokes: Vec<serde_json::Value> = p
+        .spokes
+        .iter()
+        .map(|s| {
+            let path_resolved = if s.path.is_absolute() {
+                s.path.clone()
+            } else {
+                p.path.join(&s.path)
+            };
+            serde_json::json!({
+                "name": s.name,
+                "path": s.path,
+                "path_resolved": path_resolved,
+                "labels": s.labels,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "id": p.id.to_string(),
+        "name": p.name,
+        "path": p.path,
+        "backlog_root": p.backlog_root(),
+        "spokes": spokes,
+        "pipeline_overrides": p.pipeline_overrides,
+        "created_at": p.created_at.to_rfc3339(),
+        "updated_at": p.updated_at.to_rfc3339(),
+    })
+}
+
+/// GET /api/projects — List registered projects (summary).
+pub async fn list_projects(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let list: Vec<serde_json::Value> = state
+        .kernel
+        .project_store
+        .list()
+        .into_iter()
+        .map(|p| {
+            serde_json::json!({
+                "id": p.id.to_string(),
+                "name": p.name,
+                "path": p.path,
+                "spoke_count": p.spokes.len(),
+                "created_at": p.created_at.to_rfc3339(),
+                "updated_at": p.updated_at.to_rfc3339(),
+            })
+        })
+        .collect();
+    Json(list)
+}
+
+/// POST /api/projects — Register a project.
+pub async fn create_project(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let name = match req["name"].as_str() {
+        Some(n) if !n.trim().is_empty() => n.to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing or empty 'name'"})),
+            );
+        }
+    };
+    let path_str = match req["path"].as_str() {
+        Some(p) if !p.trim().is_empty() => p,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing or empty 'path'"})),
+            );
+        }
+    };
+
+    let spokes: Vec<SpokeDescriptor> = match req.get("spokes") {
+        None => Vec::new(),
+        Some(v) if v.is_null() => Vec::new(),
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(s) => s,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": format!("Invalid 'spokes': {e}")})),
+                );
+            }
+        },
+    };
+
+    let pipeline_overrides = match req.get("pipeline_overrides") {
+        None => Default::default(),
+        Some(v) if v.is_null() => Default::default(),
+        Some(v) => match serde_json::from_value(v.clone()) {
+            Ok(o) => o,
+            Err(e) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({"error": format!("Invalid 'pipeline_overrides': {e}")}),
+                    ),
+                );
+            }
+        },
+    };
+
+    let project = Project {
+        name,
+        path: PathBuf::from(path_str),
+        spokes,
+        pipeline_overrides,
+        ..Default::default()
+    };
+
+    match state.kernel.project_store.register(project) {
+        Ok(id) => match state.kernel.project_store.get(id) {
+            Some(p) => {
+                let mut body = project_detail_json(&p);
+                if let Some(m) = body.as_object_mut() {
+                    m.insert(
+                        "project_id".to_string(),
+                        serde_json::json!(p.id.to_string()),
+                    );
+                }
+                (StatusCode::CREATED, Json(body))
+            }
+            None => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Project registration failed"})),
+            ),
+        },
+        Err(e) => project_store_error_response(e),
+    }
+}
+
+/// GET /api/projects/:id — Full project with resolved spoke paths.
+pub async fn get_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup,
+    };
+    match state.kernel.project_store.get(pid) {
+        Some(p) => (StatusCode::OK, Json(project_detail_json(&p))),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        ),
+    }
+}
+
+/// PUT /api/projects/:id — Partial update.
+pub async fn update_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup,
+    };
+
+    let mut patch = ProjectPatch::default();
+    if let Some(v) = req.get("name") {
+        if !v.is_null() {
+            patch.name = Some(v.as_str().unwrap_or("").to_string());
+        }
+    }
+    if let Some(v) = req.get("spokes") {
+        if v.is_null() {
+            patch.spokes = Some(Vec::new());
+        } else {
+            match serde_json::from_value::<Vec<SpokeDescriptor>>(v.clone()) {
+                Ok(s) => patch.spokes = Some(s),
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": format!("Invalid 'spokes': {e}")})),
+                    );
+                }
+            }
+        }
+    }
+    if let Some(v) = req.get("pipeline_overrides") {
+        if !v.is_null() {
+            match serde_json::from_value(v.clone()) {
+                Ok(o) => patch.pipeline_overrides = Some(o),
+                Err(e) => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"error": format!("Invalid 'pipeline_overrides': {e}")})),
+                    );
+                }
+            }
+        }
+    }
+
+    match state.kernel.project_store.update(pid, patch) {
+        Ok(p) => (StatusCode::OK, Json(project_detail_json(&p))),
+        Err(e) => project_store_error_response(e),
+    }
+}
+
+/// DELETE /api/projects/:id — Unregister (files on disk unchanged).
+pub async fn delete_project(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup,
+    };
+    match state.kernel.project_store.remove(pid) {
+        Ok(removed) => (StatusCode::OK, Json(project_detail_json(&removed))),
+        Err(e) => project_store_error_response(e),
+    }
+}
+
+/// POST /api/projects/:id/discover — Auto-discover spokes and persist.
+pub async fn discover_project_spokes(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup,
+    };
+
+    let spokes = match state.kernel.project_store.discover_spokes(pid) {
+        Ok(s) => s,
+        Err(e) => return project_store_error_response(e),
+    };
+
+    let patch = ProjectPatch {
+        spokes: Some(spokes.clone()),
+        ..Default::default()
+    };
+    match state.kernel.project_store.update(pid, patch) {
+        Ok(_) => match serde_json::to_value(&spokes) {
+            Ok(v) => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "spokes": v })),
+            ),
+            Err(e) => {
+                tracing::error!("Failed to serialize spokes: {e}");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                )
+            }
+        },
+        Err(e) => project_store_error_response(e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListProjectTasksQuery {
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// GET /api/projects/:id/tasks
+pub async fn list_project_tasks(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<ListProjectTasksQuery>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let backlog_root = project.backlog_root();
+    if !backlog_root.is_dir() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Backlog directory not found"})),
+        )
+            .into_response();
+    }
+    match crate::project_backlog::list_tasks(&backlog_root, q.status.as_deref()) {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/projects/:id/tasks/:task_id
+pub async fn get_project_task(
+    State(state): State<Arc<AppState>>,
+    Path((id, task_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let backlog_root = project.backlog_root();
+    if !backlog_root.is_dir() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Backlog directory not found"})),
+        )
+            .into_response();
+    }
+    match crate::project_backlog::get_task_detail(&backlog_root, &task_id) {
+        Ok(Some(detail)) => (StatusCode::OK, Json(detail)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Task not found"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/projects/:id/docs
+pub async fn list_project_docs(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let backlog_root = project.backlog_root();
+    if !backlog_root.is_dir() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Backlog directory not found"})),
+        )
+            .into_response();
+    }
+    match crate::project_backlog::list_docs(&backlog_root) {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("{e}")})),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ListProjectPipelinesQuery {
+    #[serde(default)]
+    pub limit: Option<u32>,
+}
+
+/// GET /api/projects/:id/agents — agents whose workspace lies under a project spoke.
+pub async fn list_project_agents(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let pairs = crate::project_scoped::resolved_spoke_pairs(&project);
+    let mut rows = Vec::new();
+    for entry in state.kernel.registry.list() {
+        let Some(ws) = entry.manifest.workspace.as_ref() else {
+            continue;
+        };
+        let Some(spoke_name) = crate::project_scoped::workspace_spoke_name(ws, &pairs) else {
+            continue;
+        };
+        rows.push(serde_json::json!({
+            "agent_id": entry.id.to_string(),
+            "name": entry.name,
+            "state": entry.state,
+            "spoke_name": spoke_name,
+        }));
+    }
+    Json(rows).into_response()
+}
+
+/// GET /api/projects/:id/spokes — spoke paths, mise.toml, latest quality gate from pipeline audit ring.
+pub async fn list_project_spokes(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let pairs = crate::project_scoped::resolved_spoke_pairs(&project);
+    let events = openfang_runtime::pipeline_audit::recent_pipeline_audit_records(4000);
+    let mut rows = Vec::new();
+    for (name, abs) in pairs {
+        let mise = abs.join("mise.toml").is_file();
+        let last = crate::project_scoped::last_quality_gate_for_spoke(&abs, &events);
+        rows.push(serde_json::json!({
+            "name": name,
+            "path": abs.to_string_lossy(),
+            "mise_toml_exists": mise,
+            "last_quality_gate": last,
+        }));
+    }
+    Json(rows).into_response()
+}
+
+/// GET /api/projects/:id/pipelines — scoped pipeline audit rows (`?limit=N`).
+pub async fn list_project_pipelines(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<ListProjectPipelinesQuery>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let lim = q.limit.unwrap_or(50).clamp(1, 500) as usize;
+    let spoke_paths: Vec<std::path::PathBuf> =
+        crate::project_scoped::resolved_spoke_pairs(&project)
+            .into_iter()
+            .map(|(_, p)| p)
+            .collect();
+    let backlog_root = project.backlog_root();
+    let task_ids = if backlog_root.is_dir() {
+        crate::project_scoped::backlog_task_id_set(&backlog_root)
+    } else {
+        std::collections::HashSet::new()
+    };
+    let raw = openfang_runtime::pipeline_audit::recent_pipeline_audit_records(8000);
+    let rows = crate::project_scoped::scoped_pipeline_rows(&raw, &spoke_paths, &task_ids, lim);
+    Json(rows).into_response()
 }
 
 // ---------------------------------------------------------------------------

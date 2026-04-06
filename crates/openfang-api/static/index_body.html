@@ -96,6 +96,22 @@
         </template>
       </div>
 
+      <!-- Projects -->
+      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Projects">
+        <div class="nav-section-title" @click="collapsed = !collapsed">
+          <span class="nav-label">Projects</span>
+          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
+        </div>
+        <template x-if="!collapsed">
+          <div x-transition>
+            <a class="nav-item" :class="{ active: page === 'projects' }" @click="navigate('projects')" :aria-current="page === 'projects' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+              <span class="nav-label">Projects</span>
+            </a>
+          </div>
+        </template>
+      </div>
+
       <!-- Agents -->
       <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
         <div class="nav-section-title" @click="collapsed = !collapsed">
@@ -2509,6 +2525,238 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 
           </div>
         </div>
+      </div>
+    </template>
+
+    <!-- Page: Projects -->
+    <template x-if="page === 'projects'">
+      <div x-data="projectsPage">
+        <template x-if="!selectedProject">
+          <div>
+            <div class="page-header">
+              <h2>Projects</h2>
+              <button class="btn btn-primary btn-sm" @click="openRegisterModal()">Register Project</button>
+            </div>
+            <div class="page-body">
+              <div class="info-card">
+                <h4>Multi-repo backlog</h4>
+                <p>Register on-disk project roots with a <code style="color:var(--accent)">backlog/</code> tree (tasks, docs). Spokes are optional sub-workspaces. Open a project for backlog tasks, spokes, agents, and pipeline history.</p>
+              </div>
+              <div x-show="projectsLoading" class="loading-state"><div class="spinner"></div><span>Loading projects...</span></div>
+              <div x-show="!projectsLoading && projectsError" class="error-state">
+                <span class="error-icon">!</span>
+                <p x-text="projectsError"></p>
+                <button class="btn btn-ghost btn-sm" @click="loadProjects()">Retry</button>
+              </div>
+              <div x-show="!projectsLoading && !projectsError">
+                <div class="card-grid" x-show="projects.length">
+                  <template x-for="project in projects" :key="project.id">
+                    <div class="card" style="cursor:pointer" @click="selectProject(project)" role="button" tabindex="0" @keydown.enter="selectProject(project)">
+                      <div class="flex justify-between items-start mb-2 gap-2">
+                        <div class="card-header" style="margin:0" x-text="project.name"></div>
+                        <span class="badge badge-dim" x-text="'Spokes: ' + (project.spoke_count != null ? project.spoke_count : 0)"></span>
+                      </div>
+                      <div class="card-meta text-xs" :title="project.path" x-text="truncatePath(project.path, 64)"></div>
+                      <div class="text-xs text-dim mt-2" x-text="project.created_at ? ('Created ' + new Date(project.created_at).toLocaleDateString()) : ''"></div>
+                      <div class="flex justify-end mt-3">
+                        <button class="btn btn-danger btn-sm" @click.stop="deleteProject(project)">Delete</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <div class="empty-state" x-show="!projects.length">
+                  <div class="empty-state-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                  </div>
+                  <h3>No projects registered</h3>
+                  <p>Add a project to link an on-disk backlog and spokes.</p>
+                  <button class="btn btn-primary" @click="openRegisterModal()">Register Project</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="selectedProject">
+          <div>
+            <div class="page-header">
+              <button type="button" class="btn btn-ghost btn-sm mb-2" @click="backToList()">&larr; Back to Projects</button>
+              <h2 x-text="selectedProject.name"></h2>
+              <p class="text-xs text-dim mt-1" :title="selectedProject.path" x-text="selectedProject.path"></p>
+            </div>
+            <div class="page-body">
+              <div class="tabs">
+                <div class="tab" :class="{ active: detailTab === 'backlog' }" @click="onDetailTabChange('backlog')">Backlog</div>
+                <div class="tab" :class="{ active: detailTab === 'spokes' }" @click="onDetailTabChange('spokes')">Spokes</div>
+                <div class="tab" :class="{ active: detailTab === 'agents' }" @click="onDetailTabChange('agents')">Agents</div>
+                <div class="tab" :class="{ active: detailTab === 'pipelines' }" @click="onDetailTabChange('pipelines')">Pipelines</div>
+              </div>
+
+              <div x-show="detailTab === 'backlog'" class="mt-4">
+                <div x-show="detailLoading.backlog" class="loading-state"><div class="spinner"></div><span>Loading tasks...</span></div>
+                <div x-show="detailErrors.backlog && !detailLoading.backlog" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.backlog"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('backlog')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.backlog && !detailErrors.backlog">
+                  <div class="table-wrap" x-show="detailTasks.length">
+                    <table>
+                      <thead><tr><th>ID</th><th>Title</th><th>Status</th><th>Priority</th><th>Labels</th></tr></thead>
+                      <tbody>
+                        <template x-for="t in detailTasks" :key="t.id">
+                          <tr style="cursor:pointer" @click="openTaskDetail(t)" role="button" tabindex="0" @keydown.enter="openTaskDetail(t)">
+                            <td class="text-xs font-mono" x-text="t.id"></td>
+                            <td x-text="t.title || '—'"></td>
+                            <td><span class="badge" :class="statusClass(t.status)" x-text="t.status || '—'"></span></td>
+                            <td><span class="badge" :class="priorityClass(t.priority)" x-text="t.priority || '—'"></span></td>
+                            <td class="text-xs">
+                              <template x-if="Array.isArray(t.labels) && t.labels.length">
+                                <span>
+                                  <template x-for="lb in t.labels" :key="lb">
+                                    <span class="badge badge-dim mr-1" style="margin-bottom:2px" x-text="lb"></span>
+                                  </template>
+                                </span>
+                              </template>
+                              <span x-show="!t.labels || !t.labels.length" class="text-dim">—</span>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="empty-state py-8" x-show="!detailTasks.length">
+                    <p class="text-dim text-sm">No tasks in <code style="color:var(--accent)">backlog/tasks</code> for this project.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'spokes'" class="mt-4">
+                <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+                  <span class="text-sm text-dim">Spokes from project configuration</span>
+                  <button type="button" class="btn btn-primary btn-sm" @click="discoverSpokes()">Discover Spokes</button>
+                </div>
+                <div x-show="detailLoading.spokes" class="loading-state"><div class="spinner"></div><span>Loading spokes...</span></div>
+                <div x-show="detailErrors.spokes && !detailLoading.spokes" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.spokes"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('spokes')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.spokes && !detailErrors.spokes">
+                  <div class="card-grid" x-show="detailSpokes.length">
+                    <template x-for="s in detailSpokes" :key="s.name + s.path">
+                      <div class="card">
+                        <div class="card-header" style="margin:0" x-text="s.name"></div>
+                        <div class="card-meta text-xs mt-2" :title="s.path" x-text="truncatePath(s.path, 72)"></div>
+                        <div class="mt-2">
+                          <span class="badge" :class="s.mise_toml_exists ? 'badge-success' : 'badge-dim'" x-text="s.mise_toml_exists ? 'mise.toml' : 'no mise.toml'"></span>
+                        </div>
+                        <template x-if="s.last_quality_gate">
+                          <div class="text-xs mt-2">
+                            <span class="text-dim">Last quality gate:</span>
+                            <span class="badge ml-1" :class="(s.last_quality_gate.exit_code === 0) ? 'badge-success' : 'badge-warn'" x-text="'exit ' + (s.last_quality_gate.exit_code != null ? s.last_quality_gate.exit_code : '?')"></span>
+                            <span class="text-dim ml-1" x-text="s.last_quality_gate.timestamp || ''"></span>
+                          </div>
+                        </template>
+                      </div>
+                    </template>
+                  </div>
+                  <div class="empty-state py-8" x-show="!detailSpokes.length">
+                    <p class="text-dim text-sm">No spokes configured. Use Discover after adding spokes to the project.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'agents'" class="mt-4">
+                <div x-show="detailLoading.agents" class="loading-state"><div class="spinner"></div><span>Loading agents...</span></div>
+                <div x-show="detailErrors.agents && !detailLoading.agents" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.agents"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('agents')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.agents && !detailErrors.agents">
+                  <div class="table-wrap" x-show="detailAgents.length">
+                    <table>
+                      <thead><tr><th>Agent</th><th>Name</th><th>State</th><th>Spoke</th></tr></thead>
+                      <tbody>
+                        <template x-for="a in detailAgents" :key="a.agent_id">
+                          <tr>
+                            <td class="text-xs font-mono" x-text="a.agent_id"></td>
+                            <td x-text="a.name || '—'"></td>
+                            <td><span class="badge badge-info" x-text="String(a.state)"></span></td>
+                            <td class="text-xs" x-text="a.spoke_name || '—'"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="empty-state py-8" x-show="!detailAgents.length">
+                    <p class="text-dim text-sm">No agents with a workspace mapped to this project's spokes.</p>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'pipelines'" class="mt-4">
+                <div x-show="detailLoading.pipelines" class="loading-state"><div class="spinner"></div><span>Loading pipeline events...</span></div>
+                <div x-show="detailErrors.pipelines && !detailLoading.pipelines" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.pipelines"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('pipelines')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.pipelines && !detailErrors.pipelines">
+                  <div class="table-wrap" x-show="detailPipelines.length">
+                    <table>
+                      <thead><tr><th>Time</th><th>Action</th><th>Task</th><th>Spoke</th><th>Outcome</th></tr></thead>
+                      <tbody>
+                        <template x-for="row in detailPipelines" :key="row.timestamp + row.action + row.task_id">
+                          <tr>
+                            <td class="text-xs" x-text="row.timestamp || '—'"></td>
+                            <td><span class="badge badge-dim" x-text="row.action || '—'"></span></td>
+                            <td class="text-xs font-mono" x-text="row.task_id || '—'"></td>
+                            <td class="text-xs" :title="row.spoke" x-text="truncatePath(row.spoke || '', 40)"></td>
+                            <td><span class="badge" :class="pipelineOutcomeClass(row.outcome)" x-text="row.outcome || '—'"></span></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="empty-state py-8" x-show="!detailPipelines.length">
+                    <p class="text-dim text-sm">No pipeline audit events in scope for this project yet.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="registerModalOpen">
+          <div class="modal-overlay" @click.self="closeRegisterModal()" @keydown.escape.window="closeRegisterModal()">
+            <div class="modal">
+              <div class="modal-header"><h3>Register Project</h3><button type="button" class="modal-close" @click="closeRegisterModal()">&times;</button></div>
+              <div class="form-group"><label>Name</label><input class="form-input" x-model="registerForm.name" placeholder="my-monorepo"></div>
+              <div class="form-group"><label>Path</label><input class="form-input" x-model="registerForm.path" placeholder="/path/to/repo"></div>
+              <p class="text-xs text-dim mb-2">Absolute path to the project root (expects <code style="color:var(--accent)">backlog/</code> for tasks and docs).</p>
+              <p class="text-xs text-danger mb-2" x-show="registerError" x-text="registerError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="registerSubmitting" @click="submitRegister()" x-text="registerSubmitting ? 'Registering...' : 'Register'"></button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="taskModalOpen">
+          <div class="modal-overlay" @click.self="closeTaskModal()" @keydown.escape.window="closeTaskModal()">
+            <div class="modal" style="max-width:640px;max-height:85vh;overflow:auto">
+              <div class="modal-header">
+                <h3 x-text="taskModalTitle"></h3>
+                <button type="button" class="modal-close" @click="closeTaskModal()">&times;</button>
+              </div>
+              <div class="modal-body">
+                <div x-show="taskModalLoading" class="loading-state py-6"><div class="spinner"></div><span>Loading task...</span></div>
+                <p class="text-danger text-sm" x-show="taskModalError && !taskModalLoading" x-text="taskModalError"></p>
+                <div x-show="!taskModalLoading && !taskModalError" class="task-detail-md" style="font-size:13px;line-height:1.5" x-html="taskDetailHtml"></div>
+              </div>
+            </div>
+          </div>
+        </template>
       </div>
     </template>
 

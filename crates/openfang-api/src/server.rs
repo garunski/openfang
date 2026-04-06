@@ -335,6 +335,45 @@ pub async fn build_router(
             "/api/workflows/{id}/runs",
             axum::routing::get(routes::list_workflow_runs),
         )
+        // Project endpoints
+        .route(
+            "/api/projects",
+            axum::routing::get(routes::list_projects).post(routes::create_project),
+        )
+        .route(
+            "/api/projects/{id}",
+            axum::routing::get(routes::get_project)
+                .put(routes::update_project)
+                .delete(routes::delete_project),
+        )
+        .route(
+            "/api/projects/{id}/discover",
+            axum::routing::post(routes::discover_project_spokes),
+        )
+        .route(
+            "/api/projects/{id}/tasks/{task_id}",
+            axum::routing::get(routes::get_project_task),
+        )
+        .route(
+            "/api/projects/{id}/tasks",
+            axum::routing::get(routes::list_project_tasks),
+        )
+        .route(
+            "/api/projects/{id}/docs",
+            axum::routing::get(routes::list_project_docs),
+        )
+        .route(
+            "/api/projects/{id}/agents",
+            axum::routing::get(routes::list_project_agents),
+        )
+        .route(
+            "/api/projects/{id}/spokes",
+            axum::routing::get(routes::list_project_spokes),
+        )
+        .route(
+            "/api/projects/{id}/pipelines",
+            axum::routing::get(routes::list_project_pipelines),
+        )
         // Skills endpoints
         .route("/api/skills", axum::routing::get(routes::list_skills))
         .route(

@@ -6,6 +6,8 @@
 pub mod channel_bridge;
 pub mod middleware;
 pub mod openai_compat;
+pub mod project_backlog;
+pub mod project_scoped;
 pub mod rate_limiter;
 pub mod routes;
 pub mod server;

@@ -737,35 +737,32 @@ mod tests {
     }
 
     #[test]
-    fn test_nvidia_provider_with_env_key() {
-        // NVIDIA NIM is a known provider — set API key and verify driver creation succeeds.
-        let unique_key = "test-nvidia-key-12345";
-        std::env::set_var("NVIDIA_API_KEY", unique_key);
-        let config = DriverConfig {
-            provider: "nvidia".to_string(),
-            api_key: None, // picked up from env via provider_defaults
-            base_url: None,
-            skip_permissions: true,
-        };
-        let driver = create_driver(&config);
-        assert!(
-            driver.is_ok(),
-            "NVIDIA provider with env var should succeed"
-        );
-        std::env::remove_var("NVIDIA_API_KEY");
-    }
-
-    #[test]
-    fn test_nvidia_provider_no_key_errors() {
-        // NVIDIA NIM provider with no API key should error.
+    fn test_nvidia_provider_env_key_required() {
+        // Isolate from other tests / user shell: env is process-global and tests run in parallel.
+        let previous = std::env::var_os("NVIDIA_API_KEY");
         let config = DriverConfig {
             provider: "nvidia".to_string(),
             api_key: None,
             base_url: None,
             skip_permissions: true,
         };
-        let driver = create_driver(&config);
-        assert!(driver.is_err());
+
+        std::env::remove_var("NVIDIA_API_KEY");
+        assert!(
+            create_driver(&config).is_err(),
+            "NVIDIA provider without API key should error"
+        );
+
+        std::env::set_var("NVIDIA_API_KEY", "test-nvidia-key-12345");
+        assert!(
+            create_driver(&config).is_ok(),
+            "NVIDIA provider with env var should succeed"
+        );
+
+        match previous {
+            Some(v) => std::env::set_var("NVIDIA_API_KEY", v),
+            None => std::env::remove_var("NVIDIA_API_KEY"),
+        }
     }
 
     #[test]

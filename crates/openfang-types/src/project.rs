@@ -164,4 +164,25 @@ mod tests {
         };
         assert_eq!(p.resolve_spoke("x"), Some(PathBuf::from("/abs/x")));
     }
+
+    #[test]
+    fn project_id_display_from_str_roundtrip() {
+        let id = ProjectId::new();
+        let s = id.to_string();
+        assert_eq!(id, s.parse::<ProjectId>().unwrap());
+    }
+
+    #[test]
+    fn project_pipeline_overrides_json_omits_none() {
+        let empty = serde_json::to_string(&ProjectPipelineOverrides::default()).unwrap();
+        assert_eq!(empty, "{}");
+
+        let partial = ProjectPipelineOverrides {
+            max_retries: Some(3),
+            model_routing: None,
+        };
+        let j = serde_json::to_string(&partial).unwrap();
+        assert!(j.contains("max_retries"));
+        assert!(!j.contains("model_routing"));
+    }
 }

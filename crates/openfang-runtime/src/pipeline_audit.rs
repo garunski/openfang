@@ -5,11 +5,44 @@
 
 use chrono::Utc;
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::{Mutex, OnceLock};
 use tracing::info;
 
-#[cfg(test)]
-use std::sync::Mutex;
+/// Cap for in-memory pipeline audit ring (API reads this; tracing/file remain primary sinks).
+const PIPELINE_AUDIT_RING_CAP: usize = 8000;
+
+static PIPELINE_AUDIT_RING: OnceLock<Mutex<VecDeque<serde_json::Value>>> = OnceLock::new();
+
+fn pipeline_audit_ring() -> &'static Mutex<VecDeque<serde_json::Value>> {
+    PIPELINE_AUDIT_RING.get_or_init(|| Mutex::new(VecDeque::with_capacity(PIPELINE_AUDIT_RING_CAP)))
+}
+
+fn ring_push(v: &serde_json::Value) {
+    let mut g = pipeline_audit_ring()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if g.len() >= PIPELINE_AUDIT_RING_CAP {
+        g.pop_front();
+    }
+    g.push_back(v.clone());
+}
+
+/// Recent pipeline audit JSON records, **newest first** (up to `limit`).
+pub fn recent_pipeline_audit_records(limit: usize) -> Vec<serde_json::Value> {
+    let g = pipeline_audit_ring()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    g.iter().rev().take(limit).cloned().collect()
+}
+
+/// Clear the in-memory ring (e.g. integration tests).
+pub fn clear_pipeline_audit_ring() {
+    if let Ok(mut g) = pipeline_audit_ring().lock() {
+        g.clear();
+    }
+}
 
 #[cfg(test)]
 static PIPELINE_AUDIT_TEST_RECORDS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
@@ -18,6 +51,7 @@ static PIPELINE_AUDIT_TEST_RECORDS: Mutex<Vec<serde_json::Value>> = Mutex::new(V
 #[cfg(test)]
 pub fn clear_pipeline_audit_test_buffer() {
     PIPELINE_AUDIT_TEST_RECORDS.lock().unwrap().clear();
+    clear_pipeline_audit_ring();
 }
 
 /// Take and clear recorded pipeline audit events (unit tests only).
@@ -85,6 +119,7 @@ pub fn emit(event: PipelineAuditEvent) {
     let v = serde_json::to_value(&event).unwrap_or_else(|_| {
         serde_json::json!({ "event": "pipeline_audit_serialize_error" })
     });
+    ring_push(&v);
     #[cfg(test)]
     {
         PIPELINE_AUDIT_TEST_RECORDS.lock().unwrap().push(v.clone());
