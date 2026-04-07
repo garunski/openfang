@@ -15,6 +15,10 @@ function backlogBoardMixins() {
     boardDragId: null,
     boardDragStatus: null,
     _boardClickGuard: 0,
+    boardPanning: false,
+    _boardPanLast: null,
+    _boardPanMouseMove: null,
+    _boardPanMouseUp: null,
 
     boardCardClick(task) {
       if (this._boardClickGuard && Date.now() < this._boardClickGuard) return;
@@ -22,11 +26,51 @@ function backlogBoardMixins() {
     },
 
     resetBoardCache() {
+      this.boardPanEnd();
       this._boardLoaded = false;
       this.boardTasks = [];
       this.boardStatuses = [];
       this.boardError = '';
       this.boardLoading = false;
+    },
+
+    boardPanEnd() {
+      if (this._boardPanMouseMove) {
+        window.removeEventListener('mousemove', this._boardPanMouseMove);
+        window.removeEventListener('mouseup', this._boardPanMouseUp);
+        this._boardPanMouseMove = null;
+        this._boardPanMouseUp = null;
+      }
+      this.boardPanning = false;
+      this._boardPanLast = null;
+    },
+
+    boardPanPointerDown(e) {
+      if (e.button !== 0) return;
+      var t = e.target;
+      if (t && t.closest) {
+        if (t.closest('.kanban-card')) return;
+        if (t.closest('button, a, input, select, textarea, label')) return;
+      }
+      var wrap = this.$refs.kanbanScrollWrap;
+      if (!wrap) return;
+      this.boardPanning = true;
+      this._boardPanLast = { x: e.clientX, y: e.clientY };
+      var self = this;
+      this._boardPanMouseMove = function (ev) {
+        if (!self.boardPanning || !self._boardPanLast) return;
+        var dx = ev.clientX - self._boardPanLast.x;
+        var dy = ev.clientY - self._boardPanLast.y;
+        wrap.scrollLeft -= dx;
+        wrap.scrollTop -= dy;
+        self._boardPanLast = { x: ev.clientX, y: ev.clientY };
+      };
+      this._boardPanMouseUp = function () {
+        self.boardPanEnd();
+      };
+      window.addEventListener('mousemove', this._boardPanMouseMove);
+      window.addEventListener('mouseup', this._boardPanMouseUp);
+      e.preventDefault();
     },
 
     async loadBoardData(force, silent) {

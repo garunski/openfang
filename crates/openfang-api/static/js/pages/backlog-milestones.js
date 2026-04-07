@@ -14,6 +14,7 @@ function backlogMilestonesMixins() {
     milestoneEditorForm: { title: '', description: '' },
     milestoneEditorSaving: false,
     milestoneEditorError: '',
+    _milestoneEasymdeInst: null,
     milestoneAddTaskModalOpen: false,
     milestoneAddTaskMilestone: null,
     milestoneAddTaskRows: [],
@@ -22,12 +23,55 @@ function backlogMilestonesMixins() {
     milestoneAddTaskSaving: false,
     milestoneAddTaskError: '',
 
+    milestoneEditorDestroyEasymde() {
+      if (this._milestoneEasymdeInst) {
+        openfangEasymdeDestroy(this._milestoneEasymdeInst);
+        this._milestoneEasymdeInst = null;
+      }
+    },
+
+    milestoneEditorSyncEasymdeToForm() {
+      if (this._milestoneEasymdeInst && this.milestoneEditorForm) {
+        this.milestoneEditorForm.description = this._milestoneEasymdeInst.value();
+      }
+    },
+
+    milestoneEditorScheduleEasymdeMount() {
+      var self = this;
+      function run() {
+        if (!self.milestoneEditorModalOpen) return;
+        self.milestoneEditorDestroyEasymde();
+        var el = self.$refs.milestoneEasymdeDesc;
+        if (!el || el.tagName !== 'TEXTAREA') return;
+        var initial =
+          self.milestoneEditorForm && self.milestoneEditorForm.description != null
+            ? self.milestoneEditorForm.description
+            : '';
+        self._milestoneEasymdeInst = openfangEasymdeMount(el, '200px', initial);
+      }
+      function afterStable(fn) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(fn);
+        });
+      }
+      if (typeof self.$nextTick === 'function') {
+        self.$nextTick(function () {
+          afterStable(run);
+        });
+      } else {
+        queueMicrotask(function () {
+          afterStable(run);
+        });
+      }
+    },
+
     resetMilestonesCache() {
       this.detailMilestones = [];
       this.detailArchivedMilestones = [];
       this.milestonesArchivedOpen = false;
       this.milestoneArchiveBusyId = '';
       this.milestoneDeleteBusyId = '';
+      this.milestoneEditorDestroyEasymde();
       this.milestoneEditorModalOpen = false;
       this.milestoneEditorError = '';
       this.milestoneAddTaskModalOpen = false;
@@ -121,6 +165,7 @@ function backlogMilestonesMixins() {
     },
 
     closeMilestoneEditorModal() {
+      this.milestoneEditorDestroyEasymde();
       this.milestoneEditorModalOpen = false;
       this.milestoneEditorError = '';
       this.milestoneEditTargetId = null;
@@ -244,6 +289,7 @@ function backlogMilestonesMixins() {
 
     async submitMilestoneEditor() {
       if (!this.selectedProject) return;
+      this.milestoneEditorSyncEasymdeToForm();
       var pid = this.selectedProject.id;
       var base = '/api/projects/' + encodeURIComponent(pid) + '/backlog/milestones';
       this.milestoneEditorSaving = true;
@@ -258,7 +304,7 @@ function backlogMilestonesMixins() {
           }
           var desc = this.milestoneEditorForm.description != null ? String(this.milestoneEditorForm.description) : '';
           await OpenFangAPI.post(base, { title: title, description: desc });
-          this.milestoneEditorModalOpen = false;
+          this.closeMilestoneEditorModal();
           this.setDetailLoaded('milestones', false);
           this.setDetailLoaded('overview', false);
           await this.loadMilestonesTab(true);
@@ -278,7 +324,7 @@ function backlogMilestonesMixins() {
           }
           var d = this.milestoneEditorForm.description != null ? String(this.milestoneEditorForm.description) : '';
           await OpenFangAPI.put(base + '/' + encodeURIComponent(id), { title: t, description: d });
-          this.milestoneEditorModalOpen = false;
+          this.closeMilestoneEditorModal();
           this.setDetailLoaded('milestones', false);
           this.setDetailLoaded('overview', false);
           await this.loadMilestonesTab(true);

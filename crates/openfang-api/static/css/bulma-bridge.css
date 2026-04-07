@@ -1,0 +1,17 @@
+/* OpenFang + Bulma — brand primary and optional body bridge.
+   Loaded after bulma.min.css; OpenFang theme tokens still drive the legacy UI. */
+
+/* Bulma reads family vars from :root; --font-sans / --font-mono are set in theme.css (loaded after). */
+:root {
+  --bulma-primary-h: 24;
+  --bulma-primary-s: 100%;
+  --bulma-primary-l: 50%;
+  --bulma-family-primary: var(--font-sans);
+  --bulma-family-code: var(--font-mono);
+}
+
+[data-theme="dark"] {
+  --bulma-primary-h: 24;
+  --bulma-primary-s: 100%;
+  --bulma-primary-l: 52%;
+}

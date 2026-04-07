@@ -20,14 +20,76 @@ function backlogDecisionsMixins() {
     },
     decisionEditorSaving: false,
     decisionEditorError: '',
+    decisionViewModalOpen: false,
+    _decisionEasymde: null,
+
+    decisionEditorDestroyEasymde() {
+      var m = this._decisionEasymde;
+      if (!m) return;
+      ['context', 'decision', 'consequences', 'alternatives'].forEach(function (k) {
+        var inst = m[k];
+        if (inst) openfangEasymdeDestroy(inst);
+      });
+      this._decisionEasymde = null;
+    },
+
+    decisionEditorSyncEasymdeToForm() {
+      var m = this._decisionEasymde;
+      var f = this.decisionEditorForm;
+      if (!m || !f) return;
+      if (m.context) f.context = m.context.value();
+      if (m.decision) f.decision = m.decision.value();
+      if (m.consequences) f.consequences = m.consequences.value();
+      if (m.alternatives) f.alternatives = m.alternatives.value();
+    },
+
+    decisionEditorScheduleEasymdeMount() {
+      var self = this;
+      function run() {
+        if (!self.decisionEditorModalOpen || self.decisionEditorMode !== 'edit') return;
+        self.decisionEditorDestroyEasymde();
+        var f = self.decisionEditorForm;
+        if (!f) return;
+        var ctx = self.$refs.decisionEasymdeContext;
+        var dec = self.$refs.decisionEasymdeDecision;
+        var cons = self.$refs.decisionEasymdeConsequences;
+        var alt = self.$refs.decisionEasymdeAlternatives;
+        self._decisionEasymde = {
+          context: openfangEasymdeMount(ctx, '140px', f.context),
+          decision: openfangEasymdeMount(dec, '140px', f.decision),
+          consequences: openfangEasymdeMount(cons, '140px', f.consequences),
+          alternatives: openfangEasymdeMount(alt, '120px', f.alternatives),
+        };
+      }
+      function afterStable(fn) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(fn);
+        });
+      }
+      if (typeof self.$nextTick === 'function') {
+        self.$nextTick(function () {
+          afterStable(run);
+        });
+      } else {
+        queueMicrotask(function () {
+          afterStable(run);
+        });
+      }
+    },
 
     resetDecisionsCache() {
       this.detailDecisions = [];
       this.decisionsSelected = null;
       this.decisionsDetailLoading = false;
       this.decisionsDetailError = '';
+      this.decisionEditorDestroyEasymde();
       this.decisionEditorModalOpen = false;
       this.decisionEditorError = '';
+      this.decisionViewModalOpen = false;
+    },
+
+    closeDecisionViewModal() {
+      this.decisionViewModalOpen = false;
     },
 
     decisionStatusClass(st) {
@@ -53,6 +115,7 @@ function backlogDecisionsMixins() {
         this.setDetailError('decisions', '');
         this.decisionsSelected = null;
         this.decisionsDetailError = '';
+        this.decisionViewModalOpen = false;
       }
       try {
         this.detailDecisions = await OpenFangAPI.get(
@@ -70,13 +133,16 @@ function backlogDecisionsMixins() {
       if (!hideSpinner) this.setDetailLoading('decisions', false);
     },
 
-    async decisionsSelectRow(row, quietBody) {
+    async decisionsSelectRow(row, quietBody, opts) {
       if (!this.selectedProject || !row || !row.id) return;
+      var o = opts || {};
+      var openModal = !!o.openModal;
       var pid = this.selectedProject.id;
       var quiet = !!quietBody;
       if (!quiet) {
         this.decisionsDetailLoading = true;
         this.decisionsDetailError = '';
+        if (openModal) this.decisionViewModalOpen = true;
       }
       try {
         this.decisionsSelected = await OpenFangAPI.get(
@@ -87,6 +153,7 @@ function backlogDecisionsMixins() {
         if (!quiet) {
           this.decisionsSelected = null;
           this.decisionsDetailError = e.message || 'Failed to load decision';
+          if (openModal) this.decisionViewModalOpen = false;
         }
       }
       if (!quiet) this.decisionsDetailLoading = false;
@@ -121,6 +188,7 @@ function backlogDecisionsMixins() {
           .then(function () {
             self.decisionsSelected = null;
             self.decisionsDetailError = '';
+            self.decisionViewModalOpen = false;
             self.setDetailLoaded('decisions', false);
             self.setDetailLoaded('overview', false);
             return self.loadDecisionsTab(true);
@@ -160,6 +228,7 @@ function backlogDecisionsMixins() {
     },
 
     openDecisionEditModal() {
+      this.decisionViewModalOpen = false;
       var d = this.decisionsSelected;
       if (!d || !d.id) return;
       var st = d.status != null ? String(d.status).toLowerCase() : 'proposed';
@@ -178,6 +247,7 @@ function backlogDecisionsMixins() {
     },
 
     closeDecisionEditorModal() {
+      this.decisionEditorDestroyEasymde();
       this.decisionEditorModalOpen = false;
       this.decisionEditorError = '';
       this.decisionEditTargetId = null;
@@ -185,6 +255,9 @@ function backlogDecisionsMixins() {
 
     async submitDecisionEditor() {
       if (!this.selectedProject) return;
+      if (this.decisionEditorMode === 'edit') {
+        this.decisionEditorSyncEasymdeToForm();
+      }
       var pid = this.selectedProject.id;
       var base = '/api/projects/' + encodeURIComponent(pid) + '/backlog/decisions';
       this.decisionEditorSaving = true;
@@ -198,13 +271,13 @@ function backlogDecisionsMixins() {
             return;
           }
           var created = await OpenFangAPI.post(base, { title: title });
-          this.decisionEditorModalOpen = false;
+          this.closeDecisionEditorModal();
           if (typeof this.setDetailLoaded === 'function') {
             this.setDetailLoaded('decisions', false);
             this.setDetailLoaded('overview', false);
           }
           await this.loadDecisionsTab(true);
-          if (created && created.id) await this.decisionsSelectRow({ id: created.id });
+          if (created && created.id) await this.decisionsSelectRow({ id: created.id }, false, { openModal: true });
           if (typeof this.pushProjectsHash === 'function') this.pushProjectsHash();
           if (typeof OpenFangToast !== 'undefined') OpenFangToast.success('Decision created');
         } else {
@@ -234,7 +307,7 @@ function backlogDecisionsMixins() {
             payload.alternatives = '';
           }
           var updated = await OpenFangAPI.put(base + '/' + encodeURIComponent(id), payload);
-          this.decisionEditorModalOpen = false;
+          this.closeDecisionEditorModal();
           this.decisionsSelected = updated;
           if (typeof this.setDetailLoaded === 'function') {
             this.setDetailLoaded('decisions', false);

@@ -81,12 +81,12 @@ var OpenFangToast = (function() {
     actions.className = 'confirm-actions';
 
     var cancelBtn = document.createElement('button');
-    cancelBtn.className = 'btn btn-ghost confirm-cancel';
+    cancelBtn.className = 'button is-ghost confirm-cancel';
     cancelBtn.textContent = 'Cancel';
     actions.appendChild(cancelBtn);
 
     var okBtn = document.createElement('button');
-    okBtn.className = 'btn btn-danger confirm-ok';
+    okBtn.className = 'button is-danger confirm-ok';
     okBtn.textContent = 'Confirm';
     actions.appendChild(okBtn);
 

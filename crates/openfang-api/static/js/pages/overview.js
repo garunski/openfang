@@ -1,17 +1,14 @@
-// OpenFang Overview Dashboard — Landing page with system stats + provider status
+// OpenFang Overview Dashboard — Landing page with system stats
 'use strict';
 
 function overviewPage() {
   return {
     health: {},
     status: {},
-    usageSummary: {},
     channels: [],
     projects: [],
     projectsLoading: false,
-    providers: [],
     mcpServers: [],
-    skillCount: 0,
     loading: true,
     loadError: '',
     refreshTimer: null,
@@ -24,12 +21,9 @@ function overviewPage() {
         await Promise.all([
           this.loadHealth(),
           this.loadStatus(),
-          this.loadUsage(),
           this.loadProjects(),
           this.loadChannels(),
-          this.loadProviders(),
-          this.loadMcpServers(),
-          this.loadSkills()
+          this.loadMcpServers()
         ]);
         this.lastRefresh = Date.now();
       } catch(e) {
@@ -56,12 +50,9 @@ function overviewPage() {
         await Promise.all([
           this.loadHealth(),
           this.loadStatus(),
-          this.loadUsage(),
           this.loadProjects(),
           this.loadChannels(),
-          this.loadProviders(),
-          this.loadMcpServers(),
-          this.loadSkills()
+          this.loadMcpServers()
         ]);
         this.lastRefresh = Date.now();
       } catch(e) { /* silent */ }
@@ -89,29 +80,6 @@ function overviewPage() {
       try {
         this.status = await OpenFangAPI.get('/api/status');
       } catch(e) { this.status = {}; throw e; }
-    },
-
-    async loadUsage() {
-      try {
-        var data = await OpenFangAPI.get('/api/usage');
-        var agents = data.agents || [];
-        var totalTokens = 0;
-        var totalTools = 0;
-        var totalCost = 0;
-        agents.forEach(function(a) {
-          totalTokens += (a.total_tokens || 0);
-          totalTools += (a.tool_calls || 0);
-          totalCost += (a.cost_usd || 0);
-        });
-        this.usageSummary = {
-          total_tokens: totalTokens,
-          total_tools: totalTools,
-          total_cost: totalCost,
-          agent_count: agents.length
-        };
-      } catch(e) {
-        this.usageSummary = { total_tokens: 0, total_tools: 0, total_cost: 0, agent_count: 0 };
-      }
     },
 
     async loadProjects() {
@@ -183,55 +151,11 @@ function overviewPage() {
       } catch(e) { this.channels = []; }
     },
 
-    async loadProviders() {
-      try {
-        var data = await OpenFangAPI.get('/api/providers');
-        this.providers = data.providers || [];
-      } catch(e) { this.providers = []; }
-    },
-
     async loadMcpServers() {
       try {
         var data = await OpenFangAPI.get('/api/mcp/servers');
         this.mcpServers = data.servers || [];
       } catch(e) { this.mcpServers = []; }
-    },
-
-    async loadSkills() {
-      try {
-        var data = await OpenFangAPI.get('/api/skills');
-        this.skillCount = (data.skills || []).length;
-      } catch(e) { this.skillCount = 0; }
-    },
-
-    get configuredProviders() {
-      return this.providers.filter(function(p) { return p.auth_status === 'configured'; });
-    },
-
-    get unconfiguredProviders() {
-      return this.providers.filter(function(p) { return p.auth_status === 'not_set' || p.auth_status === 'missing'; });
-    },
-
-    get connectedMcp() {
-      return this.mcpServers.filter(function(s) { return s.status === 'connected'; });
-    },
-
-    // Provider health badge color
-    providerBadgeClass(p) {
-      if (p.auth_status === 'configured') {
-        if (p.health === 'cooldown' || p.health === 'open') return 'badge-warn';
-        return 'badge-success';
-      }
-      if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'badge-muted';
-      return 'badge-dim';
-    },
-
-    // Provider health tooltip
-    providerTooltip(p) {
-      if (p.health === 'cooldown') return p.display_name + ' \u2014 cooling down (rate limited)';
-      if (p.health === 'open') return p.display_name + ' \u2014 circuit breaker open';
-      if (p.auth_status === 'configured') return p.display_name + ' \u2014 ready';
-      return p.display_name + ' \u2014 not configured';
     },
 
     truncatePath(path, maxLen) {
@@ -241,27 +165,5 @@ function overviewPage() {
       return '\u2026' + path.slice(-(n - 1));
     },
 
-    formatUptime(secs) {
-      if (!secs) return '-';
-      var d = Math.floor(secs / 86400);
-      var h = Math.floor((secs % 86400) / 3600);
-      var m = Math.floor((secs % 3600) / 60);
-      if (d > 0) return d + 'd ' + h + 'h';
-      if (h > 0) return h + 'h ' + m + 'm';
-      return m + 'm';
-    },
-
-    formatNumber(n) {
-      if (!n) return '0';
-      if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-      if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
-      return String(n);
-    },
-
-    formatCost(n) {
-      if (!n || n === 0) return '$0.00';
-      if (n < 0.01) return '<$0.01';
-      return '$' + n.toFixed(2);
-    }
   };
 }

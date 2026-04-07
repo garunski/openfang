@@ -53,49 +53,10 @@ function backlogTaskDetailMixins() {
       if (typeof EasyMDE === 'undefined' || !this.taskDetailEditMode) return;
       this._taskEasymde = {};
 
-      function baseOpts(minH) {
-        return {
-          autoDownloadFontAwesome: false,
-          spellChecker: false,
-          status: false,
-          minHeight: minH,
-          renderingConfig: {
-            codeSyntaxHighlighting: typeof hljs !== 'undefined',
-          },
-          previewRender: function (plainText) {
-            return typeof renderMarkdownPreview === 'function'
-              ? renderMarkdownPreview(plainText)
-              : typeof renderMarkdown === 'function'
-                ? renderMarkdown(plainText)
-                : String(plainText || '');
-          },
-          toolbar: [
-            'bold',
-            'italic',
-            'strikethrough',
-            '|',
-            'heading',
-            'heading-smaller',
-            '|',
-            'horizontal-rule',
-            '|',
-            'quote',
-            'unordered-list',
-            'ordered-list',
-            '|',
-            'link',
-            'code',
-            '|',
-            'preview',
-            'side-by-side',
-          ],
-        };
-      }
-
       function textareaFor(refKey, dataAttr) {
         var el = self.$refs[refKey];
         if (el && el.tagName === 'TEXTAREA') return el;
-        var modal = document.querySelector('.modal--task-detail');
+        var modal = document.querySelector('.of-modal--task-detail');
         if (!modal || !modal.isConnected) return null;
         var byData = modal.querySelector('textarea[data-task-easymde="' + dataAttr + '"]');
         return byData && byData.tagName === 'TEXTAREA' ? byData : null;
@@ -106,7 +67,7 @@ function backlogTaskDetailMixins() {
         if (!el) return;
         el.value = initial != null ? String(initial) : '';
         try {
-          var inst = new EasyMDE(Object.assign({ element: el }, baseOpts(minH)));
+          var inst = new EasyMDE(Object.assign({ element: el }, openfangEasymdeBaseOpts(minH)));
           self._taskEasymde[storeKey] = inst;
         } catch (e) {
           console.warn('[OpenFang] EasyMDE failed for', dataAttr, e);

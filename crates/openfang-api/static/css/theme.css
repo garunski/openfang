@@ -185,12 +185,12 @@ body {
 body {
   transition: background-color 0.3s ease, color 0.3s ease;
 }
-.sidebar, .main-content, .card, .modal, .tool-card, .toast, .page-header {
+.sidebar, .main-content, .of-card, .of-modal, .tool-card, .toast, .page-header {
   transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease, box-shadow 0.3s ease;
 }
 
 /* Tighter letter spacing for headings */
-h1, h2, h3, .card-header, .stat-value, .page-header h2 { letter-spacing: -0.02em; }
+h1, h2, h3, .of-card-header, .stat-value, .page-header h2 { letter-spacing: -0.02em; }
 .nav-section-title, .badge, th { letter-spacing: 0.04em; }
 
 /* Focus styles — accessible double-ring with glow */
@@ -270,7 +270,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 /* Print styles */
 @media print {
-  .sidebar, .sidebar-overlay, .mobile-menu-btn, .toast-container, .btn { display: none !important; }
+  .sidebar, .sidebar-overlay, .mobile-menu-btn, .toast-container, .button { display: none !important; }
   .main-content { margin: 0; max-width: 100%; }
   body { background: #fff; color: #000; }
 }

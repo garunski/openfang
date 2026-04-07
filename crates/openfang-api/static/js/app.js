@@ -73,7 +73,10 @@ function renderMarkdownInternal(text, opts) {
       html = html.replace('\x00LATEX' + i + '\x00', latexBlocks[i]);
     }
     if (withCopyButtons) {
-      html = html.replace(/<pre><code/g, '<pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code');
+      html = html.replace(
+        /<pre><code/g,
+        '<pre><button type="button" class="copy-btn" title="Copy" aria-label="Copy code" onclick="copyCode(this)"><i class="fa fa-copy" aria-hidden="true"></i></button><code'
+      );
     }
     html = html.replace(/<a\s+href="(https?:\/\/[^"]*)"(?![^>]*target=)([^>]*)>/gi, '<a href="$1" target="_blank" rel="noopener"$2>');
     return html;
@@ -94,9 +97,17 @@ function copyCode(btn) {
   var code = btn.nextElementSibling;
   if (code) {
     navigator.clipboard.writeText(code.textContent).then(function() {
-      btn.textContent = 'Copied!';
       btn.classList.add('copied');
-      setTimeout(function() { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1500);
+      var icon = btn.querySelector('.fa');
+      if (icon) {
+        icon.className = 'fa fa-check';
+      }
+      setTimeout(function() {
+        btn.classList.remove('copied');
+        if (icon) {
+          icon.className = 'fa fa-copy';
+        }
+      }, 1500);
     });
   }
 }

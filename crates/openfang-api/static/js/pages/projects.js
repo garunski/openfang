@@ -156,7 +156,9 @@ function projectsPage() {
         }
         if (tab === 'decisions' && subId) {
           if (!this.decisionsSelected || String(this.decisionsSelected.id) !== String(subId)) {
-            if (typeof this.decisionsSelectRow === 'function') void this.decisionsSelectRow({ id: subId });
+            if (typeof this.decisionsSelectRow === 'function') {
+              void this.decisionsSelectRow({ id: subId }, false, { openModal: true });
+            }
           }
           return;
         }
@@ -174,7 +176,7 @@ function projectsPage() {
           return self.docsSelectDoc(subId);
         }
         if (tab === 'decisions' && subId && typeof self.decisionsSelectRow === 'function') {
-          return self.decisionsSelectRow({ id: subId });
+          return self.decisionsSelectRow({ id: subId }, false, { openModal: true });
         }
       });
     },
@@ -465,6 +467,9 @@ function projectsPage() {
     },
 
     async onDetailTabChange(tab) {
+      if (typeof this.closeDecisionViewModal === 'function' && tab !== 'decisions') {
+        this.closeDecisionViewModal();
+      }
       this.detailTab = tab;
       await this.loadDetailTab(tab);
       this.pushProjectsHash();

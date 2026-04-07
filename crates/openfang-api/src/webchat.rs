@@ -144,6 +144,10 @@ pub async fn webchat_page() -> impl IntoResponse {
 const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/index_head.html"),
     "<style>\n",
+    include_str!("../static/vendor/bulma.min.css"),
+    "\n",
+    include_str!("../static/css/bulma-bridge.css"),
+    "\n",
     include_str!("../static/css/theme.css"),
     "\n",
     include_str!("../static/css/layout.css"),
@@ -178,6 +182,8 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/js/api.js"),
     "\n",
     include_str!("../static/js/app.js"),
+    "\n",
+    include_str!("../static/js/markdown-editor.js"),
     "\n",
     include_str!("../static/js/pages/overview.js"),
     "\n",
@@ -279,7 +285,7 @@ mod dashboard_embed_tests {
         );
         assert!(
             super::WEBCHAT_HTML.contains("loadDocsTab")
-                && super::WEBCHAT_HTML.contains("docNavRows")
+                && super::WEBCHAT_HTML.contains("docSidebarRows")
                 && super::WEBCHAT_HTML.contains("openDocCreateModal")
                 && super::WEBCHAT_HTML.contains("submitDocEditor")
                 && super::WEBCHAT_HTML.contains("decisionsSelectRow")

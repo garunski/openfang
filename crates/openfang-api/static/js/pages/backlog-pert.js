@@ -24,6 +24,8 @@ function backlogPertMixins() {
     _pertEdgeSpecs: [],
     pertFilterStatus: '',
     pertStatusOptions: [],
+    pertFilterLabel: '',
+    pertLabelOptions: [],
     pertPanning: false,
     _pertPanLast: null,
     _pertPanMouseMove: null,
@@ -46,6 +48,8 @@ function backlogPertMixins() {
       this._pertEdgeSpecs = [];
       this.pertFilterStatus = '';
       this.pertStatusOptions = [];
+      this.pertFilterLabel = '';
+      this.pertLabelOptions = [];
       this.pertPanEnd();
       this.pertLoading = false;
       this.pertError = '';
@@ -103,6 +107,30 @@ function backlogPertMixins() {
       var all = this._pertDataTasks || [];
       for (i = 0; i < all.length; i++) add(all[i].status);
       this.pertStatusOptions = out;
+    },
+
+    _pertRefreshLabelOptions() {
+      var seen = {};
+      var out = [];
+      var all = this._pertDataTasks || [];
+      var i;
+      var j;
+      for (i = 0; i < all.length; i++) {
+        var lbs = all[i].labels;
+        if (!Array.isArray(lbs)) continue;
+        for (j = 0; j < lbs.length; j++) {
+          var L = lbs[j] != null ? String(lbs[j]).trim() : '';
+          if (!L) continue;
+          var k = L.toLowerCase();
+          if (seen[k]) continue;
+          seen[k] = true;
+          out.push(L);
+        }
+      }
+      out.sort(function (a, b) {
+        return String(a).localeCompare(String(b), undefined, { sensitivity: 'base' });
+      });
+      this.pertLabelOptions = out;
     },
 
     pertMilestoneHue(id) {
@@ -225,6 +253,19 @@ function backlogPertMixins() {
         });
       } else {
         tasks = allTasks;
+      }
+      var flb = String(this.pertFilterLabel || '').trim();
+      if (flb) {
+        var flbl = flb.toLowerCase();
+        tasks = tasks.filter(function (t) {
+          var lbs = t.labels;
+          if (!Array.isArray(lbs) || !lbs.length) return false;
+          var k;
+          for (k = 0; k < lbs.length; k++) {
+            if (String(lbs[k] || '').trim().toLowerCase() === flbl) return true;
+          }
+          return false;
+        });
       }
       var idSetLower = {};
       var i;
@@ -546,6 +587,7 @@ function backlogPertMixins() {
         this._pertDataTasks = Array.isArray(triple[0]) ? triple[0] : [];
         this._pertDataMilestones = Array.isArray(triple[1]) ? triple[1] : [];
         this._pertRefreshStatusOptions(triple[2]);
+        this._pertRefreshLabelOptions();
         this.rebuildPertLayout();
         this._pertLoaded = true;
       } catch (e) {
@@ -553,6 +595,8 @@ function backlogPertMixins() {
           this.pertError = e.message || 'Failed to load PERT data';
           this._pertDataTasks = [];
           this._pertDataMilestones = [];
+          this._pertRefreshStatusOptions(null);
+          this._pertRefreshLabelOptions();
           this.rebuildPertLayout();
         }
       }

@@ -12,7 +12,6 @@ function backlogDocsAugmentPaths(node, parentPath) {
 function backlogDocsMixins() {
   return {
     docTreeRoot: null,
-    docExpandedKeys: {},
     docsSelectedDoc: null,
     docsDocLoading: false,
     docsDocError: '',
@@ -22,28 +21,55 @@ function backlogDocsMixins() {
     docEditorForm: { title: '', docType: 'guide', categoryPath: '', content: '' },
     docEditorSaving: false,
     docEditorError: '',
+    _docEasymdeInst: null,
+
+    docEditorDestroyEasymde() {
+      if (this._docEasymdeInst) {
+        openfangEasymdeDestroy(this._docEasymdeInst);
+        this._docEasymdeInst = null;
+      }
+    },
+
+    docEditorSyncEasymdeToForm() {
+      if (this._docEasymdeInst && this.docEditorForm) {
+        this.docEditorForm.content = this._docEasymdeInst.value();
+      }
+    },
+
+    docEditorScheduleEasymdeMount() {
+      var self = this;
+      function run() {
+        if (!self.docEditorModalOpen) return;
+        self.docEditorDestroyEasymde();
+        var el = self.$refs.docEasymdeContent;
+        if (!el || el.tagName !== 'TEXTAREA') return;
+        var initial = self.docEditorForm && self.docEditorForm.content != null ? self.docEditorForm.content : '';
+        self._docEasymdeInst = openfangEasymdeMount(el, '280px', initial);
+      }
+      function afterStable(fn) {
+        requestAnimationFrame(function () {
+          requestAnimationFrame(fn);
+        });
+      }
+      if (typeof self.$nextTick === 'function') {
+        self.$nextTick(function () {
+          afterStable(run);
+        });
+      } else {
+        queueMicrotask(function () {
+          afterStable(run);
+        });
+      }
+    },
 
     resetDocsCache() {
       this.docTreeRoot = null;
-      this.docExpandedKeys = {};
       this.docsSelectedDoc = null;
       this.docsDocLoading = false;
       this.docsDocError = '';
+      this.docEditorDestroyEasymde();
       this.docEditorModalOpen = false;
       this.docEditorError = '';
-    },
-
-    expandDocPathFolders(path) {
-      if (!path || typeof path !== 'string') return;
-      var parts = path.split('/').filter(Boolean);
-      var acc = '';
-      var o = Object.assign({}, this.docExpandedKeys);
-      var i;
-      for (i = 0; i < parts.length; i++) {
-        acc = acc ? acc + '/' + parts[i] : parts[i];
-        o[acc] = true;
-      }
-      this.docExpandedKeys = o;
     },
 
     openDocCreateModal() {
@@ -75,6 +101,7 @@ function backlogDocsMixins() {
     },
 
     closeDocEditorModal() {
+      this.docEditorDestroyEasymde();
       this.docEditorModalOpen = false;
       this.docEditorError = '';
       this.docEditTargetId = null;
@@ -118,6 +145,7 @@ function backlogDocsMixins() {
 
     async submitDocEditor() {
       if (!this.selectedProject) return;
+      this.docEditorSyncEasymdeToForm();
       var pid = this.selectedProject.id;
       var base = '/api/projects/' + encodeURIComponent(pid) + '/backlog/docs';
       this.docEditorSaving = true;
@@ -136,8 +164,7 @@ function backlogDocsMixins() {
             categoryPath: (this.docEditorForm.categoryPath || '').trim(),
             content: this.docEditorForm.content != null ? String(this.docEditorForm.content) : '',
           });
-          this.docEditorModalOpen = false;
-          this.expandDocPathFolders(created.path);
+          this.closeDocEditorModal();
           if (typeof this.setDetailLoaded === 'function') {
             this.setDetailLoaded('docs', false);
             this.setDetailLoaded('overview', false);
@@ -162,8 +189,7 @@ function backlogDocsMixins() {
             title: t,
             content: this.docEditorForm.content != null ? String(this.docEditorForm.content) : '',
           });
-          this.docEditorModalOpen = false;
-          this.expandDocPathFolders(updated.path);
+          this.closeDocEditorModal();
           this.docsSelectedDoc = updated;
           if (typeof this.setDetailLoaded === 'function') {
             this.setDetailLoaded('docs', false);
@@ -180,29 +206,64 @@ function backlogDocsMixins() {
       this.docEditorSaving = false;
     },
 
-    docNavRows() {
+    /** Flat list for mobile doc picker (folder/title labels). */
+    docSelectOptions() {
       var root = this.docTreeRoot;
       if (!root) return [];
-      var exp = this.docExpandedKeys;
-      var rows = [];
-      function walk(node, depth) {
-        if (depth === 0) {
-          (node.docs || []).forEach(function (d) {
-            rows.push({ kind: 'doc', doc: d, depth: 0 });
-          });
-        }
+      var out = [];
+      function walk(node, folderPath) {
+        (node.docs || []).forEach(function (d) {
+          if (!d || d.id == null) return;
+          var title =
+            d.title != null && String(d.title).trim() !== ''
+              ? String(d.title)
+              : String(d.id);
+          var label = folderPath ? folderPath + '/' + title : title;
+          out.push({ id: d.id, label: label });
+        });
         (node.children || []).forEach(function (c) {
-          rows.push({ kind: 'folder', name: c.name, path: c._path, depth: depth });
-          if (exp[c._path]) {
-            (c.docs || []).forEach(function (d) {
-              rows.push({ kind: 'doc', doc: d, depth: depth + 1 });
-            });
-            walk(c, depth + 1);
-          }
+          var fp = folderPath ? folderPath + '/' + String(c.name) : String(c.name);
+          walk(c, fp);
         });
       }
-      walk(root, 0);
+      walk(root, '');
+      return out;
+    },
+
+    /** Flat list for desktop sidebar: document title only, sorted by folder path then title. */
+    docSidebarRows() {
+      var root = this.docTreeRoot;
+      if (!root) return [];
+      var rows = [];
+      function walk(node, folderPath) {
+        (node.docs || []).forEach(function (d) {
+          if (!d || d.id == null) return;
+          rows.push({ doc: d, folderPath: folderPath || '' });
+        });
+        (node.children || []).forEach(function (c) {
+          var fp = folderPath ? folderPath + '/' + String(c.name) : String(c.name);
+          walk(c, fp);
+        });
+      }
+      walk(root, '');
+      rows.sort(function (a, b) {
+        var pa = a.folderPath || '';
+        var pb = b.folderPath || '';
+        if (pa !== pb) {
+          return pa.localeCompare(pb, undefined, { numeric: true, sensitivity: 'base' });
+        }
+        var ta = (a.doc.title || a.doc.id || '').toString();
+        var tb = (b.doc.title || b.doc.id || '').toString();
+        return ta.localeCompare(tb, undefined, { numeric: true, sensitivity: 'base' });
+      });
       return rows;
+    },
+
+    docsCategoryPathLine() {
+      var d = this.docsSelectedDoc;
+      if (!d) return '';
+      var p = d.path != null ? String(d.path).trim() : '';
+      return p || 'docs root';
     },
 
     docTreeHasAny() {
@@ -210,16 +271,6 @@ function backlogDocsMixins() {
       if (!r) return false;
       if ((r.docs && r.docs.length) || (r.children && r.children.length)) return true;
       return false;
-    },
-
-    docToggleFolder(path) {
-      var o = Object.assign({}, this.docExpandedKeys);
-      o[path] = !o[path];
-      this.docExpandedKeys = o;
-    },
-
-    docFolderGlyph(path) {
-      return this.docFolderExpanded(path) ? '\u25bc' : '\u25b6';
     },
 
     async loadDocsTab(force, silent) {

@@ -117,7 +117,7 @@ function backlogSearchMixins() {
       if (hit.type === 'decision' && hit.decision) {
         this.detailTab = 'decisions';
         await this.loadDecisionsTab(true);
-        await this.decisionsSelectRow(hit.decision);
+        await this.decisionsSelectRow(hit.decision, false, { openModal: true });
       }
     },
   };

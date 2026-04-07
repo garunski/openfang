@@ -272,13 +272,47 @@
 /* Subnav: scrollable tabs under project header (matches compact dashboard layout) */
 .project-subnav {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 24px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 24px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome-surface);
   flex-shrink: 0;
+}
+
+.project-subnav__mobile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.project-subnav__select {
+  width: 100%;
+  max-width: 100%;
+}
+
+.project-subnav__tabs {
+  display: none !important;
+}
+
+@media (min-width: 769px) {
+  .project-subnav {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 24px;
+  }
+
+  .project-subnav__mobile {
+    display: none;
+  }
+
+  .project-subnav__tabs {
+    display: flex !important;
+  }
 }
 
 .page-body--project {
@@ -374,12 +408,12 @@
 
 /* Wide desktop — larger card grids */
 @media (min-width: 1400px) {
-  .card-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .of-card-grid { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 }
 
 /* Responsive — tablet breakpoint */
 @media (max-width: 1024px) {
-  .card-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .of-card-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
   .security-grid { grid-template-columns: 1fr; }
   .cost-charts-row { grid-template-columns: 1fr; }
   .overview-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
@@ -429,17 +463,17 @@
   .stat-card { min-width: 80px; flex: 1 1 40%; }
   .stat-card-lg { min-width: 80px; flex: 1 1 40%; padding: 12px; }
   .stat-card-lg .stat-value { font-size: 22px; }
-  .card-grid { grid-template-columns: 1fr; }
+  .of-card-grid { grid-template-columns: 1fr; }
   .overview-grid { grid-template-columns: 1fr; }
   .input-area { padding: 8px 12px; }
   .main-content { padding: 0; }
   .table-wrap { font-size: 10px; }
-  .modal { margin: 8px; max-height: calc(100vh - 16px); }
+  .of-modal { margin: 8px; max-height: calc(100vh - 16px); }
 }
 
 /* Touch-friendly tap targets */
 @media (pointer: coarse) {
-  .btn { min-height: 44px; min-width: 44px; }
+  .button { min-height: 44px; min-width: 44px; }
   .nav-item { min-height: 44px; }
   .form-input, .form-select, .form-textarea { min-height: 44px; }
   .toggle { min-width: 44px; min-height: 28px; }
