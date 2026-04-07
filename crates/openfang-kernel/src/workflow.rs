@@ -12,6 +12,7 @@
 
 use chrono::{DateTime, Utc};
 use openfang_types::agent::AgentId;
+use openfang_types::project::ProjectId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -74,6 +75,9 @@ pub struct Workflow {
     pub description: String,
     /// The steps in execution order.
     pub steps: Vec<WorkflowStep>,
+    /// When set, the workflow is owned by this project; runs validate step agents against it.
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     /// Created at.
     pub created_at: DateTime<Utc>,
 }
@@ -248,6 +252,7 @@ impl WorkflowEngine {
             existing.name = updated.name;
             existing.description = updated.description;
             existing.steps = updated.steps;
+            existing.project_id = updated.project_id;
             info!(workflow_id = %id, "Workflow updated");
             true
         } else {
@@ -836,6 +841,7 @@ mod tests {
                     output_var: None,
                 },
             ],
+            project_id: None,
             created_at: Utc::now(),
         }
     }
@@ -950,6 +956,7 @@ mod tests {
                     output_var: None,
                 },
             ],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1002,6 +1009,7 @@ mod tests {
                     output_var: None,
                 },
             ],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1041,6 +1049,7 @@ mod tests {
                 error_mode: ErrorMode::Fail,
                 output_var: None,
             }],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1087,6 +1096,7 @@ mod tests {
                 error_mode: ErrorMode::Fail,
                 output_var: None,
             }],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1134,6 +1144,7 @@ mod tests {
                     output_var: None,
                 },
             ],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1180,6 +1191,7 @@ mod tests {
                 error_mode: ErrorMode::Retry { max_retries: 2 },
                 output_var: None,
             }],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1248,6 +1260,7 @@ mod tests {
                     output_var: None,
                 },
             ],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
@@ -1317,6 +1330,7 @@ mod tests {
                     output_var: None,
                 },
             ],
+            project_id: None,
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;

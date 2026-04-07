@@ -6,8 +6,9 @@ function overviewPage() {
     health: {},
     status: {},
     usageSummary: {},
-    recentAudit: [],
     channels: [],
+    projects: [],
+    projectsLoading: false,
     providers: [],
     mcpServers: [],
     skillCount: 0,
@@ -24,7 +25,7 @@ function overviewPage() {
           this.loadHealth(),
           this.loadStatus(),
           this.loadUsage(),
-          this.loadAudit(),
+          this.loadProjects(),
           this.loadChannels(),
           this.loadProviders(),
           this.loadMcpServers(),
@@ -39,6 +40,16 @@ function overviewPage() {
 
     async loadData() { return this.loadOverview(); },
 
+    navigate(target) {
+      var root = typeof Alpine !== 'undefined' ? Alpine.$data(document.body) : null;
+      if (root && typeof root.navigate === 'function') {
+        root.navigate(target);
+      } else {
+        var path = String(target == null ? 'overview' : target).replace(/^#\/?/, '').trim() || 'overview';
+        window.location.hash = path;
+      }
+    },
+
     // Silent background refresh (no loading spinner)
     async silentRefresh() {
       try {
@@ -46,7 +57,7 @@ function overviewPage() {
           this.loadHealth(),
           this.loadStatus(),
           this.loadUsage(),
-          this.loadAudit(),
+          this.loadProjects(),
           this.loadChannels(),
           this.loadProviders(),
           this.loadMcpServers(),
@@ -103,11 +114,66 @@ function overviewPage() {
       }
     },
 
-    async loadAudit() {
+    async loadProjects() {
+      this.projectsLoading = true;
       try {
-        var data = await OpenFangAPI.get('/api/audit/recent?n=8');
-        this.recentAudit = data.entries || [];
-      } catch(e) { this.recentAudit = []; }
+        var list = await OpenFangAPI.get('/api/projects');
+        this.projects = Array.isArray(list) ? list : [];
+        if (typeof Alpine !== 'undefined' && Alpine.store('app')) {
+          try {
+            var root = Alpine.$data(document.body);
+            if (root && typeof root.refreshSidebarProjects === 'function') {
+              root.refreshSidebarProjects();
+            }
+          } catch (e2) { /* ignore */ }
+        }
+      } catch (e) {
+        this.projects = [];
+      }
+      this.projectsLoading = false;
+    },
+
+    deleteProject(p) {
+      if (!p || !p.id) return;
+      var name = p.name || p.id;
+      var self = this;
+      if (typeof OpenFangToast !== 'undefined' && OpenFangToast.confirm) {
+        OpenFangToast.confirm(
+          'Delete project',
+          'Remove "' + name + '" from OpenFang? This does not delete files on disk.',
+          async function () {
+            try {
+              await OpenFangAPI.delete('/api/projects/' + encodeURIComponent(p.id));
+              OpenFangToast.success('Project removed');
+              await self.loadProjects();
+              if (typeof Alpine !== 'undefined') {
+                var root = Alpine.$data(document.body);
+                if (root && typeof root.refreshSidebarProjects === 'function') {
+                  root.refreshSidebarProjects();
+                }
+              }
+            } catch (err) {
+              OpenFangToast.error(err.message || 'Delete failed');
+            }
+          }
+        );
+      } else if (window.confirm('Remove project "' + name + '"?')) {
+        OpenFangAPI.delete('/api/projects/' + encodeURIComponent(p.id))
+          .then(function () {
+            return self.loadProjects();
+          })
+          .then(function () {
+            if (typeof Alpine !== 'undefined') {
+              var root = Alpine.$data(document.body);
+              if (root && typeof root.refreshSidebarProjects === 'function') {
+                root.refreshSidebarProjects();
+              }
+            }
+          })
+          .catch(function (err) {
+            alert(err.message || 'Delete failed');
+          });
+      }
     },
 
     async loadChannels() {
@@ -168,40 +234,11 @@ function overviewPage() {
       return p.display_name + ' \u2014 not configured';
     },
 
-    // Audit action badge color
-    actionBadgeClass(action) {
-      if (!action) return 'badge-dim';
-      if (action === 'AgentSpawn' || action === 'AuthSuccess') return 'badge-success';
-      if (action === 'AgentKill' || action === 'AgentTerminated' || action === 'AuthFailure' || action === 'CapabilityDenied') return 'badge-error';
-      if (action === 'RateLimited' || action === 'ToolInvoke') return 'badge-warn';
-      return 'badge-created';
-    },
-
-    // ── Setup Checklist ──
-    checklistDismissed: localStorage.getItem('of-checklist-dismissed') === 'true',
-
-    get setupChecklist() {
-      return [
-        { key: 'provider', label: 'Configure an LLM provider', done: this.configuredProviders.length > 0, action: '#settings' },
-        { key: 'agent', label: 'Create your first agent', done: (Alpine.store('app').agents || []).length > 0, action: '#agents' },
-        { key: 'chat', label: 'Send your first message', done: localStorage.getItem('of-first-msg') === 'true', action: '#chat' },
-        { key: 'channel', label: 'Connect a messaging channel', done: this.channels.length > 0, action: '#channels' },
-        { key: 'skill', label: 'Browse or install a skill', done: localStorage.getItem('of-skill-browsed') === 'true', action: '#skills' }
-      ];
-    },
-
-    get setupProgress() {
-      var done = this.setupChecklist.filter(function(item) { return item.done; }).length;
-      return (done / 5) * 100;
-    },
-
-    get setupDoneCount() {
-      return this.setupChecklist.filter(function(item) { return item.done; }).length;
-    },
-
-    dismissChecklist() {
-      this.checklistDismissed = true;
-      localStorage.setItem('of-checklist-dismissed', 'true');
+    truncatePath(path, maxLen) {
+      if (!path) return '';
+      var n = maxLen || 64;
+      if (path.length <= n) return path;
+      return '\u2026' + path.slice(-(n - 1));
     },
 
     formatUptime(secs) {
@@ -225,68 +262,6 @@ function overviewPage() {
       if (!n || n === 0) return '$0.00';
       if (n < 0.01) return '<$0.01';
       return '$' + n.toFixed(2);
-    },
-
-    // Relative time formatting ("2m ago", "1h ago", "just now")
-    timeAgo(timestamp) {
-      if (!timestamp) return '';
-      var now = Date.now();
-      var ts = new Date(timestamp).getTime();
-      var diff = Math.floor((now - ts) / 1000);
-      if (diff < 10) return 'just now';
-      if (diff < 60) return diff + 's ago';
-      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
-      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
-      return Math.floor(diff / 86400) + 'd ago';
-    },
-
-    // Map raw audit action names to user-friendly labels
-    friendlyAction(action) {
-      if (!action) return 'Unknown';
-      var map = {
-        'AgentSpawn': 'Agent Created',
-        'AgentKill': 'Agent Stopped',
-        'AgentTerminated': 'Agent Stopped',
-        'ToolInvoke': 'Tool Used',
-        'ToolResult': 'Tool Completed',
-        'MessageReceived': 'Message In',
-        'MessageSent': 'Response Sent',
-        'SessionReset': 'Session Reset',
-        'SessionCompact': 'Compacted',
-        'ModelSwitch': 'Model Changed',
-        'AuthAttempt': 'Login Attempt',
-        'AuthSuccess': 'Login OK',
-        'AuthFailure': 'Login Failed',
-        'CapabilityDenied': 'Denied',
-        'RateLimited': 'Rate Limited',
-        'WorkflowRun': 'Workflow Run',
-        'TriggerFired': 'Trigger Fired',
-        'SkillInstalled': 'Skill Installed',
-        'McpConnected': 'MCP Connected'
-      };
-      return map[action] || action.replace(/([A-Z])/g, ' $1').trim();
-    },
-
-    // Audit action icon (small inline SVG)
-    actionIcon(action) {
-      if (!action) return '';
-      var icons = {
-        'AgentSpawn': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>',
-        'AgentKill': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>',
-        'AgentTerminated': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg>',
-        'ToolInvoke': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>',
-        'MessageReceived': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
-        'MessageSent': '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>'
-      };
-      return icons[action] || '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>';
-    },
-
-    // Resolve agent UUID to name if possible
-    agentName(agentId) {
-      if (!agentId) return '-';
-      var agents = Alpine.store('app').agents || [];
-      var agent = agents.find(function(a) { return a.id === agentId; });
-      return agent ? agent.name : agentId.substring(0, 8) + '\u2026';
     }
   };
 }

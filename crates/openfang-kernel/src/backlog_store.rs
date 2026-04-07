@@ -1,5 +1,7 @@
 //! In-memory backlog cache per project; reads via [`openfang_types::backlog::reader`], writes via serializer.
 
+use chrono::{Duration, NaiveDate, Utc};
+use openfang_types::backlog::parser::normalize_date;
 use openfang_types::backlog::reader::{read_all, BacklogReadError};
 use openfang_types::backlog::serializer::{
     serialize_decision, serialize_document, serialize_milestone, serialize_task,
@@ -16,6 +18,30 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use crate::project_store::ProjectStore;
+
+/// One task eligible for backlog.md-style cleanup (Done, under `tasks/`, reference date older than cutoff).
+#[derive(Debug, Clone)]
+pub struct DoneTaskCleanupCandidate {
+    pub id: String,
+    pub title: String,
+    pub created_date: String,
+    pub updated_date: Option<String>,
+}
+
+fn task_status_done_like_cleanup(status: &str) -> bool {
+    matches!(
+        status.trim().to_ascii_lowercase().as_str(),
+        "done" | "closed" | "complete" | "completed"
+    )
+}
+
+fn parse_task_reference_date(raw: &str) -> Option<NaiveDate> {
+    let n = normalize_date(raw.trim());
+    if n.is_empty() {
+        return None;
+    }
+    NaiveDate::parse_from_str(n.as_str(), "%Y-%m-%d").ok()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum BacklogStoreError {
@@ -414,6 +440,74 @@ impl BacklogStore {
         self.refresh(project_id)
     }
 
+    /// Done tasks still under `tasks/` whose reference date (`updated_date` or else `created_date`)
+    /// is strictly before `today - older_than_days` (same rules as [Backlog.md](https://github.com/MrLesk/Backlog.md) cleanup preview).
+    pub fn cleanup_done_tasks_preview(
+        &self,
+        project_id: &ProjectId,
+        older_than_days: u32,
+    ) -> Result<Vec<DoneTaskCleanupCandidate>, BacklogStoreError> {
+        let g = self.lock_read()?;
+        let ent = g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?;
+        let snap = &ent.snapshot;
+        let cutoff = Utc::now().date_naive() - Duration::days(i64::from(older_than_days));
+        let mut out = Vec::new();
+        for t in &snap.tasks {
+            if !t
+                .file_path
+                .as_deref()
+                .is_some_and(|r| r.starts_with("tasks/"))
+            {
+                continue;
+            }
+            if !task_status_done_like_cleanup(&t.status) {
+                continue;
+            }
+            let date_raw = t
+                .updated_date
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or(t.created_date.as_str());
+            let date_raw = date_raw.trim();
+            if date_raw.is_empty() {
+                continue;
+            }
+            let Some(d) = parse_task_reference_date(date_raw) else {
+                continue;
+            };
+            if d < cutoff {
+                out.push(DoneTaskCleanupCandidate {
+                    id: t.id.clone(),
+                    title: t.title.clone(),
+                    created_date: t.created_date.clone(),
+                    updated_date: t.updated_date.clone(),
+                });
+            }
+        }
+        Ok(out)
+    }
+
+    /// Moves each matching task to `completed/` via [`Self::complete_task`] (Backlog.md `cleanup/execute`).
+    pub fn cleanup_done_tasks_execute(
+        &self,
+        project_id: &ProjectId,
+        older_than_days: u32,
+        projects: &ProjectStore,
+    ) -> Result<(usize, usize, Vec<String>), BacklogStoreError> {
+        let candidates = self.cleanup_done_tasks_preview(project_id, older_than_days)?;
+        let total = candidates.len();
+        let mut moved = 0usize;
+        let mut failed = Vec::new();
+        for c in candidates {
+            match self.complete_task(project_id, &c.id, projects) {
+                Ok(()) => moved += 1,
+                Err(_) => failed.push(c.id),
+            }
+        }
+        Ok((moved, total, failed))
+    }
+
     pub fn reorder_tasks(
         &self,
         project_id: &ProjectId,
@@ -577,6 +671,36 @@ impl BacklogStore {
         self.refresh(project_id)
     }
 
+    pub fn delete_document(
+        &self,
+        project_id: &ProjectId,
+        doc_id: &str,
+        projects: &ProjectStore,
+    ) -> Result<(), BacklogStoreError> {
+        self.ensure_loaded(project_id, projects)?;
+        let rel = {
+            let g = self.lock_read()?;
+            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            snap.documents
+                .iter()
+                .find(|d| d.id == doc_id)
+                .and_then(|d| d.file_path.clone())
+                .ok_or_else(|| BacklogStoreError::NotFound(doc_id.to_string()))?
+        };
+        if !rel.starts_with("docs/") {
+            return Err(BacklogStoreError::Msg(
+                "delete_document only for files under docs/".into(),
+            ));
+        }
+        let root = self.backlog_root(project_id)?;
+        let path = Self::join_safe(&root, &rel)?;
+        if !path.is_file() {
+            return Err(BacklogStoreError::NotFound(doc_id.to_string()));
+        }
+        fs::remove_file(&path)?;
+        self.refresh(project_id)
+    }
+
     pub fn create_decision(
         &self,
         project_id: &ProjectId,
@@ -623,6 +747,36 @@ impl BacklogStore {
         let root = self.backlog_root(project_id)?;
         let path = Self::join_safe(&root, &rel)?;
         fs::write(&path, serialize_decision(decision))?;
+        self.refresh(project_id)
+    }
+
+    pub fn delete_decision(
+        &self,
+        project_id: &ProjectId,
+        decision_id: &str,
+        projects: &ProjectStore,
+    ) -> Result<(), BacklogStoreError> {
+        self.ensure_loaded(project_id, projects)?;
+        let rel = {
+            let g = self.lock_read()?;
+            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            snap.decisions
+                .iter()
+                .find(|d| d.id == decision_id)
+                .and_then(|d| d.file_path.clone())
+                .ok_or_else(|| BacklogStoreError::NotFound(decision_id.to_string()))?
+        };
+        if !rel.starts_with("decisions/") {
+            return Err(BacklogStoreError::Msg(
+                "delete_decision only for files under decisions/".into(),
+            ));
+        }
+        let root = self.backlog_root(project_id)?;
+        let path = Self::join_safe(&root, &rel)?;
+        if !path.is_file() {
+            return Err(BacklogStoreError::NotFound(decision_id.to_string()));
+        }
+        fs::remove_file(&path)?;
         self.refresh(project_id)
     }
 
@@ -753,6 +907,74 @@ impl BacklogStore {
         self.get_milestone(project_id, &id).ok_or_else(|| {
             BacklogStoreError::Msg("milestone missing after create".into())
         })
+    }
+
+    pub fn update_milestone(
+        &self,
+        project_id: &ProjectId,
+        milestone: &BacklogMilestone,
+        projects: &ProjectStore,
+    ) -> Result<(), BacklogStoreError> {
+        self.ensure_loaded(project_id, projects)?;
+        let rel = {
+            if let Some(ref fp) = milestone.file_path {
+                fp.clone()
+            } else {
+                let g = self.lock_read()?;
+                let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+                snap.milestones
+                    .iter()
+                    .find(|m| m.id == milestone.id)
+                    .and_then(|m| m.file_path.clone())
+                    .ok_or_else(|| BacklogStoreError::NotFound(milestone.id.clone()))?
+            }
+        };
+        if !rel.starts_with("milestones/") {
+            return Err(BacklogStoreError::Msg(
+                "update_milestone only for milestones under milestones/".into(),
+            ));
+        }
+        let root = self.backlog_root(project_id)?;
+        let path = Self::join_safe(&root, &rel)?;
+        fs::write(&path, serialize_milestone(milestone))?;
+        self.refresh(project_id)
+    }
+
+    pub fn delete_milestone(
+        &self,
+        project_id: &ProjectId,
+        milestone_id: &str,
+        projects: &ProjectStore,
+    ) -> Result<(), BacklogStoreError> {
+        self.ensure_loaded(project_id, projects)?;
+        let rel = {
+            let g = self.lock_read()?;
+            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            snap.milestones
+                .iter()
+                .find(|m| m.id == milestone_id)
+                .and_then(|m| m.file_path.clone())
+                .or_else(|| {
+                    snap.archived_milestones
+                        .iter()
+                        .find(|m| m.id == milestone_id)
+                        .and_then(|m| m.file_path.clone())
+                })
+                .ok_or_else(|| BacklogStoreError::NotFound(milestone_id.to_string()))?
+        };
+        let ok = rel.starts_with("milestones/") || rel.starts_with("archive/milestones/");
+        if !ok {
+            return Err(BacklogStoreError::Msg(
+                "delete_milestone only for milestones/ or archive/milestones/".into(),
+            ));
+        }
+        let root = self.backlog_root(project_id)?;
+        let path = Self::join_safe(&root, &rel)?;
+        if !path.is_file() {
+            return Err(BacklogStoreError::NotFound(milestone_id.to_string()));
+        }
+        fs::remove_file(&path)?;
+        self.refresh(project_id)
     }
 
     pub fn promote_draft(

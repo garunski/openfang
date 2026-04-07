@@ -8,10 +8,16 @@ function backlogListMixins() {
     listFilterLabels: [],
     listFilterAssignee: '',
     listSortKey: 'id',
-    listSortDir: 'asc',
+    listSortDir: 'desc',
     listConfigStatuses: [],
     listUniqueLabels: [],
     listUniqueAssignees: [],
+    backlogCleanupModalOpen: false,
+    cleanupAgeInput: '30',
+    cleanupPreview: null,
+    cleanupPreviewLoading: false,
+    cleanupExecuteLoading: false,
+    cleanupModalError: '',
 
     resetListFilters() {
       this.listFilterStatus = '';
@@ -19,10 +25,110 @@ function backlogListMixins() {
       this.listFilterLabels = [];
       this.listFilterAssignee = '';
       this.listSortKey = 'id';
-      this.listSortDir = 'asc';
+      this.listSortDir = 'desc';
       this.listConfigStatuses = [];
       this.listUniqueLabels = [];
       this.listUniqueAssignees = [];
+      this.backlogCleanupModalOpen = false;
+      this.cleanupAgeInput = '30';
+      this.cleanupPreview = null;
+      this.cleanupPreviewLoading = false;
+      this.cleanupExecuteLoading = false;
+      this.cleanupModalError = '';
+    },
+
+    openBacklogCleanupModal() {
+      this.cleanupModalError = '';
+      this.cleanupPreview = null;
+      this.backlogCleanupModalOpen = true;
+      this.refreshBacklogCleanupPreview();
+    },
+
+    closeBacklogCleanupModal() {
+      this.backlogCleanupModalOpen = false;
+      this.cleanupPreview = null;
+      this.cleanupModalError = '';
+      this.cleanupPreviewLoading = false;
+    },
+
+    async refreshBacklogCleanupPreview() {
+      if (!this.selectedProject) return;
+      var age = parseInt(String(this.cleanupAgeInput || '0').trim(), 10);
+      if (Number.isNaN(age) || age < 0) {
+        this.cleanupModalError = 'Enter a valid age in days (0 or more).';
+        this.cleanupPreview = null;
+        return;
+      }
+      this.cleanupPreviewLoading = true;
+      this.cleanupModalError = '';
+      try {
+        var pid = this.selectedProject.id;
+        this.cleanupPreview = await OpenFangAPI.get(
+          '/api/projects/' +
+            encodeURIComponent(pid) +
+            '/backlog/tasks/cleanup?age=' +
+            encodeURIComponent(String(age))
+        );
+      } catch (e) {
+        this.cleanupModalError = e.message || 'Preview failed';
+        this.cleanupPreview = null;
+      }
+      this.cleanupPreviewLoading = false;
+    },
+
+    executeBacklogCleanup() {
+      var self = this;
+      if (!this.selectedProject) return;
+      var n = this.cleanupPreview && this.cleanupPreview.count != null ? Number(this.cleanupPreview.count) : 0;
+      if (n === 0) {
+        this._executeBacklogCleanupConfirmed();
+        return;
+      }
+      var msg =
+        'Move ' +
+        n +
+        ' Done task(s) from backlog/tasks to backlog/completed/? Same behavior as Backlog.md cleanup.';
+      function doit() {
+        self._executeBacklogCleanupConfirmed();
+      }
+      if (typeof OpenFangToast !== 'undefined' && OpenFangToast.confirm) {
+        OpenFangToast.confirm('Cleanup old tasks', msg, doit);
+      } else if (window.confirm(msg)) {
+        doit();
+      }
+    },
+
+    async _executeBacklogCleanupConfirmed() {
+      if (!this.selectedProject) return;
+      var age = parseInt(String(this.cleanupAgeInput || '0').trim(), 10);
+      if (Number.isNaN(age) || age < 0) {
+        this.cleanupModalError = 'Invalid age';
+        return;
+      }
+      this.cleanupExecuteLoading = true;
+      this.cleanupModalError = '';
+      try {
+        var pid = this.selectedProject.id;
+        var r = await OpenFangAPI.post(
+          '/api/projects/' + encodeURIComponent(pid) + '/backlog/tasks/cleanup/execute',
+          { age: age }
+        );
+        this.closeBacklogCleanupModal();
+        this.setDetailLoaded('backlog', false);
+        this.setDetailLoaded('milestones', false);
+        this.setDetailLoaded('overview', false);
+        if (typeof this.resetBoardCache === 'function') this.resetBoardCache();
+        if (typeof this.resetPertCache === 'function') this.resetPertCache();
+        await this.loadDetailTab('backlog', true);
+        if (typeof OpenFangToast !== 'undefined') {
+          var mc = r && r.movedCount != null ? Number(r.movedCount) : 0;
+          if (mc > 0) OpenFangToast.success('Moved ' + mc + ' task(s) to completed');
+          else OpenFangToast.info('No tasks were moved');
+        }
+      } catch (e) {
+        this.cleanupModalError = e.message || 'Cleanup failed';
+      }
+      this.cleanupExecuteLoading = false;
     },
 
     rebuildListFilterOptions() {
@@ -48,8 +154,14 @@ function backlogListMixins() {
         this.listSortDir = this.listSortDir === 'asc' ? 'desc' : 'asc';
       } else {
         this.listSortKey = key;
-        this.listSortDir = 'asc';
+        this.listSortDir = key === 'id' ? 'desc' : 'asc';
       }
+    },
+
+    /** Numeric suffix from ids like TASK-36; null if no trailing digits. */
+    listTaskIdNumericSuffix(id) {
+      var m = String(id || '').match(/-(\d+)$/);
+      return m ? parseInt(m[1], 10) : null;
     },
 
     listSortIndicator(key) {
@@ -141,9 +253,22 @@ function backlogListMixins() {
     },
 
     listSortCompare(a, b) {
+      var inv = this.listSortDir === 'desc' ? -1 : 1;
+      if (this.listSortKey === 'id') {
+        var na = this.listTaskIdNumericSuffix(a.id);
+        var nb = this.listTaskIdNumericSuffix(b.id);
+        var hasA = na != null;
+        var hasB = nb != null;
+        if (hasA && hasB && na !== nb) {
+          return this.listSortDir === 'desc' ? nb - na : na - nb;
+        }
+        if (hasA !== hasB) {
+          return hasA ? -1 : 1;
+        }
+        return String(a.id || '').localeCompare(String(b.id || '')) * inv;
+      }
       var ka = this.listSortValue(a, this.listSortKey);
       var kb = this.listSortValue(b, this.listSortKey);
-      var inv = this.listSortDir === 'desc' ? -1 : 1;
       if (this.listSortKey === 'deps') {
         if (ka < kb) return -1 * inv;
         if (ka > kb) return 1 * inv;

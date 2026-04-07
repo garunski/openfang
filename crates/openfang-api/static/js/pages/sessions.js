@@ -59,7 +59,7 @@ function sessionsPage() {
       if (agent) {
         Alpine.store('app').pendingAgent = agent;
       }
-      location.hash = 'agents';
+      location.hash = 'agents/chat';
     },
 
     deleteSession(sessionId) {

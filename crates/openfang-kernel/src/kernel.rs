@@ -11,7 +11,8 @@ use crate::registry::AgentRegistry;
 use crate::scheduler::AgentScheduler;
 use crate::supervisor::Supervisor;
 use crate::triggers::{TriggerEngine, TriggerId, TriggerPattern};
-use crate::workflow::{StepAgent, Workflow, WorkflowEngine, WorkflowId, WorkflowRunId};
+use crate::workflow::{StepAgent, StepMode, Workflow, WorkflowEngine, WorkflowId, WorkflowRunId};
+use openfang_types::project::{Project, ProjectId};
 
 use openfang_memory::MemorySubstrate;
 use openfang_runtime::agent_loop::{
@@ -3782,12 +3783,98 @@ impl OpenFangKernel {
         self.workflows.register(workflow).await
     }
 
+    /// Resolve a workflow step's agent from the registry (by id or name).
+    pub fn resolve_workflow_agent(&self, agent_ref: &StepAgent) -> Option<(AgentId, String)> {
+        match agent_ref {
+            StepAgent::ById { id } => {
+                let agent_id: AgentId = id.parse().ok()?;
+                let entry = self.registry.get(agent_id)?;
+                Some((agent_id, entry.name.clone()))
+            }
+            StepAgent::ByName { name } => {
+                let entry = self.registry.find_by_name(name)?;
+                Some((entry.id, entry.name.clone()))
+            }
+        }
+    }
+
+    /// True when the agent is explicitly bound to the project or its workspace is under a spoke.
+    pub fn agent_assigned_to_project(&self, project: &Project, agent_id: AgentId) -> bool {
+        let id_str = agent_id.to_string();
+        if project.bound_agents.iter().any(|a| a == &id_str) {
+            return true;
+        }
+        let Some(entry) = self.registry.get(agent_id) else {
+            return false;
+        };
+        let Some(ws) = entry.manifest.workspace.as_ref() else {
+            return false;
+        };
+        project.workspace_in_spoke_scope(ws.as_path())
+    }
+
+    fn validate_workflow_project_agents(
+        &self,
+        workflow: &Workflow,
+        project_id: ProjectId,
+    ) -> Result<(), KernelError> {
+        let project = self.project_store.get(project_id).ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                "Unknown project id {project_id}"
+            )))
+        })?;
+        for step in &workflow.steps {
+            if matches!(step.mode, StepMode::Collect) {
+                continue;
+            }
+            let (agent_id, agent_name) = self.resolve_workflow_agent(&step.agent).ok_or_else(
+                || {
+                    KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                        "Agent not found for workflow step '{}'",
+                        step.name
+                    )))
+                },
+            )?;
+            if !self.agent_assigned_to_project(&project, agent_id) {
+                return Err(KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                    "Agent '{agent_name}' is not assigned to this project (step '{}')",
+                    step.name
+                ))));
+            }
+        }
+        Ok(())
+    }
+
     /// Run a workflow pipeline end-to-end.
+    ///
+    /// `project_context` is set when starting from the dashboard project view. It is merged with
+    /// [`Workflow::project_id`]: if the workflow is assigned to a project, every step agent must
+    /// belong to that project; if only `project_context` is set, the same checks apply for that project.
     pub async fn run_workflow(
         &self,
         workflow_id: WorkflowId,
         input: String,
+        project_context: Option<ProjectId>,
     ) -> KernelResult<(WorkflowRunId, String)> {
+        let wf_def = self.workflows.get_workflow(workflow_id).await.ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
+        })?;
+
+        let effective_project = match (wf_def.project_id, project_context) {
+            (Some(wf_pid), Some(req_pid)) if wf_pid != req_pid => {
+                return Err(KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                    "Workflow is assigned to project {wf_pid} but run was requested for project {req_pid}"
+                ))));
+            }
+            (Some(wf_pid), _) => Some(wf_pid),
+            (None, Some(req_pid)) => Some(req_pid),
+            (None, None) => None,
+        };
+
+        if let Some(pid) = effective_project {
+            self.validate_workflow_project_agents(&wf_def, pid)?;
+        }
+
         let run_id = self
             .workflows
             .create_run(workflow_id, input)
@@ -3796,20 +3883,7 @@ impl OpenFangKernel {
                 KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
             })?;
 
-        // Agent resolver: looks up by name or ID in the registry
-        let resolver = |agent_ref: &StepAgent| -> Option<(AgentId, String)> {
-            match agent_ref {
-                StepAgent::ById { id } => {
-                    let agent_id: AgentId = id.parse().ok()?;
-                    let entry = self.registry.get(agent_id)?;
-                    Some((agent_id, entry.name.clone()))
-                }
-                StepAgent::ByName { name } => {
-                    let entry = self.registry.find_by_name(name)?;
-                    Some((entry.id, entry.name.clone()))
-                }
-            }
-        };
+        let resolver = |agent_ref: &StepAgent| self.resolve_workflow_agent(agent_ref);
 
         // Message sender: sends to agent and returns (output, in_tokens, out_tokens)
         let send_message = |agent_id: AgentId, message: String| async move {
@@ -5550,7 +5624,7 @@ impl OpenFangKernel {
                     }
                 };
 
-                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input)).await {
+                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input, None)).await {
                     Ok(Ok((_run_id, output))) => {
                         match cron_deliver_response(self, agent_id, &output, &delivery).await {
                             Ok(()) => {

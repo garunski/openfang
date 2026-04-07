@@ -185,6 +185,10 @@ async fn start_test_server_with_provider(
             axum::routing::delete(routes::unbind_project_agent),
         )
         .route(
+            "/api/projects/{id}/workflows/{workflow_id}/run",
+            axum::routing::post(routes::run_project_workflow),
+        )
+        .route(
             "/api/projects/{id}/spokes",
             axum::routing::get(routes::list_project_spokes),
         )
@@ -199,6 +203,14 @@ async fn start_test_server_with_provider(
         .route(
             "/api/projects/{id}/backlog/tasks/reorder",
             axum::routing::post(routes::backlog_reorder_tasks),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/cleanup/execute",
+            axum::routing::post(routes::backlog_cleanup_tasks_execute),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/cleanup",
+            axum::routing::get(routes::backlog_cleanup_tasks_preview),
         )
         .route(
             "/api/projects/{id}/backlog/tasks/{task_id}/complete",
@@ -216,7 +228,9 @@ async fn start_test_server_with_provider(
         )
         .route(
             "/api/projects/{id}/backlog/docs/{doc_id}",
-            axum::routing::get(routes::backlog_get_doc).put(routes::backlog_update_doc),
+            axum::routing::get(routes::backlog_get_doc)
+                .put(routes::backlog_update_doc)
+                .delete(routes::backlog_delete_doc),
         )
         .route(
             "/api/projects/{id}/backlog/docs",
@@ -235,20 +249,19 @@ async fn start_test_server_with_provider(
             axum::routing::post(routes::backlog_archive_milestone),
         )
         .route(
+            "/api/projects/{id}/backlog/milestones/{milestone_id}",
+            axum::routing::put(routes::backlog_update_milestone)
+                .delete(routes::backlog_delete_milestone),
+        )
+        .route(
             "/api/projects/{id}/backlog/milestones",
             axum::routing::get(routes::backlog_list_milestones).post(routes::backlog_create_milestone),
         )
         .route(
-            "/api/projects/{id}/backlog/drafts/{draft_id}/promote",
-            axum::routing::post(routes::backlog_promote_draft),
-        )
-        .route(
-            "/api/projects/{id}/backlog/drafts",
-            axum::routing::get(routes::backlog_list_drafts),
-        )
-        .route(
             "/api/projects/{id}/backlog/decisions/{decision_id}",
-            axum::routing::get(routes::backlog_get_decision).put(routes::backlog_update_decision),
+            axum::routing::get(routes::backlog_get_decision)
+                .put(routes::backlog_update_decision)
+                .delete(routes::backlog_delete_decision),
         )
         .route(
             "/api/projects/{id}/backlog/decisions",
@@ -257,6 +270,10 @@ async fn start_test_server_with_provider(
         .route(
             "/api/projects/{id}/backlog/search",
             axum::routing::get(routes::backlog_search),
+        )
+        .route(
+            "/api/projects/{id}/backlog/overview",
+            axum::routing::get(routes::backlog_overview),
         )
         .route(
             "/api/projects/{id}/backlog/statistics",
@@ -460,7 +477,7 @@ async fn test_project_backlog_endpoints() {
     .unwrap();
     std::fs::write(
         docs_dir.join("doc-1 - Overview.md"),
-        "---\nid: doc-1\ntitle: Overview\ntype: guide\n---\n\n# Hi\n",
+        "---\nid: doc-1\ntitle: Overview\ntype: guide\ncreated_date: '2026-01-02'\n---\n\n# Hi\n",
     )
     .unwrap();
 
@@ -524,6 +541,23 @@ async fn test_project_backlog_endpoints() {
 
     let resp = client
         .get(format!(
+            "{}/api/projects/{}/backlog/overview",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let ov: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(ov["activeTaskCount"], 1);
+    assert_eq!(ov["completedTaskCount"], 0);
+    assert_eq!(ov["documentCount"], 1);
+    assert_eq!(ov["decisionCount"], 0);
+    assert_eq!(ov["milestoneCount"], 0);
+    assert_eq!(ov["taskStatistics"]["total"], 1);
+
+    let resp = client
+        .get(format!(
             "{}/api/projects/00000000-0000-0000-0000-000000000099/tasks",
             server.base_url
         ))
@@ -565,7 +599,14 @@ async fn test_backlog_store_task_api() {
     let proj = home.join("backlog-api-proj");
     let backlog = proj.join("backlog");
     let tasks_dir = backlog.join("tasks");
+    let milestones_dir = backlog.join("milestones");
     std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::create_dir_all(&milestones_dir).unwrap();
+    std::fs::write(
+        milestones_dir.join("milestone-1 - ship.md"),
+        "---\nid: MS-1\ntitle: Ship\n---\n\n## Description\n\nx\n",
+    )
+    .unwrap();
     std::fs::write(
         tasks_dir.join("task-1 - Alpha.md"),
         "---\nid: TASK-1\ntitle: Alpha\nstatus: Open\npriority: high\nlabels:\n  - rust\nassignee:\n  - alice\ncreated_date: '2026-01-02'\n---\n\n",
@@ -660,6 +701,32 @@ async fn test_backlog_store_task_api() {
     assert_eq!(up["status"], "In Progress");
 
     let resp = client
+        .put(format!(
+            "{}/api/projects/{}/backlog/tasks/TASK-1",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "milestone": "MS-1" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let m1: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(m1["milestone"], "MS-1");
+
+    let resp = client
+        .put(format!(
+            "{}/api/projects/{}/backlog/tasks/TASK-1",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "milestone": "" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let m0: serde_json::Value = resp.json().await.unwrap();
+    assert!(m0["milestone"].is_null());
+
+    let resp = client
         .post(format!(
             "{}/api/projects/{}/backlog/tasks/reorder",
             server.base_url, pid
@@ -713,6 +780,83 @@ async fn test_backlog_store_task_api() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 404);
+}
+
+#[tokio::test]
+async fn test_backlog_cleanup_done_tasks_api() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj = home.join("backlog-cleanup-proj");
+    let backlog = proj.join("backlog");
+    let tasks_dir = backlog.join("tasks");
+    let completed_dir = backlog.join("completed");
+    std::fs::create_dir_all(&tasks_dir).unwrap();
+    std::fs::create_dir_all(&completed_dir).unwrap();
+    std::fs::write(
+        tasks_dir.join("task-99 - old done.md"),
+        "---\nid: TASK-OLD\ntitle: Stale done\nstatus: Done\ncreated_date: 2020-01-01\nupdated_date: 2020-01-02\n---\n\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tasks_dir.join("task-98 - recent done.md"),
+        "---\nid: TASK-NEW\ntitle: Recent done\nstatus: Done\ncreated_date: 2026-04-01\n---\n\n",
+    )
+    .unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "bcln",
+            "path": proj.to_str().unwrap(),
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/backlog/tasks/cleanup?age=30",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let prev: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(prev["count"], 1);
+    assert_eq!(prev["tasks"][0]["id"], "TASK-OLD");
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/backlog/tasks/cleanup/execute",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "age": 30 }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let done: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(done["movedCount"], 1);
+    assert_eq!(done["totalCount"], 1);
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/backlog/tasks",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let active: Vec<serde_json::Value> = resp.json().await.unwrap();
+    let ids: Vec<&str> = active.iter().filter_map(|t| t["id"].as_str()).collect();
+    assert!(ids.contains(&"TASK-NEW"));
+    assert!(!ids.contains(&"TASK-OLD"));
 }
 
 #[tokio::test]
@@ -843,6 +987,18 @@ async fn test_backlog_docs_api() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 201);
+    let new_doc: serde_json::Value = resp.json().await.unwrap();
+    let new_id = new_doc["id"].as_str().unwrap();
+
+    let resp = client
+        .delete(format!(
+            "{}/api/projects/{}/backlog/docs/{}",
+            server.base_url, pid, new_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
 
     let resp = client
         .put(format!(
@@ -860,19 +1016,17 @@ async fn test_backlog_docs_api() {
 }
 
 #[tokio::test]
-async fn test_backlog_decisions_drafts_milestones_completed_api() {
+async fn test_backlog_decisions_milestones_completed_api() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-ddmc-proj");
     let backlog = proj.join("backlog");
     let decisions = backlog.join("decisions");
-    let drafts = backlog.join("drafts");
     let milestones = backlog.join("milestones");
     let tasks = backlog.join("tasks");
     let completed = backlog.join("completed");
     std::fs::create_dir_all(&decisions).unwrap();
-    std::fs::create_dir_all(&drafts).unwrap();
     std::fs::create_dir_all(&milestones).unwrap();
     std::fs::create_dir_all(&tasks).unwrap();
     std::fs::create_dir_all(&completed).unwrap();
@@ -900,8 +1054,8 @@ e
     )
     .unwrap();
     std::fs::write(
-        drafts.join("draft-1.md"),
-        "---\nid: DRAFT-1\ntitle: Promo me\nstatus: Draft\ncreated_date: 2026-01-01\n---\n\n",
+        tasks.join("task-3 - extra.md"),
+        "---\nid: TASK-3\ntitle: Extra open\nstatus: Open\ncreated_date: 2026-01-01\n---\n\n",
     )
     .unwrap();
     std::fs::write(
@@ -975,36 +1129,26 @@ e
     assert_eq!(upd["context"], "ctx");
 
     let resp = client
-        .get(format!(
-            "{}/api/projects/{}/backlog/drafts",
-            server.base_url, pid
-        ))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), 200);
-    assert_eq!(resp.json::<Vec<serde_json::Value>>().await.unwrap().len(), 1);
-
-    let resp = client
-        .post(format!(
-            "{}/api/projects/{}/backlog/drafts/DRAFT-1/promote",
+        .delete(format!(
+            "{}/api/projects/{}/backlog/decisions/DEC-2",
             server.base_url, pid
         ))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 204);
-
     let resp = client
         .get(format!(
-            "{}/api/projects/{}/backlog/drafts",
+            "{}/api/projects/{}/backlog/decisions",
             server.base_url, pid
         ))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert!(resp.json::<Vec<serde_json::Value>>().await.unwrap().is_empty());
+    let decs_after: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(decs_after.len(), 1);
+    assert_eq!(decs_after[0]["id"], "DEC-1");
 
     let resp = client
         .get(format!(
@@ -1050,6 +1194,20 @@ e
     assert_eq!(m2["taskTotal"], 0);
 
     let resp = client
+        .put(format!(
+            "{}/api/projects/{}/backlog/milestones/MS-2",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "title": "Beta renamed", "description": "updated body" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let m2u: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(m2u["title"], "Beta renamed");
+    assert_eq!(m2u["description"], "updated body");
+
+    let resp = client
         .post(format!(
             "{}/api/projects/{}/backlog/milestones/MS-2/archive",
             server.base_url, pid
@@ -1086,6 +1244,27 @@ e
     assert_eq!(resp.status(), 200);
     let arch: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert!(arch.iter().any(|m| m["id"] == "MS-2"));
+
+    let resp = client
+        .delete(format!(
+            "{}/api/projects/{}/backlog/milestones/MS-2",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 204);
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/backlog/milestones/archived",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let arch2: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(!arch2.iter().any(|m| m["id"] == "MS-2"));
 
     let resp = client
         .get(format!(
@@ -1159,10 +1338,10 @@ async fn test_backlog_search_and_statistics_api() {
     assert_eq!(resp.status(), 200);
     let st: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(st["total"], 2);
-    assert_eq!(st["status_counts"]["Open"], 1);
-    assert_eq!(st["status_counts"]["Done"], 1);
-    assert_eq!(st["priority_counts"]["high"], 1);
-    assert_eq!(st["priority_counts"]["low"], 1);
+    assert_eq!(st["statusCounts"]["Open"], 1);
+    assert_eq!(st["statusCounts"]["Done"], 1);
+    assert_eq!(st["priorityCounts"]["high"], 1);
+    assert_eq!(st["priorityCounts"]["low"], 1);
 
     let resp = client
         .get(format!(
@@ -1635,6 +1814,104 @@ async fn test_workflow_crud() {
     assert_eq!(workflows.len(), 1);
     assert_eq!(workflows[0]["name"], "test-workflow");
     assert_eq!(workflows[0]["steps"], 1);
+    assert!(workflows[0]["project_id"].is_null());
+}
+
+#[tokio::test]
+async fn test_project_workflow_requires_assigned_agents() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj_root = home.join("wfproj");
+    std::fs::create_dir_all(proj_root.join("backlog")).unwrap();
+    let spoke = proj_root.join("spoke1");
+    std::fs::create_dir_all(&spoke).unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "wfproj",
+            "path": proj_root.to_str().unwrap(),
+            "spokes": [{"name": "s1", "path": "spoke1", "labels": []}],
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap().to_string();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap().to_string();
+    let agent_name = body["name"].as_str().unwrap().to_string();
+
+    let resp = client
+        .post(format!("{}/api/workflows", server.base_url))
+        .json(&serde_json::json!({
+            "name": "proj-wf",
+            "description": "",
+            "project_id": pid,
+            "steps": [{
+                "name": "s1",
+                "agent_name": agent_name,
+                "prompt": "{{input}}",
+                "mode": "sequential",
+                "timeout_secs": 5
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let wf_id = body["workflow_id"].as_str().unwrap().to_string();
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/workflows/{}/run",
+            server.base_url, pid, wf_id
+        ))
+        .json(&serde_json::json!({"input": "hi"}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        err["error"].as_str().unwrap().contains("not assigned"),
+        "{}",
+        err["error"].as_str().unwrap()
+    );
+
+    let resp = client
+        .post(format!("{}/api/projects/{}/agents", server.base_url, pid))
+        .json(&serde_json::json!({"agent_id": agent_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/workflows/{}/run",
+            server.base_url, pid, wf_id
+        ))
+        .json(&serde_json::json!({"input": "hi"}))
+        .send()
+        .await
+        .unwrap();
+    assert_ne!(
+        resp.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "validation should pass after bind"
+    );
 }
 
 #[tokio::test]

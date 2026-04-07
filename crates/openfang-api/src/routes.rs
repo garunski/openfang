@@ -11,6 +11,7 @@ use openfang_kernel::triggers::{TriggerId, TriggerPattern};
 use openfang_kernel::workflow::{
     ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
 };
+use openfang_kernel::error::KernelError;
 use openfang_kernel::{BacklogStore, BacklogWatcherManager, OpenFangKernel};
 use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
@@ -853,11 +854,48 @@ pub async fn create_workflow(
         });
     }
 
+    let project_id: Option<ProjectId> = match req.get("project_id") {
+        None => None,
+        Some(v) if v.is_null() => None,
+        Some(v) => {
+            let Some(s) = v.as_str() else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "project_id must be a string or null"})),
+                );
+            };
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                match s.parse::<ProjectId>() {
+                    Ok(p) => Some(p),
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({"error": "Invalid project_id"})),
+                        );
+                    }
+                }
+            }
+        }
+    };
+
+    if let Some(pid) = project_id {
+        if state.kernel.project_store.get(pid).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Project not found"})),
+            );
+        }
+    }
+
     let workflow = Workflow {
         id: WorkflowId::new(),
         name,
         description,
         steps,
+        project_id,
         created_at: chrono::Utc::now(),
     };
 
@@ -898,6 +936,7 @@ pub async fn list_workflows(State(state): State<Arc<AppState>>) -> impl IntoResp
                 "name": w.name,
                 "description": w.description,
                 "steps": w.steps.len(),
+                "project_id": w.project_id.map(|p| p.to_string()),
                 "created_at": w.created_at.to_rfc3339(),
             })
         })
@@ -923,7 +962,7 @@ pub async fn run_workflow(
 
     let input = req["input"].as_str().unwrap_or("").to_string();
 
-    match state.kernel.run_workflow(workflow_id, input).await {
+    match state.kernel.run_workflow(workflow_id, input, None).await {
         Ok((run_id, output)) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -932,12 +971,86 @@ pub async fn run_workflow(
                 "status": "completed",
             })),
         ),
+        Err(KernelError::OpenFang(OpenFangError::InvalidInput(msg))) => {
+            tracing::warn!("Workflow run rejected for {id}: {msg}");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": msg})),
+            )
+        }
         Err(e) => {
             tracing::warn!("Workflow run failed for {id}: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Workflow execution failed"})),
             )
+        }
+    }
+}
+
+/// POST /api/projects/:id/workflows/:workflow_id/run — Run a workflow in project context.
+///
+/// Validates [`Workflow::project_id`] matches the URL when set, and that every step agent is
+/// assigned to the project (explicit bind or workspace under a spoke).
+pub async fn run_project_workflow(
+    State(state): State<Arc<AppState>>,
+    Path((id, wf_path_id)): Path<(String, String)>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if state.kernel.project_store.get(pid).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    }
+
+    let workflow_id = WorkflowId(match wf_path_id.parse() {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+            )
+                .into_response();
+        }
+    });
+
+    let input = req["input"].as_str().unwrap_or("").to_string();
+
+    match state
+        .kernel
+        .run_workflow(workflow_id, input, Some(pid))
+        .await
+    {
+        Ok((run_id, output)) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "run_id": run_id.to_string(),
+                "output": output,
+                "status": "completed",
+            })),
+        )
+            .into_response(),
+        Err(KernelError::OpenFang(OpenFangError::InvalidInput(msg))) => {
+            tracing::warn!("Project workflow run rejected for {wf_path_id}: {msg}");
+            (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": msg})),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::warn!("Project workflow run failed for {wf_path_id}: {e}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Workflow execution failed"})),
+            )
+                .into_response()
         }
     }
 }
@@ -987,6 +1100,7 @@ pub async fn get_workflow(
                 "name": w.name,
                 "description": w.description,
                 "steps": w.steps,
+                "project_id": w.project_id.map(|p| p.to_string()),
                 "created_at": w.created_at.to_rfc3339(),
             })),
         ),
@@ -1012,6 +1126,13 @@ pub async fn update_workflow(
             );
         }
     });
+
+    let Some(existing) = state.kernel.workflows.get_workflow(workflow_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Workflow not found"})),
+        );
+    };
 
     let name = req["name"].as_str().unwrap_or("unnamed").to_string();
     let description = req["description"].as_str().unwrap_or("").to_string();
@@ -1076,12 +1197,49 @@ pub async fn update_workflow(
         });
     }
 
+    let project_id: Option<ProjectId> = match req.get("project_id") {
+        None => existing.project_id,
+        Some(v) if v.is_null() => None,
+        Some(v) => {
+            let Some(s) = v.as_str() else {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "project_id must be a string or null"})),
+                );
+            };
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                match s.parse::<ProjectId>() {
+                    Ok(p) => Some(p),
+                    Err(_) => {
+                        return (
+                            StatusCode::BAD_REQUEST,
+                            Json(serde_json::json!({"error": "Invalid project_id"})),
+                        );
+                    }
+                }
+            }
+        }
+    };
+
+    if let Some(pid) = project_id {
+        if state.kernel.project_store.get(pid).is_none() {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Project not found"})),
+            );
+        }
+    }
+
     let updated = Workflow {
         id: workflow_id,
         name,
         description,
         steps,
-        created_at: chrono::Utc::now(), // preserved by engine
+        project_id,
+        created_at: existing.created_at,
     };
 
     if state
@@ -1149,13 +1307,14 @@ pub(super) fn parse_project_id_param(
 mod backlog_routes;
 
 pub use backlog_routes::{
-    backlog_archive_milestone, backlog_complete_task, backlog_create_decision, backlog_create_doc,
-    backlog_create_milestone, backlog_create_task, backlog_delete_task, backlog_get_config,
-    backlog_get_decision, backlog_get_doc, backlog_get_task, backlog_list_archived_milestones,
-    backlog_list_completed, backlog_list_decisions, backlog_list_docs_tree, backlog_list_drafts,
-    backlog_list_milestones, backlog_list_tasks, backlog_promote_draft, backlog_put_task,
-    backlog_reorder_tasks, backlog_search, backlog_statistics, backlog_update_decision,
-    backlog_update_doc,
+    backlog_archive_milestone, backlog_cleanup_tasks_execute, backlog_cleanup_tasks_preview,
+    backlog_complete_task, backlog_create_decision, backlog_create_doc, backlog_create_milestone,
+    backlog_create_task, backlog_delete_decision, backlog_delete_doc, backlog_delete_milestone,
+    backlog_delete_task, backlog_get_config, backlog_get_decision, backlog_get_doc,
+    backlog_get_task, backlog_list_archived_milestones, backlog_list_completed,
+    backlog_list_decisions, backlog_list_docs_tree, backlog_list_milestones, backlog_list_tasks,
+    backlog_overview, backlog_put_task, backlog_reorder_tasks, backlog_search, backlog_statistics,
+    backlog_update_decision, backlog_update_doc, backlog_update_milestone,
 };
 
 fn project_store_error_response(

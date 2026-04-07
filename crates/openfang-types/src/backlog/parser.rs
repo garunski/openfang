@@ -66,6 +66,44 @@ pub fn extract_section(content: &str, key: &str) -> Option<String> {
     Some(rest[..e].trim().to_string())
 }
 
+/// Remove first `<!-- SECTION:KEY:BEGIN -->` … `<!-- SECTION:KEY:END -->` block.
+fn strip_one_section_block(s: &str) -> Option<String> {
+    const PREFIX: &str = "<!-- SECTION:";
+    let i = s.find(PREFIX)?;
+    let after = &s[i + PREFIX.len()..];
+    let key_end = after.find(":BEGIN -->")?;
+    let key = &after[..key_end];
+    let open_total = i + PREFIX.len() + key_end + ":BEGIN -->".len();
+    let from_inner = &s[open_total..];
+    let end_pat = format!("<!-- SECTION:{key}:END -->");
+    let ej = from_inner.find(&end_pat)?;
+    let remove_end = open_total + ej + end_pat.len();
+    Some(format!("{}{}", &s[..i], &s[remove_end..]))
+}
+
+fn remove_marker_region(s: &str, start: &str, end: &str) -> String {
+    let Some(i) = s.find(start) else {
+        return s.to_string();
+    };
+    let from_start = &s[i + start.len()..];
+    let Some(j) = from_start.find(end) else {
+        return s.to_string();
+    };
+    let remove_end = i + start.len() + j + end.len();
+    format!("{}{}", &s[..i], &s[remove_end..])
+}
+
+/// Markdown outside AC / DOD / SECTION markers (legacy tasks with no `SECTION:DESCRIPTION` wrapper).
+fn orphan_body_outside_markers(body: &str) -> String {
+    let mut s = body.replace("\r\n", "\n");
+    s = remove_marker_region(&s, "<!-- AC:BEGIN -->", "<!-- AC:END -->");
+    s = remove_marker_region(&s, "<!-- DOD:BEGIN -->", "<!-- DOD:END -->");
+    while let Some(next) = strip_one_section_block(&s) {
+        s = next;
+    }
+    s.trim().to_string()
+}
+
 fn checklist_line_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"^\s*-\s*\[([ xX])\]\s*(.*)$").expect("checklist regex"))
@@ -265,6 +303,66 @@ fn extract_h2_section(content: &str, title: &str) -> Option<String> {
     None
 }
 
+/// First non-empty `## {title}` body among candidate titles (tasks often omit `SECTION:*` markers).
+fn h2_fallback(body: &str, titles: &[&str]) -> Option<String> {
+    for title in titles {
+        if let Some(s) = extract_h2_section(body, title) {
+            if let Some(ne) = non_empty(s) {
+                return Some(ne);
+            }
+        }
+    }
+    None
+}
+
+/// Remove one `## {title}` … block (through the line before the next `## ` heading).
+fn strip_one_h2_block(s: &str, title: &str) -> String {
+    let normalized = s.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.lines().collect();
+    let header = format!("## {title}");
+    let mut i = 0usize;
+    let mut out: Vec<&str> = Vec::new();
+    while i < lines.len() {
+        if lines[i].trim() == header {
+            i += 1;
+            while i < lines.len() {
+                let t = lines[i].trim_start();
+                if t.starts_with("## ") {
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        out.push(lines[i]);
+        i += 1;
+    }
+    out.join("\n")
+}
+
+/// Strip common task `##` headings so orphan prose does not duplicate plan/notes/summary.
+fn strip_standard_task_h2_headings(body: &str) -> String {
+    const HEADINGS: &[&str] = &[
+        "Implementation Plan",
+        "Implementation plan",
+        "Implementation Notes",
+        "Implementation notes",
+        "Final Summary",
+        "Final summary",
+        "Acceptance Criteria",
+        "Definition of Done",
+        "Description",
+        "Plan",
+        "Notes",
+        "Summary",
+    ];
+    let mut s = body.to_string();
+    for h in HEADINGS {
+        s = strip_one_h2_block(&s, h);
+    }
+    s
+}
+
 /// Full task: YAML frontmatter + structured body sections.
 pub fn parse_task(content: &str) -> Result<BacklogTask, BacklogParseError> {
     let (map, body) = parse_frontmatter(content)?;
@@ -304,12 +402,58 @@ pub fn parse_task(content: &str) -> Result<BacklogTask, BacklogParseError> {
     let on_status_change = map_get_str(&map, &["on_status_change", "onStatusChange"]);
 
     let raw_content = body.clone();
-    let description = extract_section(&body, "DESCRIPTION").and_then(non_empty);
-    let implementation_plan = extract_section(&body, "PLAN").and_then(non_empty);
-    let implementation_notes = extract_section(&body, "NOTES").and_then(non_empty);
-    let final_summary = extract_section(&body, "FINAL_SUMMARY").and_then(non_empty);
+    let mut description = extract_section(&body, "DESCRIPTION").and_then(non_empty);
+    if description.is_none() {
+        description = h2_fallback(&body, &["Description", "description"]);
+    }
+
+    let mut implementation_plan = extract_section(&body, "PLAN").and_then(non_empty);
+    if implementation_plan.is_none() {
+        implementation_plan = h2_fallback(
+            &body,
+            &[
+                "Implementation Plan",
+                "Implementation plan",
+                "Plan",
+                "plan",
+            ],
+        );
+    }
+
+    let mut implementation_notes = extract_section(&body, "NOTES").and_then(non_empty);
+    if implementation_notes.is_none() {
+        implementation_notes = h2_fallback(
+            &body,
+            &[
+                "Implementation Notes",
+                "Implementation notes",
+                "Notes",
+                "notes",
+            ],
+        );
+    }
+
+    let mut final_summary = extract_section(&body, "FINAL_SUMMARY").and_then(non_empty);
+    if final_summary.is_none() {
+        final_summary = h2_fallback(
+            &body,
+            &[
+                "Final Summary",
+                "Final summary",
+                "Summary",
+                "summary",
+            ],
+        );
+    }
+
     let acceptance_criteria = parse_acceptance_criteria(&body);
     let definition_of_done = parse_definition_of_done(&body);
+
+    if description.is_none() {
+        let remainder = orphan_body_outside_markers(&body);
+        let remainder = strip_standard_task_h2_headings(&remainder);
+        description = non_empty(remainder);
+    }
 
     Ok(BacklogTask {
         id,
@@ -573,6 +717,42 @@ Ship it.
         assert!(t.assignee.is_empty());
         assert!(t.reporter.is_none());
         assert!(t.acceptance_criteria.is_empty());
+    }
+
+    #[test]
+    fn parse_task_legacy_freeform_body_becomes_description() {
+        let raw = "---\nid: TASK-L1\ntitle: Leg\ncreated_date: 2026-01-01\n---\n\nThis is legacy prose.\n\n<!-- AC:BEGIN -->\n- [ ] One\n<!-- AC:END -->\n";
+        let t = parse_task(raw).unwrap();
+        assert_eq!(t.description.as_deref(), Some("This is legacy prose."));
+        assert_eq!(t.acceptance_criteria.len(), 1);
+    }
+
+    #[test]
+    fn parse_task_h2_plan_and_notes_without_section_markers() {
+        let raw = r#"---
+id: TASK-H2
+title: H2 task
+created_date: 2026-01-01
+---
+
+## Description
+Free desc.
+
+## Implementation Plan
+- step one
+
+## Implementation Notes
+done thing
+
+<!-- AC:BEGIN -->
+- [ ] ac
+<!-- AC:END -->
+"#;
+        let t = parse_task(raw).unwrap();
+        assert_eq!(t.description.as_deref(), Some("Free desc."));
+        assert!(t.implementation_plan.as_deref().unwrap().contains("step one"));
+        assert!(t.implementation_notes.as_deref().unwrap().contains("done thing"));
+        assert_eq!(t.acceptance_criteria.len(), 1);
     }
 
     #[test]

@@ -29,12 +29,16 @@ function backlogBoardMixins() {
       this.boardLoading = false;
     },
 
-    async loadBoardData(force) {
+    async loadBoardData(force, silent) {
       if (!this.selectedProject) return;
       if (!force && this._boardLoaded) return;
       var pid = this.selectedProject.id;
-      this.boardLoading = true;
-      this.boardError = '';
+      var hideSpinner =
+        !!silent && (this.boardTasks.length > 0 || this.boardStatuses.length > 0);
+      if (!hideSpinner) {
+        this.boardLoading = true;
+        this.boardError = '';
+      }
       try {
         var cfg = await OpenFangAPI.get(
           '/api/projects/' + encodeURIComponent(pid) + '/backlog/config'
@@ -47,9 +51,9 @@ function backlogBoardMixins() {
         this.ensureBoardColumnsCoverTasks();
         this._boardLoaded = true;
       } catch (e) {
-        this.boardError = e.message || 'Failed to load board';
+        if (!hideSpinner) this.boardError = e.message || 'Failed to load board';
       }
-      this.boardLoading = false;
+      if (!hideSpinner) this.boardLoading = false;
     },
 
     ensureBoardColumnsCoverTasks() {
@@ -123,13 +127,45 @@ function backlogBoardMixins() {
       return this.boardTasksForStatus(statusName).length;
     },
 
-    boardPriorityClass(p) {
-      if (!p) return 'kanban-prio-none';
-      var x = String(p).toLowerCase();
-      if (x === 'high') return 'kanban-prio-high';
-      if (x === 'medium') return 'kanban-prio-medium';
-      if (x === 'low') return 'kanban-prio-low';
-      return 'kanban-prio-none';
+    boardVisibleLabels(task, max) {
+      var n = max != null ? max : 3;
+      var a = (task && task.labels) || [];
+      return a.slice(0, n);
+    },
+
+    boardExtraLabelCount(task, max) {
+      var n = max != null ? max : 3;
+      var a = (task && task.labels) || [];
+      return a.length > n ? a.length - n : 0;
+    },
+
+    boardCardPrioAccentClass(task) {
+      var p = task && task.priority && String(task.priority).toLowerCase();
+      if (p === 'high' || p === 'critical') return 'kanban-card--prio-high';
+      if (p === 'medium') return 'kanban-card--prio-medium';
+      if (p === 'low') return 'kanban-card--prio-low';
+      return 'kanban-card--prio-none';
+    },
+
+    boardCardDateLabel(task) {
+      if (!task) return '';
+      var raw =
+        task.updatedDate ||
+        task.updated_date ||
+        task.createdDate ||
+        task.created_date;
+      if (!raw) return '';
+      var t = Date.parse(raw);
+      if (isNaN(t)) return String(raw).slice(0, 16);
+      var now = Date.now();
+      var day = 86400000;
+      var diff = Math.floor((now - t) / day);
+      if (diff === 0) return 'today';
+      if (diff === 1) return 'yesterday';
+      if (diff > 1 && diff < 7) return diff + 'd ago';
+      if (diff >= 7 && diff < 30) return Math.floor(diff / 7) + 'w ago';
+      if (diff < 0) return 'updated';
+      return String(raw).slice(0, 10);
     },
 
     boardAssigneeInitials(name) {

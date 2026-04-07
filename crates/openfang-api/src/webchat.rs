@@ -8,11 +8,12 @@
 //! - Alpine.js SPA with hash-based routing (10 panels)
 //! - Dark/light theme toggle with system preference detection
 //! - Responsive layout with collapsible sidebar
-//! - Markdown rendering + syntax highlighting (bundled locally)
+//! - Markdown rendering + syntax highlighting + Mermaid diagrams (bundled locally)
 //! - WebSocket real-time chat with HTTP fallback
 //! - Agent management, workflows, memory browser, audit log, and more
 
 use axum::http::header;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 /// Nonce placeholder in compile-time HTML, replaced at request time.
@@ -29,6 +30,26 @@ const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
 
 /// Embedded favicon ICO for browser tabs.
 const FAVICON_ICO: &[u8] = include_bytes!("../static/favicon.ico");
+
+/// Font Awesome 4 webfonts (EasyMDE toolbar icons). CSS uses absolute `/vendor/fa4/…` URLs.
+const FA4_WOFF2: &[u8] = include_bytes!("../static/vendor/fa4/fontawesome-webfont.woff2");
+const FA4_WOFF: &[u8] = include_bytes!("../static/vendor/fa4/fontawesome-webfont.woff");
+
+/// GET /vendor/fa4/{name} — Font Awesome 4 webfonts for the dashboard (public; no auth header on @font-face fetches).
+pub async fn fa4_font(axum::extract::Path(name): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
+    let (bytes, ct): (&[u8], &'static str) = match name.as_str() {
+        "fontawesome-webfont.woff2" => (FA4_WOFF2, "font/woff2"),
+        "fontawesome-webfont.woff" => (FA4_WOFF, "font/woff"),
+        _ => return Err(StatusCode::NOT_FOUND),
+    };
+    Ok((
+        [
+            (header::CONTENT_TYPE, ct),
+            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+        ],
+        bytes,
+    ))
+}
 
 /// GET /logo.png — Serve the OpenFang logo.
 pub async fn logo_png() -> impl IntoResponse {
@@ -117,7 +138,7 @@ pub async fn webchat_page() -> impl IntoResponse {
 /// The embedded HTML/CSS/JS for the OpenFang Dashboard.
 ///
 /// Assembled at compile time from organized static files.
-/// All vendor libraries (Alpine.js, marked.js, highlight.js) are bundled
+/// All vendor libraries (Alpine.js, marked.js, highlight.js, Mermaid, Font Awesome 4, EasyMDE) are bundled
 /// locally — no CDN dependency. Alpine.js is included LAST because it
 /// immediately processes x-data directives and fires alpine:init on load.
 const WEBCHAT_HTML: &str = concat!(
@@ -130,6 +151,10 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/css/components.css"),
     "\n",
     include_str!("../static/vendor/github-dark.min.css"),
+    "\n",
+    include_str!("../static/vendor/font-awesome.min.css"),
+    "\n",
+    include_str!("../static/vendor/easymde.min.css"),
     "\n</style>\n",
     include_str!("../static/index_body.html"),
     // Vendor libs: marked + highlight first (used by app.js), then Chart.js
@@ -140,7 +165,13 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/vendor/highlight.min.js"),
     "\n</script>\n",
     "<script nonce=\"__NONCE__\">\n",
+    include_str!("../static/vendor/easymde.min.js"),
+    "\n</script>\n",
+    "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/vendor/chart.umd.min.js"),
+    "\n</script>\n",
+    "<script nonce=\"__NONCE__\">\n",
+    include_str!("../static/vendor/mermaid.min.js"),
     "\n</script>\n",
     // App code
     "<script nonce=\"__NONCE__\">\n",
@@ -152,6 +183,8 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/js/pages/backlog-board.js"),
     "\n",
+    include_str!("../static/js/pages/backlog-pert.js"),
+    "\n",
     include_str!("../static/js/pages/backlog-list.js"),
     "\n",
     include_str!("../static/js/pages/task-detail-modal.js"),
@@ -159,8 +192,6 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/js/pages/backlog-docs.js"),
     "\n",
     include_str!("../static/js/pages/backlog-decisions.js"),
-    "\n",
-    include_str!("../static/js/pages/backlog-drafts.js"),
     "\n",
     include_str!("../static/js/pages/backlog-milestones.js"),
     "\n",
@@ -201,6 +232,8 @@ const WEBCHAT_HTML: &str = concat!(
     include_str!("../static/js/pages/comms.js"),
     "\n",
     include_str!("../static/js/pages/runtime.js"),
+    "\n",
+    include_str!("../static/js/mermaid-render.js"),
     "\n</script>\n",
     // Alpine.js MUST be last — it processes x-data and fires alpine:init
     "<script nonce=\"__NONCE__\">\n",
@@ -234,26 +267,47 @@ mod dashboard_embed_tests {
             "expected kanban board in dashboard HTML"
         );
         assert!(
+            super::WEBCHAT_HTML.contains("pert-chart-stage")
+                && super::WEBCHAT_HTML.contains("loadPertTab"),
+            "expected PERT chart tab wiring"
+        );
+        assert!(
             super::WEBCHAT_HTML.contains("task-list-table")
-                && super::WEBCHAT_HTML.contains("openBacklogTaskDetail"),
+                && super::WEBCHAT_HTML.contains("openBacklogTaskDetail")
+                && super::WEBCHAT_HTML.contains("openBacklogCleanupModal"),
             "expected task list + backlog detail modal wiring"
         );
         assert!(
             super::WEBCHAT_HTML.contains("loadDocsTab")
                 && super::WEBCHAT_HTML.contains("docNavRows")
-                && super::WEBCHAT_HTML.contains("decisionsSelectRow"),
+                && super::WEBCHAT_HTML.contains("openDocCreateModal")
+                && super::WEBCHAT_HTML.contains("submitDocEditor")
+                && super::WEBCHAT_HTML.contains("decisionsSelectRow")
+                && super::WEBCHAT_HTML.contains("openDecisionCreateModal")
+                && super::WEBCHAT_HTML.contains("submitDecisionEditor")
+                && super::WEBCHAT_HTML.contains("confirmDeleteDoc")
+                && super::WEBCHAT_HTML.contains("confirmDeleteDecision")
+                && super::WEBCHAT_HTML.contains("confirmDeleteMilestone"),
             "expected backlog docs + decisions dashboard wiring"
         );
         assert!(
-            super::WEBCHAT_HTML.contains("draftPromoteToTask")
-                && super::WEBCHAT_HTML.contains("milestoneArchive")
+            super::WEBCHAT_HTML.contains("milestoneArchive")
+                && super::WEBCHAT_HTML.contains("openMilestoneCreateModal")
+                && super::WEBCHAT_HTML.contains("submitMilestoneEditor")
+                && super::WEBCHAT_HTML.contains("openMilestoneAddTaskModal")
+                && super::WEBCHAT_HTML.contains("submitMilestoneAddTask")
                 && super::WEBCHAT_HTML.contains("onBacklogSearchInput"),
-            "expected backlog drafts, milestones, and search wiring"
+            "expected backlog milestones and search wiring"
         );
         assert!(
             super::WEBCHAT_HTML.contains("/api/backlog/ws")
                 && super::WEBCHAT_HTML.contains("openfang-backlog-updated"),
             "expected backlog live WebSocket client wiring"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("of-mermaid-pending")
+                && super::WEBCHAT_HTML.contains("renderMermaidIn"),
+            "expected Mermaid markdown wiring"
         );
     }
 }

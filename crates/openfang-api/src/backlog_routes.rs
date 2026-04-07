@@ -54,6 +54,18 @@ where
 }
 
 #[derive(Debug, Deserialize)]
+pub struct BacklogTasksCleanupQuery {
+    /// Days: tasks with reference date before `today - age` are eligible (Backlog.md cleanup).
+    pub age: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklogTasksCleanupExecuteBody {
+    pub age: u32,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct BacklogTasksListQuery {
     #[serde(default)]
     pub status: Option<String>,
@@ -87,6 +99,8 @@ pub struct CreateBacklogTaskBody {
 #[serde(rename_all = "camelCase")]
 pub struct BacklogTaskPatchBody {
     #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
     pub priority: Option<TaskPriority>,
@@ -98,6 +112,9 @@ pub struct BacklogTaskPatchBody {
     pub ordinal: Option<i32>,
     #[serde(default)]
     pub dependencies: Option<Vec<String>>,
+    /// Set to milestone id (e.g. `MS-1`) or empty string to clear.
+    #[serde(default)]
+    pub milestone: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default, alias = "acceptanceCriteriaItems")]
@@ -215,6 +232,12 @@ fn task_matches_query(t: &BacklogTask, q: &BacklogTasksListQuery) -> bool {
 }
 
 fn apply_patch(task: &mut BacklogTask, p: &BacklogTaskPatchBody) {
+    if let Some(t) = &p.title {
+        let t = t.trim();
+        if !t.is_empty() {
+            task.title = t.to_string();
+        }
+    }
     if let Some(s) = &p.status {
         task.status.clone_from(s);
     }
@@ -232,6 +255,14 @@ fn apply_patch(task: &mut BacklogTask, p: &BacklogTaskPatchBody) {
     }
     if let Some(d) = &p.dependencies {
         task.dependencies.clone_from(d);
+    }
+    if let Some(m) = &p.milestone {
+        let m = m.trim();
+        task.milestone = if m.is_empty() {
+            None
+        } else {
+            Some(m.to_string())
+        };
     }
     if let Some(d) = &p.description {
         task.description = Some(d.clone());
@@ -322,6 +353,106 @@ pub async fn backlog_list_tasks(
         ia.cmp(ib)
     });
     Json(rows).into_response()
+}
+
+/// GET /api/projects/:id/backlog/tasks/cleanup?age=N — preview Done tasks under `tasks/` older than N days (Backlog.md-compatible).
+pub async fn backlog_cleanup_tasks_preview(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<BacklogTasksCleanupQuery>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    let age: u32 = match q.age.trim().parse() {
+        Ok(a) if !q.age.trim().is_empty() => a,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing or invalid age parameter"})),
+            )
+                .into_response();
+        }
+    };
+    match state.backlog_store.cleanup_done_tasks_preview(&pid, age) {
+        Ok(rows) => {
+            let tasks: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "id": c.id,
+                        "title": c.title,
+                        "createdDate": c.created_date,
+                        "updatedDate": c.updated_date,
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "count": tasks.len(),
+                "tasks": tasks,
+            }))
+            .into_response()
+        }
+        Err(BacklogStoreError::NotLoaded) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Backlog not loaded"})),
+        )
+            .into_response(),
+        Err(e) => map_backlog_err(e).into_response(),
+    }
+}
+
+/// POST /api/projects/:id/backlog/tasks/cleanup/execute — move matching Done tasks to `completed/`.
+pub async fn backlog_cleanup_tasks_execute(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(body): Json<BacklogTasksCleanupExecuteBody>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    match state.backlog_store.cleanup_done_tasks_execute(
+        &pid,
+        body.age,
+        &state.kernel.project_store,
+    ) {
+        Ok((moved, total, failed)) => {
+            let message = if total == 0 {
+                "No tasks to clean up".to_string()
+            } else {
+                format!("Moved {moved} of {total} tasks to completed folder")
+            };
+            let mut resp = serde_json::json!({
+                "success": true,
+                "movedCount": moved,
+                "totalCount": total,
+                "message": message,
+            });
+            if !failed.is_empty() {
+                if let Some(obj) = resp.as_object_mut() {
+                    obj.insert(
+                        "failedTasks".into(),
+                        serde_json::to_value(&failed).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+            }
+            Json(resp).into_response()
+        }
+        Err(BacklogStoreError::NotLoaded) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Backlog not loaded"})),
+        )
+            .into_response(),
+        Err(e) => map_backlog_err(e).into_response(),
+    }
 }
 
 /// GET /api/projects/:id/backlog/tasks/:task_id
@@ -751,6 +882,27 @@ pub async fn backlog_update_doc(
     }
 }
 
+/// DELETE /api/projects/:id/backlog/docs/:doc_id
+pub async fn backlog_delete_doc(
+    State(state): State<Arc<AppState>>,
+    Path((id, doc_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    match state
+        .backlog_store
+        .delete_document(&pid, &doc_id, &state.kernel.project_store)
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => map_backlog_err(e).into_response(),
+    }
+}
+
 fn task_milestone_matches(task: &BacklogTask, milestone_id: &str) -> bool {
     task.milestone
         .as_deref()
@@ -856,6 +1008,27 @@ pub struct CreateBacklogMilestoneBody {
     pub title: String,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateBacklogMilestoneBody {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+fn apply_milestone_update(m: &mut BacklogMilestone, body: &UpdateBacklogMilestoneBody) {
+    if let Some(ref t) = body.title {
+        let t = t.trim();
+        if !t.is_empty() {
+            m.title = t.to_string();
+        }
+    }
+    if let Some(ref d) = body.description {
+        m.description.clone_from(d);
+    }
 }
 
 /// GET /api/projects/:id/backlog/decisions
@@ -991,37 +1164,10 @@ pub async fn backlog_update_decision(
     }
 }
 
-/// GET /api/projects/:id/backlog/drafts
-pub async fn backlog_list_drafts(
+/// DELETE /api/projects/:id/backlog/decisions/:decision_id
+pub async fn backlog_delete_decision(
     State(state): State<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
-    let pid = match parse_project_id_param(&id) {
-        Ok(p) => p,
-        Err(tup) => return tup.into_response(),
-    };
-    if let Err(tup) = ensure_project(&state, pid) {
-        return tup.into_response();
-    }
-    let Some(snap) = state.backlog_store.get_snapshot(&pid) else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Backlog not loaded"})),
-        )
-            .into_response();
-    };
-    let rows: Vec<serde_json::Value> = snap
-        .drafts
-        .iter()
-        .filter_map(|t| serde_json::to_value(t).ok())
-        .collect();
-    Json(rows).into_response()
-}
-
-/// POST /api/projects/:id/backlog/drafts/:draft_id/promote
-pub async fn backlog_promote_draft(
-    State(state): State<Arc<AppState>>,
-    Path((id, draft_id)): Path<(String, String)>,
+    Path((id, decision_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     let pid = match parse_project_id_param(&id) {
         Ok(p) => p,
@@ -1032,7 +1178,7 @@ pub async fn backlog_promote_draft(
     }
     match state
         .backlog_store
-        .promote_draft(&pid, &draft_id, &state.kernel.project_store)
+        .delete_decision(&pid, &decision_id, &state.kernel.project_store)
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => map_backlog_err(e).into_response(),
@@ -1128,6 +1274,75 @@ pub async fn backlog_create_milestone(
     }
 }
 
+/// PUT /api/projects/:id/backlog/milestones/:milestone_id
+pub async fn backlog_update_milestone(
+    State(state): State<Arc<AppState>>,
+    Path((id, milestone_id)): Path<(String, String)>,
+    Json(body): Json<UpdateBacklogMilestoneBody>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    let mut m = match state.backlog_store.get_milestone(&pid, &milestone_id) {
+        Some(x) => x,
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Not found"})),
+            )
+                .into_response();
+        }
+    };
+    apply_milestone_update(&mut m, &body);
+    m.file_path = None;
+    match state
+        .backlog_store
+        .update_milestone(&pid, &m, &state.kernel.project_store)
+    {
+        Ok(()) => {
+            let Some(snap) = state.backlog_store.get_snapshot(&pid) else {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Backlog not loaded"})),
+                )
+                    .into_response();
+            };
+            let fresh = state
+                .backlog_store
+                .get_milestone(&pid, &milestone_id)
+                .expect("milestone after update");
+            let v = milestone_with_stats_json(&snap, &fresh);
+            (StatusCode::OK, Json(v)).into_response()
+        }
+        Err(e) => map_backlog_err(e).into_response(),
+    }
+}
+
+/// DELETE /api/projects/:id/backlog/milestones/:milestone_id
+pub async fn backlog_delete_milestone(
+    State(state): State<Arc<AppState>>,
+    Path((id, milestone_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    match state
+        .backlog_store
+        .delete_milestone(&pid, &milestone_id, &state.kernel.project_store)
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => map_backlog_err(e).into_response(),
+    }
+}
+
 /// POST /api/projects/:id/backlog/milestones/:milestone_id/archive
 pub async fn backlog_archive_milestone(
     State(state): State<Arc<AppState>>,
@@ -1200,10 +1415,41 @@ pub struct BacklogSearchQuery {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BacklogStatisticsResponse {
     pub total: u64,
     pub status_counts: BTreeMap<String, u64>,
     pub priority_counts: BTreeMap<String, u64>,
+}
+
+/// Aggregated backlog counts for the project overview dashboard.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectBacklogOverviewResponse {
+    pub task_statistics: BacklogStatisticsResponse,
+    pub active_task_count: u64,
+    pub completed_task_count: u64,
+    pub document_count: u64,
+    pub decision_count: u64,
+    pub decisions_by_status: BTreeMap<String, u64>,
+    pub milestone_count: u64,
+}
+
+fn backlog_overview_build(snap: &BacklogSnapshot) -> ProjectBacklogOverviewResponse {
+    let mut decisions_by_status: BTreeMap<String, u64> = BTreeMap::new();
+    for d in &snap.decisions {
+        let k = decision_status_token(d.status).to_string();
+        *decisions_by_status.entry(k).or_insert(0) += 1;
+    }
+    ProjectBacklogOverviewResponse {
+        task_statistics: backlog_statistics_build(snap),
+        active_task_count: snap.tasks.len() as u64,
+        completed_task_count: snap.completed.len() as u64,
+        document_count: snap.documents.len() as u64,
+        decision_count: snap.decisions.len() as u64,
+        decisions_by_status,
+        milestone_count: snap.milestones.len() as u64,
+    }
 }
 
 fn decision_status_token(s: DecisionStatus) -> &'static str {
@@ -1371,12 +1617,7 @@ fn backlog_search_run(snap: &BacklogSnapshot, q: &BacklogSearchQuery) -> Vec<Bac
     let mut scored: Vec<(f64, String, BacklogSearchResult)> = Vec::new();
 
     if wants_kind(&q.kinds, "task") {
-        for t in snap
-            .tasks
-            .iter()
-            .chain(&snap.drafts)
-            .chain(&snap.completed)
-        {
+        for t in snap.tasks.iter().chain(&snap.completed) {
             if !task_matches_search_filters(t, q) {
                 continue;
             }
@@ -1450,12 +1691,7 @@ fn backlog_statistics_build(snap: &BacklogSnapshot) -> BacklogStatisticsResponse
     let mut status_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut priority_counts: BTreeMap<String, u64> = BTreeMap::new();
     let mut total = 0u64;
-    for t in snap
-        .tasks
-        .iter()
-        .chain(&snap.drafts)
-        .chain(&snap.completed)
-    {
+    for t in snap.tasks.iter().chain(&snap.completed) {
         total += 1;
         *status_counts.entry(t.status.clone()).or_insert(0) += 1;
         let pk = match t.priority {
@@ -1495,6 +1731,36 @@ pub async fn backlog_search(
     };
     let results = backlog_search_run(&snap, &query);
     match serde_json::to_value(&results) {
+        Ok(v) => Json(v).into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Serialize failed"})),
+        )
+            .into_response(),
+    }
+}
+
+/// GET /api/projects/:id/backlog/overview — task/doc/decision/milestone counts for project home.
+pub async fn backlog_overview(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    let Some(snap) = state.backlog_store.get_snapshot(&pid) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Backlog not loaded"})),
+        )
+            .into_response();
+    };
+    let overview = backlog_overview_build(&snap);
+    match serde_json::to_value(&overview) {
         Ok(v) => Json(v).into_response(),
         Err(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,

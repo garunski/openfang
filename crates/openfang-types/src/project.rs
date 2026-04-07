@@ -3,7 +3,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 /// Unique identifier for a registered project.
@@ -122,6 +122,26 @@ impl Project {
         } else {
             Some(self.path.join(p))
         }
+    }
+
+    /// True when `workspace` lies under at least one spoke root (normalized paths).
+    /// Used to treat an agent whose manifest workspace matches a spoke as project-scoped.
+    pub fn workspace_in_spoke_scope(&self, workspace: &Path) -> bool {
+        let w = workspace
+            .canonicalize()
+            .unwrap_or_else(|_| workspace.to_path_buf());
+        for s in &self.spokes {
+            let root = if s.path.is_absolute() {
+                s.path.clone()
+            } else {
+                self.path.join(&s.path)
+            };
+            let r = root.canonicalize().unwrap_or(root);
+            if w.starts_with(&r) {
+                return true;
+            }
+        }
+        false
     }
 }
 

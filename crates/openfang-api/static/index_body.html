@@ -56,22 +56,6 @@
     </div>
 
     <div class="sidebar-nav" role="navigation" aria-label="Main navigation">
-      <!-- Chat — primary action -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Chat">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Chat</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'agents' }" @click="navigate('agents')" :aria-current="page === 'agents' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-              <span class="nav-label">Chat</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
       <!-- Monitor -->
       <div class="nav-section" x-data="{ collapsed: false }" aria-label="Monitor">
         <div class="nav-section-title" @click="collapsed = !collapsed">
@@ -104,79 +88,16 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'projects' }" @click="navigate('projects')" :aria-current="page === 'projects' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'projects' && !projectRouteId }" @click="navigate('projects')" :aria-current="page === 'projects' && !projectRouteId ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
-              <span class="nav-label">Projects</span>
+              <span class="nav-label">All projects</span>
             </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Agents -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Agents">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Agents</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'sessions' }" @click="navigate('sessions')" :aria-current="page === 'sessions' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m12 2-10 5 10 5 10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg></span>
-              <span class="nav-label">Sessions</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'approvals' }" @click="navigate('approvals')" :aria-current="page === 'approvals' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg></span>
-              <span class="nav-label">Approvals</span>
-              <span class="badge badge-warn" x-show="$store.app.pendingApprovalCount > 0" x-text="$store.app.pendingApprovalCount"></span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'comms' }" @click="navigate('comms')" :aria-current="page === 'comms' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 01-.9 3.8 8.5 8.5 0 01-7.6 4.7 8.38 8.38 0 01-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 01-.9-3.8 8.5 8.5 0 014.7-7.6 8.38 8.38 0 013.8-.9h.5a8.48 8.48 0 018 8v.5z"/></svg></span>
-              <span class="nav-label">Comms</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Automation -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Automation">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Automation</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'workflows' }" @click="navigate('workflows')" :aria-current="page === 'workflows' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg></span>
-              <span class="nav-label">Workflows</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'scheduler' }" @click="navigate('scheduler')" :aria-current="page === 'scheduler' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
-              <span class="nav-label">Scheduler</span>
-            </a>
-          </div>
-        </template>
-      </div>
-
-      <!-- Extensions -->
-      <div class="nav-section" x-data="{ collapsed: false }" aria-label="Extensions">
-        <div class="nav-section-title" @click="collapsed = !collapsed">
-          <span class="nav-label">Extensions</span>
-          <span class="nav-section-chevron" :style="collapsed ? '' : 'transform:rotate(90deg)'">&rsaquo;</span>
-        </div>
-        <template x-if="!collapsed">
-          <div x-transition>
-            <a class="nav-item" :class="{ active: page === 'channels' }" @click="navigate('channels')" :aria-current="page === 'channels' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg></span>
-              <span class="nav-label">Channels</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'skills' }" @click="navigate('skills')" :aria-current="page === 'skills' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></span>
-              <span class="nav-label">Skills</span>
-            </a>
-            <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
-              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.4 16a2 2 0 0 1 3.2-2.4L8 15"/></svg></span>
-              <span class="nav-label">Hands</span>
-            </a>
+            <template x-for="p in sidebarProjects" :key="p.id">
+              <a class="nav-item nav-item-nested" :class="{ active: page === 'projects' && String(projectRouteId) === String(p.id) }" @click="navigate('projects/' + encodeURIComponent(p.id) + '/overview')" :title="p.path || ''">
+                <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"/></svg></span>
+                <span class="nav-label truncate" x-text="p.name || p.id"></span>
+              </a>
+            </template>
           </div>
         </template>
       </div>
@@ -189,6 +110,27 @@
         </div>
         <template x-if="!collapsed">
           <div x-transition>
+            <a class="nav-item" :class="{ active: page === 'agents' }" @click="navigate('agents/sessions')" :aria-current="page === 'agents' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+              <span class="nav-label">Agents</span>
+              <span class="badge badge-warn" x-show="$store.app.pendingApprovalCount > 0" x-text="$store.app.pendingApprovalCount"></span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'scheduler' }" @click="navigate('scheduler')" :aria-current="page === 'scheduler' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
+              <span class="nav-label">Scheduler</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'channels' }" @click="navigate('channels')" :aria-current="page === 'channels' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg></span>
+              <span class="nav-label">Channels</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'skills' }" @click="navigate('skills')" :aria-current="page === 'skills' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg></span>
+              <span class="nav-label">Skills</span>
+            </a>
+            <a class="nav-item" :class="{ active: page === 'hands' }" @click="navigate('hands')" :aria-current="page === 'hands' ? 'page' : false">
+              <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M18 11V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2 2 2 0 0 0-2 2v6"/><path d="M10 10.5V6a2 2 0 0 0-2-2 2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.9-5.7-2.4L3.4 16a2 2 0 0 1 3.2-2.4L8 15"/></svg></span>
+              <span class="nav-label">Hands</span>
+            </a>
             <a class="nav-item" :class="{ active: page === 'runtime' }" @click="navigate('runtime')" :aria-current="page === 'runtime' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span>
               <span class="nav-label">Runtime</span>
@@ -207,7 +149,7 @@
         <span class="text-xs text-dim" x-text="$store.app.sessionUser" style="letter-spacing:0.5px"></span>
         <button @click="$store.app.sessionLogout()" class="btn btn-ghost btn-sm" style="font-size:11px;padding:2px 8px;opacity:0.7" title="Sign out">Logout</button>
       </div>
-      <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K agents | Ctrl+N new</div>
+      <div class="sidebar-label text-xs text-dim" style="padding:0 16px 4px;letter-spacing:0.5px">Ctrl+K sessions | Ctrl+N chat</div>
     </div>
     <div class="sidebar-toggle" @click="toggleSidebar()" x-text="sidebarCollapsed ? '\u276F' : '\u276E'"></div>
   </nav>
@@ -220,6 +162,24 @@
     <button class="mobile-menu-btn btn btn-ghost" @click="mobileMenuOpen = !mobileMenuOpen">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
     </button>
+
+    <!-- Agents hub: shared header + tabs (content panels are separate templates below) -->
+    <template x-if="page === 'agents' && agentsHubTab !== 'chat'">
+      <div class="agents-hub-chrome">
+        <div class="page-header flex justify-between items-center flex-wrap gap-2">
+          <h2>Agents</h2>
+          <button type="button" class="btn btn-ghost btn-sm" @click="setAgentsHubTab('chat')">Open chat</button>
+        </div>
+        <div class="tabs">
+          <div class="tab" :class="{ active: agentsHubTab === 'sessions' }" @click="setAgentsHubTab('sessions')">Sessions</div>
+          <div class="tab" :class="{ active: agentsHubTab === 'approvals' }" @click="setAgentsHubTab('approvals')">
+            Approvals
+            <span class="badge badge-warn" style="margin-left:6px" x-show="$store.app.pendingApprovalCount > 0" x-text="$store.app.pendingApprovalCount"></span>
+          </div>
+          <div class="tab" :class="{ active: agentsHubTab === 'comms' }" @click="setAgentsHubTab('comms')">Comms</div>
+        </div>
+      </div>
+    </template>
 
     <!-- Page: Overview -->
     <template x-if="page === 'overview'">
@@ -242,7 +202,7 @@
               <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:50px;height:28px"></div><div class="skeleton skeleton-text" style="width:80px;height:12px;margin-top:8px"></div></div>
               <div class="stat-card stat-card-lg"><div class="skeleton skeleton-heading" style="width:40px;height:28px"></div><div class="skeleton skeleton-text" style="width:60px;height:12px;margin-top:8px"></div></div>
             </div>
-            <div class="card" style="margin-bottom:16px"><div class="skeleton skeleton-text" style="width:120px;margin-bottom:12px"></div><div style="display:flex;gap:8px"><div class="skeleton" style="width:80px;height:24px;border-radius:20px"></div><div class="skeleton" style="width:70px;height:24px;border-radius:20px"></div><div class="skeleton" style="width:90px;height:24px;border-radius:20px"></div></div></div>
+            <div class="card" style="margin-bottom:16px"><div class="skeleton skeleton-text" style="width:100px;margin-bottom:12px"></div><div class="skeleton skeleton-text" style="width:100%;height:14px;margin-bottom:8px"></div><div class="skeleton skeleton-text" style="width:85%;height:14px"></div></div>
             <div class="overview-grid"><div class="skeleton skeleton-card"></div><div class="skeleton skeleton-card"></div></div>
           </div>
           <!-- Error state -->
@@ -254,49 +214,11 @@
             <p class="text-xs text-dim" x-text="loadError"></p>
             <button class="btn btn-primary btn-sm" @click="loadData()" style="margin-top:8px">Retry</button>
           </div>
-          <!-- Setup Checklist -->
-          <div class="setup-checklist" x-show="!loading && !loadError && setupProgress < 100 && !checklistDismissed" style="animation:slideUp 0.3s var(--ease-spring)">
-            <div class="card" style="border-left:4px solid var(--accent)">
-              <div class="flex justify-between items-center mb-2">
-                <div>
-                  <div class="card-header" style="margin:0">Getting Started</div>
-                  <div class="text-xs text-dim" x-text="setupDoneCount + ' of 5 steps completed'"></div>
-                </div>
-                <div class="flex gap-2">
-                  <button class="btn btn-primary btn-sm" @click="location.hash='wizard'">Setup Wizard</button>
-                  <button class="btn btn-ghost btn-sm" @click="dismissChecklist()">Dismiss</button>
-                </div>
-              </div>
-              <div class="progress-bar mb-2" style="margin-top:8px">
-                <div class="progress-bar-fill" :style="'width:' + setupProgress + '%'"></div>
-              </div>
-              <template x-for="item in setupChecklist" :key="item.key">
-                <div class="setup-checklist-item">
-                  <div class="setup-checklist-icon" :class="{ done: item.done }">
-                    <span x-show="item.done">&#10003;</span>
-                    <span x-show="!item.done">&#9675;</span>
-                  </div>
-                  <span style="flex:1" :style="item.done ? 'text-decoration:line-through;opacity:0.6' : ''" x-text="item.label"></span>
-                  <a x-show="!item.done" :href="item.action" class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 8px">Go</a>
-                </div>
-              </template>
-            </div>
-          </div>
-          <!-- Onboarding banner -->
-          <div class="onboarding-banner" x-show="!loading && !loadError && $store.app.showOnboarding && checklistDismissed">
-            <h3>Welcome to OpenFang</h3>
-            <p style="font-size:12px;color:var(--text-dim)">Get started quickly with the guided Setup Wizard, or configure manually:</p>
-            <div class="flex gap-2">
-              <button class="btn btn-primary" @click="location.hash='wizard'">Launch Setup Wizard</button>
-              <button class="btn btn-ghost" @click="location.hash='settings'">Configure Manually</button>
-              <button class="btn btn-ghost" @click="$store.app.dismissOnboarding()">Dismiss</button>
-            </div>
-          </div>
           <div x-show="!loading && !loadError" style="animation:fadeIn 0.3s">
 
           <!-- Primary stats row with icons + stagger animation -->
           <div class="stats-row stats-row-lg">
-            <div class="stat-card stat-card-lg animate-entry stagger-1" @click="location.hash='agents'" style="cursor:pointer">
+            <div class="stat-card stat-card-lg animate-entry stagger-1">
               <div style="display:flex;align-items:center;gap:8px">
                 <div style="width:36px;height:36px;border-radius:var(--radius-md);background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -344,11 +266,11 @@
 
           <!-- Secondary stats row -->
           <div class="stats-row animate-entry stagger-5" style="margin-bottom:16px">
-            <div class="stat-card" @click="location.hash='channels'" style="cursor:pointer">
+            <div class="stat-card">
               <div class="stat-value" style="font-size:18px" x-text="channels.length"></div>
               <div class="stat-label">Channels</div>
             </div>
-            <div class="stat-card" @click="location.hash='skills'" style="cursor:pointer">
+            <div class="stat-card">
               <div class="stat-value" style="font-size:18px" x-text="skillCount"></div>
               <div class="stat-label">Skills</div>
             </div>
@@ -366,6 +288,52 @@
             </div>
           </div>
 
+          <!-- Registered projects -->
+          <div class="card mb-4" style="overflow:hidden">
+            <div class="flex justify-between items-center flex-wrap gap-2 mb-2">
+              <div class="card-header" style="margin:0">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+                Projects
+              </div>
+              <div class="flex gap-2 flex-wrap">
+                <button type="button" class="btn btn-primary btn-sm" @click="navigate('projects')">Register project</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="loadProjects()" :disabled="projectsLoading">Refresh list</button>
+              </div>
+            </div>
+            <div x-show="projectsLoading" class="text-xs text-dim py-2">Loading projects…</div>
+            <div x-show="!projectsLoading && !projects.length" class="text-xs text-dim py-2">
+              No projects registered.
+              <button type="button" class="btn btn-ghost btn-sm" style="margin-left:4px;vertical-align:baseline" @click="navigate('projects')">Open Projects</button>
+            </div>
+            <div x-show="!projectsLoading && projects.length" class="flex flex-col gap-3" style="margin-top:8px">
+              <template x-for="p in projects" :key="p.id">
+                <div style="padding:10px 0;border-bottom:1px solid var(--border-subtle)">
+                  <div class="flex justify-between items-start gap-2 flex-wrap">
+                    <div style="min-width:0;flex:1">
+                      <div class="font-semibold" x-text="p.name"></div>
+                      <div class="text-xs text-dim font-mono truncate" style="margin-top:2px" :title="p.path" x-text="truncatePath(p.path, 80)"></div>
+                    </div>
+                    <span class="badge badge-dim flex-shrink-0" x-text="'Spokes: ' + (p.spoke_count != null ? p.spoke_count : 0)"></span>
+                  </div>
+                  <div class="flex flex-wrap gap-1 mt-2">
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/overview')">Overview</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/backlog')">List</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/board')">Board</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/pert')">PERT</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/docs')">Docs</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/decisions')">Decisions</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/milestones')">Milestones</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/spokes')">Spokes</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/agents')">Agents</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/pipelines')">Pipelines</button>
+                    <button type="button" class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 8px" @click="navigate('projects/' + encodeURIComponent(p.id) + '/workflows')">Workflows</button>
+                    <button type="button" class="btn btn-danger btn-sm" style="font-size:10px;padding:2px 8px" @click="deleteProject(p)">Delete</button>
+                  </div>
+                </div>
+              </template>
+            </div>
+          </div>
+
           <!-- Provider status badges with health indicators -->
           <div class="card mb-4" x-show="providers.length" style="overflow:hidden">
             <div class="flex justify-between items-center mb-2">
@@ -377,7 +345,7 @@
             </div>
             <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
               <template x-for="p in providers" :key="p.id">
-                <div class="badge" :class="providerBadgeClass(p)" :title="providerTooltip(p)" style="cursor:pointer;transition:all 0.15s var(--ease-spring);padding:4px 10px" @click="location.hash='settings'" @mouseenter="$el.style.transform='translateY(-1px)'" @mouseleave="$el.style.transform=''">
+                <div class="badge" :class="providerBadgeClass(p)" :title="providerTooltip(p)" style="cursor:pointer;transition:all 0.15s var(--ease-spring);padding:4px 10px" @click="navigate('settings')" @mouseenter="$el.style.transform='translateY(-1px)'" @mouseleave="$el.style.transform=''">
                   <span x-show="p.auth_status === 'configured'" style="display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:4px" :style="p.health === 'cooldown' || p.health === 'open' ? 'background:var(--warning);animation:pulse-ring 1.5s infinite' : 'background:var(--success)'"></span>
                   <span x-text="p.display_name"></span>
                 </div>
@@ -452,111 +420,13 @@
             </div>
           </div>
 
-          <!-- Quick Actions -->
-          <div class="card mt-4" style="background:var(--bg-elevated)">
-            <div class="card-header" style="margin-bottom:8px">Quick Actions</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px">
-              <button class="btn btn-ghost btn-sm" @click="location.hash='agents'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v8M8 12h8"/></svg>
-                New Agent
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='skills'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
-                Browse Skills
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='channels'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
-                Add Channel
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='workflows'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
-                Create Workflow
-              </button>
-              <button class="btn btn-ghost btn-sm" @click="location.hash='settings'" style="display:flex;align-items:center;gap:4px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><path d="M1 14h6M9 8h6M17 16h6"/></svg>
-                Settings
-              </button>
-            </div>
-          </div>
-
-          <!-- Recent Activity Feed -->
-          <div class="card mt-4" x-show="recentAudit.length">
-            <div class="flex justify-between items-center">
-              <div class="card-header" style="margin:0">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-                Recent Activity
-              </div>
-              <a class="btn btn-ghost btn-sm" @click="location.hash='logs'" style="font-size:10px;padding:2px 8px">View All</a>
-            </div>
-            <div style="margin-top:12px;display:flex;flex-direction:column;gap:1px">
-              <template x-for="(e, idx) in recentAudit" :key="e.seq">
-                <div class="detail-row" style="padding:8px 0;border-bottom:1px solid var(--border-subtle);animation:slideUp 0.2s var(--ease-spring)" :style="'animation-delay:' + (idx * 30) + 'ms'">
-                  <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
-                    <div style="width:24px;height:24px;border-radius:var(--radius-sm);background:var(--surface-2);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--text-dim)" x-html="actionIcon(e.action)"></div>
-                    <div style="min-width:0;flex:1">
-                      <div style="display:flex;align-items:center;gap:6px">
-                        <span class="badge" :class="actionBadgeClass(e.action)" style="font-size:9px;padding:1px 6px" x-text="friendlyAction(e.action)"></span>
-                        <span class="text-xs text-dim truncate" style="max-width:100px" x-text="agentName(e.agent_id)" :title="e.agent_id"></span>
-                      </div>
-                      <div class="text-xs text-dim truncate" style="margin-top:2px;max-width:300px" x-show="e.detail" x-text="e.detail" :title="e.detail"></div>
-                    </div>
-                  </div>
-                  <span class="text-xs text-dim font-mono" style="white-space:nowrap;flex-shrink:0" x-text="timeAgo(e.timestamp)" :title="new Date(e.timestamp).toLocaleString()"></span>
-                </div>
-              </template>
-            </div>
-          </div>
-
-          <!-- Empty activity state -->
-          <div class="card mt-4" x-show="!recentAudit.length && !loading">
-            <div style="text-align:center;padding:24px 16px">
-              <div class="empty-state-icon" style="margin:0 auto 8px">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
-              </div>
-              <h3 style="color:var(--text-secondary);margin-bottom:4px">No Recent Activity</h3>
-              <p class="text-xs text-dim">Activity will appear here once agents start processing.</p>
-              <button class="btn btn-primary btn-sm" @click="location.hash='agents'" style="margin-top:12px">Chat with an Agent</button>
-            </div>
-          </div>
-
-          <!-- Quick Actions -->
-          <div class="animate-entry stagger-6" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(220px, 1fr));gap:12px;margin-top:20px">
-            <div class="quick-action-card" @click="location.hash='agents'">
-              <div class="quick-action-icon" style="background:var(--accent-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Create Agent</div>
-                <div class="quick-action-desc">Spawn a new agent</div>
-              </div>
-            </div>
-            <div class="quick-action-card" @click="location.hash='settings'">
-              <div class="quick-action-icon" style="background:var(--success-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Configure Provider</div>
-                <div class="quick-action-desc">Set up an LLM provider</div>
-              </div>
-            </div>
-            <div class="quick-action-card" @click="location.hash='skills'">
-              <div class="quick-action-icon" style="background:var(--info-subtle)">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--info)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></svg>
-              </div>
-              <div>
-                <div class="quick-action-label">Browse Skills</div>
-                <div class="quick-action-desc">Explore available skills</div>
-              </div>
-            </div>
-          </div>
-
           </div>
         </div>
       </div>
     </template>
 
-    <!-- Page: Agents -->
-    <template x-if="page === 'agents'">
+    <!-- Page: Agents (chat / spawn only) -->
+    <template x-if="page === 'agents' && agentsHubTab === 'chat'">
       <div x-data="agentsPage" @close-chat.window="closeChat()">
 
         <!-- MODE 1: Inline Chat (agent selected) -->
@@ -1291,17 +1161,14 @@
       </div>
     </template>
 
-    <!-- Page: Approvals -->
-    <template x-if="page === 'approvals'">
+    <!-- Page: Approvals (agents hub) -->
+    <template x-if="page === 'agents' && agentsHubTab === 'approvals'">
       <div x-data="approvalsPage()" x-init="init()">
-        <div class="page-header">
-          <h2>Execution Approvals</h2>
-          <div class="flex items-center gap-2">
+        <div class="page-body">
+          <div class="flex justify-end items-center gap-2 mb-4 flex-wrap">
             <span class="badge badge-warn" x-show="pendingCount > 0" x-text="pendingCount + ' pending'"></span>
             <button class="btn btn-ghost btn-sm" @click="loadData()">Refresh</button>
           </div>
-        </div>
-        <div class="page-body">
           <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
@@ -1826,7 +1693,7 @@
                         <option :value="a.id" x-text="a.name + ' (' + (a.model_provider || 'unknown') + ':' + (a.model_name || 'unknown') + ')'"></option>
                       </template>
                     </select>
-                    <div class="text-xs text-dim mt-1" x-show="!availableAgents.length">No agents running. <a href="#agents" style="color:var(--accent)">Spawn one first.</a></div>
+                    <div class="text-xs text-dim mt-1" x-show="!availableAgents.length">No agents running. <a href="#agents/chat" style="color:var(--accent)">Spawn one first.</a></div>
                   </div>
 
                   <div class="form-group">
@@ -2461,7 +2328,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
     <template x-if="page === 'projects'">
       <div x-data="projectsPage">
         <template x-if="!selectedProject">
-          <div>
+          <div class="page-shell">
             <div class="page-header">
               <h2>Projects</h2>
               <button class="btn btn-primary btn-sm" @click="openRegisterModal()">Register Project</button>
@@ -2507,16 +2374,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
         </template>
 
         <template x-if="selectedProject">
-          <div>
-            <div class="page-header">
-              <button type="button" class="btn btn-ghost btn-sm mb-2" @click="backToList()">&larr; Back to Projects</button>
-              <h2 x-text="selectedProject.name"></h2>
-              <p class="text-xs text-dim mt-1" :title="selectedProject.path" x-text="selectedProject.path"></p>
-              <div class="relative mt-3" style="max-width:520px" @click.outside="backlogSearchOpen = false">
+          <div class="page-shell">
+            <div class="page-header page-header--project">
+              <div class="page-header__project-lead">
+                <button type="button" class="btn btn-ghost btn-sm page-header__project-back" @click="backToList()">&larr; Back to Projects</button>
+                <div class="page-header__project-text">
+                  <h2 x-text="selectedProject.name"></h2>
+                  <p class="text-xs text-dim page-header__project-path" :title="selectedProject.path" x-text="selectedProject.path"></p>
+                </div>
+              </div>
+              <div class="page-header__project-search relative" @click.outside="backlogSearchOpen = false">
                 <input
                   type="search"
-                  class="form-input"
-                  style="width:100%"
+                  class="form-input page-header__search-input"
                   placeholder="Search backlog (tasks, docs, decisions)…"
                   x-model="backlogSearchQuery"
                   @focus="backlogSearchOpen = true"
@@ -2524,8 +2394,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   autocomplete="off"
                 >
                 <div
-                  class="card p-0 absolute left-0 right-0 mt-1 z-50"
-                  style="max-height:280px;overflow-y:auto;box-shadow:0 8px 24px rgba(0,0,0,0.25)"
+                  class="card p-0 absolute left-0 right-0 mt-1 z-50 page-header__search-popover"
                   x-show="backlogSearchOpen && (backlogSearchLoading || backlogSearchQuery.trim())"
                 >
                   <div class="p-3 text-sm text-dim" x-show="backlogSearchLoading">Searching…</div>
@@ -2550,17 +2419,157 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </div>
             </div>
-            <div class="page-body">
-              <div class="tabs">
+            <div class="project-subnav" role="navigation" aria-label="Project sections">
+              <nav class="tabs tabs--project-chrome">
+                <div class="tab" :class="{ active: detailTab === 'overview' }" @click="onDetailTabChange('overview')">Overview</div>
                 <div class="tab" :class="{ active: detailTab === 'backlog' }" @click="onDetailTabChange('backlog')">List</div>
                 <div class="tab" :class="{ active: detailTab === 'board' }" @click="onDetailTabChange('board')">Board</div>
+                <div class="tab" :class="{ active: detailTab === 'pert' }" @click="onDetailTabChange('pert')">PERT</div>
                 <div class="tab" :class="{ active: detailTab === 'docs' }" @click="onDetailTabChange('docs')">Docs</div>
                 <div class="tab" :class="{ active: detailTab === 'decisions' }" @click="onDetailTabChange('decisions')">Decisions</div>
-                <div class="tab" :class="{ active: detailTab === 'drafts' }" @click="onDetailTabChange('drafts')">Drafts</div>
                 <div class="tab" :class="{ active: detailTab === 'milestones' }" @click="onDetailTabChange('milestones')">Milestones</div>
                 <div class="tab" :class="{ active: detailTab === 'spokes' }" @click="onDetailTabChange('spokes')">Spokes</div>
                 <div class="tab" :class="{ active: detailTab === 'agents' }" @click="onDetailTabChange('agents')">Agents</div>
                 <div class="tab" :class="{ active: detailTab === 'pipelines' }" @click="onDetailTabChange('pipelines')">Pipelines</div>
+                <div class="tab" :class="{ active: detailTab === 'workflows' }" @click="onDetailTabChange('workflows')">Workflows</div>
+              </nav>
+            </div>
+            <div class="page-body page-body--project">
+              <div x-show="detailTab === 'overview'" class="mt-4">
+                <div x-show="detailLoading.overview" class="loading-state"><div class="spinner"></div><span>Loading overview…</span></div>
+                <div x-show="detailErrors.overview && !detailLoading.overview" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.overview"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('overview')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.overview && !detailErrors.overview && projectOverview">
+                  <p class="text-xs text-dim mb-4">Summary of backlog, docs, decisions, spokes, agents, and pipelines for this project.</p>
+                  <div class="card-grid mb-6" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr))">
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="detailSpokes.length"></div>
+                      <div class="text-xs text-dim mt-1">Spokes</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="detailAgents.length"></div>
+                      <div class="text-xs text-dim mt-1">Agents</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="detailPipelines.length"></div>
+                      <div class="text-xs text-dim mt-1">Pipelines</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="projectOverview.activeTaskCount"></div>
+                      <div class="text-xs text-dim mt-1">Active tasks</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="projectOverview.completedTaskCount"></div>
+                      <div class="text-xs text-dim mt-1">Completed</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="projectOverview.taskStatistics && projectOverview.taskStatistics.total != null ? projectOverview.taskStatistics.total : '—'"></div>
+                      <div class="text-xs text-dim mt-1">Tasks (all)</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="projectOverview.documentCount"></div>
+                      <div class="text-xs text-dim mt-1">Docs</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="projectOverview.decisionCount"></div>
+                      <div class="text-xs text-dim mt-1">Decisions</div>
+                    </div>
+                    <div class="card p-3 text-center">
+                      <div class="text-xl font-semibold" x-text="projectOverview.milestoneCount"></div>
+                      <div class="text-xs text-dim mt-1">Milestones</div>
+                    </div>
+                  </div>
+                  <div class="grid gap-4 mb-6" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))">
+                    <div class="card p-4">
+                      <h4 class="text-sm font-semibold mb-3">Tasks by status</h4>
+                      <template x-for="row in overviewMapEntries(projectOverview.taskStatistics && projectOverview.taskStatistics.statusCounts)" :key="row.k">
+                        <div class="flex justify-between text-sm py-1 border-b" style="border-color:var(--border)">
+                          <span x-text="row.k"></span>
+                          <span class="badge badge-info" x-text="row.v"></span>
+                        </div>
+                      </template>
+                      <p class="text-dim text-xs mt-2" x-show="!overviewMapEntries(projectOverview.taskStatistics && projectOverview.taskStatistics.statusCounts).length">No tasks in backlog.</p>
+                    </div>
+                    <div class="card p-4">
+                      <h4 class="text-sm font-semibold mb-3">Tasks by priority</h4>
+                      <template x-for="row in overviewMapEntries(projectOverview.taskStatistics && projectOverview.taskStatistics.priorityCounts)" :key="row.k">
+                        <div class="flex justify-between text-sm py-1 border-b" style="border-color:var(--border)">
+                          <span x-text="row.k"></span>
+                          <span class="badge badge-dim" x-text="row.v"></span>
+                        </div>
+                      </template>
+                      <p class="text-dim text-xs mt-2" x-show="!overviewMapEntries(projectOverview.taskStatistics && projectOverview.taskStatistics.priorityCounts).length">—</p>
+                    </div>
+                  </div>
+                  <div class="card p-4 mb-6" x-show="projectOverview.decisionCount > 0">
+                    <h4 class="text-sm font-semibold mb-3">Decisions by status</h4>
+                    <div class="flex flex-wrap gap-2">
+                      <template x-for="row in overviewMapEntries(projectOverview.decisionsByStatus)" :key="row.k">
+                        <span class="badge badge-info"><span x-text="row.k"></span>: <span x-text="row.v"></span></span>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="grid gap-4" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
+                    <div>
+                      <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-sm font-semibold">Spokes</h3>
+                        <button type="button" class="btn btn-ghost btn-sm" @click="onDetailTabChange('spokes')">Open tab</button>
+                      </div>
+                      <div class="card p-3" x-show="detailSpokes.length">
+                        <template x-for="s in detailSpokes.slice(0, 8)" :key="s.name + (s.path || '')">
+                          <div class="text-sm py-2" style="border-bottom:1px solid var(--border)">
+                            <span style="font-weight:600" x-text="s.name"></span>
+                            <span class="text-xs text-dim block mt-1 font-mono" x-text="truncatePath(s.path, 64)"></span>
+                          </div>
+                        </template>
+                        <p class="text-xs text-dim mt-2" x-show="detailSpokes.length > 8" x-text="'+' + (detailSpokes.length - 8) + ' more…'"></p>
+                      </div>
+                      <p class="text-dim text-sm py-4" x-show="!detailSpokes.length">No spokes configured.</p>
+                    </div>
+                    <div>
+                      <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-sm font-semibold">Agents</h3>
+                        <button type="button" class="btn btn-ghost btn-sm" @click="onDetailTabChange('agents')">Open tab</button>
+                      </div>
+                      <div class="table-wrap" x-show="detailAgents.length">
+                        <table>
+                          <thead><tr><th>Name</th><th>State</th><th>Binding</th></tr></thead>
+                          <tbody>
+                            <template x-for="a in detailAgents.slice(0, 10)" :key="a.agent_id">
+                              <tr>
+                                <td class="text-sm" x-text="a.name || a.agent_id"></td>
+                                <td><span class="badge badge-info text-xs" x-text="String(a.state)"></span></td>
+                                <td><span class="badge text-xs" :class="a.binding === 'explicit' ? 'badge-warn' : 'badge-dim'" x-text="a.binding || '—'"></span></td>
+                              </tr>
+                            </template>
+                          </tbody>
+                        </table>
+                        <p class="text-xs text-dim p-2" x-show="detailAgents.length > 10" x-text="'+' + (detailAgents.length - 10) + ' more…'"></p>
+                      </div>
+                      <p class="text-dim text-sm py-4" x-show="!detailAgents.length">No agents in project scope.</p>
+                    </div>
+                    <div>
+                      <div class="flex justify-between items-center mb-2">
+                        <h3 class="text-sm font-semibold">Pipelines</h3>
+                        <button type="button" class="btn btn-ghost btn-sm" @click="onDetailTabChange('pipelines')">Open tab</button>
+                      </div>
+                      <div class="card p-3" x-show="detailPipelines.length">
+                        <template x-for="(p, idx) in detailPipelines.slice(0, 6)" :key="(p.timestamp || '') + (p.action || '') + (p.task_id || '') + '-' + idx">
+                          <div class="text-sm py-2" style="border-bottom:1px solid var(--border)">
+                            <span class="text-xs text-dim block" x-text="p.timestamp || '—'"></span>
+                            <span class="badge badge-dim text-xs mt-1" x-text="p.action || '—'"></span>
+                            <span class="text-xs font-mono block mt-1" x-text="p.task_id || '—'"></span>
+                          </div>
+                        </template>
+                        <p class="text-xs text-dim mt-2" x-show="detailPipelines.length > 6" x-text="'+' + (detailPipelines.length - 6) + ' more…'"></p>
+                      </div>
+                      <p class="text-dim text-sm py-4" x-show="!detailPipelines.length">No pipeline runs in project scope.</p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <!-- task list table (TASK-33) -->
@@ -2572,7 +2581,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('backlog')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.backlog && !detailErrors.backlog">
-                  <div class="flex flex-wrap gap-2 mb-3" style="align-items:flex-end">
+                  <div class="flex flex-wrap gap-2 mb-3" style="align-items:flex-start">
                     <div class="form-group" style="margin:0;min-width:140px">
                       <label class="text-xs text-dim">Status</label>
                       <select class="form-input" x-model="listFilterStatus">
@@ -2602,6 +2611,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <div class="form-group" style="margin:0;min-width:160px;flex:1">
                       <label class="text-xs text-dim">Assignee contains</label>
                       <input class="form-input" type="search" x-model="listFilterAssignee" placeholder="name…">
+                    </div>
+                    <div class="flex-shrink-0" style="margin-top:22px">
+                      <button type="button" class="btn btn-ghost btn-sm" @click="openBacklogCleanupModal()">Cleanup old tasks</button>
                     </div>
                   </div>
                   <div class="table-wrap" x-show="detailTasks.length">
@@ -2650,21 +2662,25 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="btn btn-ghost btn-sm" @click="loadBoardData(true)">Retry</button>
                 </div>
                 <div x-show="!boardLoading && !boardError">
-                  <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-                    <span class="text-sm text-dim">Kanban board — drag cards between columns or reorder within a column.</span>
-                    <button type="button" class="btn btn-primary btn-sm" @click="boardOpenNewTask()">New Task</button>
+                  <div class="board-toolbar">
+                    <div class="board-toolbar__text">
+                      <h3 class="board-toolbar__title">Kanban board</h3>
+                      <p class="board-toolbar__hint text-dim">Drag cards between columns or reorder within a column.</p>
+                    </div>
+                    <button type="button" class="btn btn-primary btn-sm" @click="boardOpenNewTask()">+ New task</button>
                   </div>
                   <div class="kanban-board" x-show="boardStatuses.length">
                     <template x-for="st in boardStatuses" :key="String(st)">
                       <div class="kanban-column" @dragover="boardAllowDrop($event)" @drop="boardDropOnColumn(st, $event)">
                         <div class="kanban-column-header">
-                          <span x-text="st"></span>
+                          <span class="kanban-column-title" x-text="st"></span>
                           <span class="kanban-column-count" x-text="boardColumnCount(st)"></span>
                         </div>
                         <div class="kanban-column-body">
                           <template x-for="task in boardTasksForStatus(st)" :key="task.id">
                             <div
                               class="kanban-card"
+                              :class="[boardCardPrioAccentClass(task), { 'kanban-card--dragging': boardDragId === task.id }]"
                               draggable="true"
                               @dragstart="boardDragStart(task, st, $event)"
                               @dragend="boardDragEnd()"
@@ -2672,36 +2688,54 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                               @drop="boardDropOnCard(st, task.id, $event)"
                               @click="boardCardClick(task)"
                             >
-                              <div class="kanban-card-title" x-text="task.title || task.id"></div>
-                              <span
-                                class="kanban-prio"
-                                x-show="task.priority"
-                                :class="boardPriorityClass(task.priority)"
-                                x-text="task.priority"
-                              ></span>
-                              <div class="kanban-card-meta">
-                                <template x-if="Array.isArray(task.labels) && task.labels.length">
-                                  <span>
-                                    <template x-for="lb in task.labels" :key="lb">
-                                      <span class="kanban-label-chip" style="margin-right:4px" x-text="lb"></span>
-                                    </template>
-                                  </span>
-                                </template>
-                                <template x-if="Array.isArray(task.assignee) && task.assignee.length">
-                                  <span class="flex" style="align-items:center;gap:4px">
-                                    <template x-for="an in task.assignee" :key="an">
-                                      <span class="kanban-assignee" :title="an" x-text="boardAssigneeInitials(an)"></span>
-                                    </template>
-                                  </span>
+                              <div class="kanban-card__head">
+                                <code class="kanban-card__id" x-text="task.id"></code>
+                                <span
+                                  class="badge text-xs"
+                                  x-show="task.priority"
+                                  :class="priorityClass(task.priority)"
+                                  x-text="task.priority"
+                                ></span>
+                              </div>
+                              <div class="kanban-card__title" x-text="task.title || task.id"></div>
+                              <div class="kanban-card__labels" x-show="Array.isArray(task.labels) && task.labels.length">
+                                <template x-for="(lb, li) in boardVisibleLabels(task)" :key="task.id + '-lb-' + li">
+                                  <span class="badge badge-info text-xs kanban-card__label-pill" x-text="lb"></span>
                                 </template>
                                 <span
-                                  class="kanban-deps-badge"
-                                  x-show="Array.isArray(task.dependencies) && task.dependencies.length"
-                                  x-text="'deps: ' + task.dependencies.length"
+                                  class="kanban-card__label-more text-xs text-dim"
+                                  x-show="boardExtraLabelCount(task) > 0"
+                                  x-text="'+' + boardExtraLabelCount(task)"
                                 ></span>
+                              </div>
+                              <div class="kanban-card__footer">
+                                <div class="kanban-card__footer-left">
+                                  <template x-if="Array.isArray(task.assignee) && task.assignee.length">
+                                    <span class="kanban-card__assignees">
+                                      <template x-for="(an, ai) in task.assignee.slice(0, 4)" :key="task.id + '-a-' + ai">
+                                        <span class="kanban-assignee" :title="an" x-text="boardAssigneeInitials(an)"></span>
+                                      </template>
+                                      <span
+                                        class="text-xs text-dim kanban-card__assignee-more"
+                                        x-show="task.assignee.length > 4"
+                                        x-text="'+' + (task.assignee.length - 4)"
+                                      ></span>
+                                    </span>
+                                  </template>
+                                  <span
+                                    class="kanban-deps-pill"
+                                    x-show="Array.isArray(task.dependencies) && task.dependencies.length"
+                                    x-text="task.dependencies.length + ' dep' + (task.dependencies.length === 1 ? '' : 's')"
+                                  ></span>
+                                </div>
+                                <span class="kanban-card__date text-xs text-dim" x-text="boardCardDateLabel(task)"></span>
                               </div>
                             </div>
                           </template>
+                          <div class="kanban-column-empty" x-show="boardColumnCount(st) === 0">
+                            <p class="kanban-column-empty__title">No tasks</p>
+                            <p class="kanban-column-empty__hint">Drop a card here</p>
+                          </div>
                         </div>
                       </div>
                     </template>
@@ -2712,6 +2746,90 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </div>
 
+              <div x-show="detailTab === 'pert'" class="mt-4">
+                <div x-show="pertLoading" class="loading-state"><div class="spinner"></div><span>Loading chart…</span></div>
+                <div x-show="pertError && !pertLoading" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="pertError"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('pert')">Retry</button>
+                </div>
+                <div x-show="!pertLoading && !pertError">
+                  <div class="pert-toolbar board-toolbar">
+                    <div class="board-toolbar__text">
+                      <h3 class="board-toolbar__title">PERT chart</h3>
+                      <p class="board-toolbar__hint text-dim">Edges: <code style="color:var(--accent)">dependencies</code> + <code style="color:var(--accent)">parentTaskId</code> (orthogonal lines, arrows). Hover a task to dim unrelated links. Drag empty chart area to pan. No milestone = gray accent.</p>
+                    </div>
+                    <button type="button" class="btn btn-ghost btn-sm" @click="loadPertTab(true)">Refresh</button>
+                  </div>
+                  <div class="flex flex-wrap gap-3 items-end mb-3" x-show="_pertDataTasks.length">
+                    <div class="form-group" style="margin:0;min-width:160px">
+                      <label class="text-xs text-dim">Status</label>
+                      <select class="form-input" x-model="pertFilterStatus" @change="rebuildPertLayout()">
+                        <option value="">All</option>
+                        <template x-for="st in pertStatusOptions" :key="String(st)">
+                          <option :value="st" x-text="st"></option>
+                        </template>
+                      </select>
+                    </div>
+                  </div>
+                  <p class="text-xs text-dim mb-2" x-show="pertHasCycle || pertSkippedDeps > 0">
+                    <span x-show="pertHasCycle" class="text-dim" style="color:var(--warn, #d97706)">Cycle detected in dependencies — layout may be misleading.</span>
+                    <span x-show="pertHasCycle && pertSkippedDeps > 0"> · </span>
+                    <span x-show="pertSkippedDeps > 0" x-text="pertSkippedDeps + ' dependency reference(s) point to unknown tasks (not in this list).'"></span>
+                  </p>
+                  <div class="pert-legend flex flex-wrap gap-3 mb-3" x-show="pertLegend.length">
+                    <template x-for="row in pertLegend" :key="row.id">
+                      <div class="pert-legend-item text-xs flex items-center gap-2">
+                        <span class="pert-legend-swatch" :style="row.swatchStyle"></span>
+                        <span x-text="row.title + ' (' + row.count + ')'"></span>
+                      </div>
+                    </template>
+                  </div>
+                  <p class="text-xs text-dim mb-2" x-show="_pertDataTasks.length && pertFilterStatus && !pertLayoutNodes.length">No tasks match this status.</p>
+                  <div
+                    class="pert-scroll-wrap"
+                    x-ref="pertScrollWrap"
+                    :class="{ 'pert-scroll-wrap--panning': pertPanning }"
+                    x-show="_pertDataTasks.length && pertLayoutNodes.length"
+                    @mousedown="pertPanPointerDown($event)"
+                  >
+                    <div
+                      class="pert-chart-stage"
+                      :style="'position:relative;width:' + pertChartWidth + 'px;height:' + pertChartHeight + 'px'"
+                      @mouseleave="pertSetChartFocus(null)"
+                    >
+                      <svg
+                        class="pert-edges-svg"
+                        :width="pertChartWidth"
+                        :height="pertChartHeight"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <g class="pert-underlay" x-html="pertSvgUnderlay"></g>
+                      </svg>
+                      <template x-for="n in pertLayoutNodes" :key="n.id">
+                        <div
+                          class="pert-node"
+                          role="button"
+                          tabindex="0"
+                          :style="'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px;--pert-ms:' + n.accentColor"
+                          @mouseenter="pertSetChartFocus(n.id)"
+                          @click="openBacklogTaskDetail(n.task)"
+                          @keydown.enter="openBacklogTaskDetail(n.task)"
+                        >
+                          <div class="pert-node__id font-mono text-xs" x-text="n.id"></div>
+                          <div class="pert-node__title text-sm" x-text="pertNodeTitle(n)"></div>
+                          <div class="pert-node__meta text-xs text-dim" x-show="n.milestoneId" x-text="n.milestoneId"></div>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                  <div class="empty-state py-8" x-show="!_pertDataTasks.length">
+                    <p class="text-dim text-sm">No tasks in <code style="color:var(--accent)">backlog/tasks</code> for this project.</p>
+                  </div>
+                  <p class="text-xs text-dim mt-2" x-show="_pertDataTasks.length && pertLayoutNodes.length && !pertLayoutEdges.length && !pertHasCycle">No in-list dependencies yet — tasks appear in a single column. Add <code style="color:var(--accent)">dependencies</code> in task front matter.</p>
+                </div>
+              </div>
+
               <div x-show="detailTab === 'docs'" class="mt-4">
                 <div x-show="detailLoading.docs" class="loading-state"><div class="spinner"></div><span>Loading docs...</span></div>
                 <div x-show="detailErrors.docs && !detailLoading.docs" class="error-state">
@@ -2719,7 +2837,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <p x-text="detailErrors.docs"></p>
                   <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('docs')">Retry</button>
                 </div>
-                <div x-show="!detailLoading.docs && !detailErrors.docs" class="flex gap-4" style="align-items:stretch;min-height:280px">
+                <div x-show="!detailLoading.docs && !detailErrors.docs">
+                  <div class="flex flex-wrap gap-2 mb-3 items-center">
+                    <button type="button" class="btn btn-primary btn-sm" @click="openDocCreateModal()">New document</button>
+                    <button type="button" class="btn btn-ghost btn-sm" :disabled="!docsSelectedDoc" @click="openDocEditModal()">Edit document</button>
+                    <button type="button" class="btn btn-danger btn-sm" :disabled="!docsSelectedDoc" @click="confirmDeleteDoc()">Delete document</button>
+                  </div>
+                  <div class="flex gap-4" style="align-items:stretch;min-height:280px">
                   <div class="doc-tree-panel" style="width:280px;flex-shrink:0;border-right:1px solid var(--border);padding-right:12px;overflow:auto;max-height:70vh">
                     <template x-for="row in docNavRows()" :key="row.kind === 'folder' ? row.path : row.doc.id">
                       <div class="mb-1" :style="'padding-left:' + (row.depth * 14) + 'px'">
@@ -2767,6 +2891,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <p class="text-dim text-sm" x-show="docTreeHasAny() && !docsSelectedDoc && !docsDocLoading && !docsDocError">Select a document from the tree.</p>
                   </div>
                 </div>
+                </div>
               </div>
 
               <div x-show="detailTab === 'decisions'" class="mt-4">
@@ -2776,7 +2901,13 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <p x-text="detailErrors.decisions"></p>
                   <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('decisions')">Retry</button>
                 </div>
-                <div x-show="!detailLoading.decisions && !detailErrors.decisions" class="flex gap-4" style="align-items:stretch;min-height:280px">
+                <div x-show="!detailLoading.decisions && !detailErrors.decisions">
+                  <div class="flex flex-wrap gap-2 mb-3 items-center">
+                    <button type="button" class="btn btn-primary btn-sm" @click="openDecisionCreateModal()">New decision</button>
+                    <button type="button" class="btn btn-ghost btn-sm" :disabled="!decisionsSelected" @click="openDecisionEditModal()">Edit decision</button>
+                    <button type="button" class="btn btn-danger btn-sm" :disabled="!decisionsSelected" @click="confirmDeleteDecision()">Delete decision</button>
+                  </div>
+                  <div class="flex gap-4" style="align-items:stretch;min-height:280px">
                   <div style="width:340px;flex-shrink:0;border-right:1px solid var(--border);padding-right:12px;overflow:auto;max-height:70vh">
                     <div class="table-wrap" x-show="detailDecisions.length">
                       <table>
@@ -2830,43 +2961,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     </template>
                     <p class="text-dim text-sm" x-show="detailDecisions.length && !decisionsSelected && !decisionsDetailLoading && !decisionsDetailError">Select a decision from the list.</p>
                   </div>
-                </div>
-              </div>
-
-              <div x-show="detailTab === 'drafts'" class="mt-4">
-                <div x-show="detailLoading.drafts" class="loading-state"><div class="spinner"></div><span>Loading drafts...</span></div>
-                <div x-show="detailErrors.drafts && !detailLoading.drafts" class="error-state">
-                  <span class="error-icon">!</span>
-                  <p x-text="detailErrors.drafts"></p>
-                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('drafts')">Retry</button>
-                </div>
-                <div x-show="!detailLoading.drafts && !detailErrors.drafts">
-                  <p class="text-xs text-danger mb-2" x-show="draftPromoteError" x-text="draftPromoteError"></p>
-                  <div class="table-wrap" x-show="detailDrafts.length">
-                    <table>
-                      <thead><tr><th>Title</th><th>Priority</th><th>Created</th><th></th></tr></thead>
-                      <tbody>
-                        <template x-for="d in detailDrafts" :key="d.id">
-                          <tr>
-                            <td x-text="d.title || d.id || '—'"></td>
-                            <td><span class="badge" :class="priorityClass(d.priority)" x-text="d.priority || '—'"></span></td>
-                            <td class="text-xs" x-text="draftCreatedDisplay(d)"></td>
-                            <td>
-                              <button
-                                type="button"
-                                class="btn btn-primary btn-sm"
-                                :disabled="draftPromotingId === d.id"
-                                @click="draftPromoteToTask(d)"
-                                x-text="draftPromotingId === d.id ? 'Promoting…' : 'Promote to Task'"
-                              ></button>
-                            </td>
-                          </tr>
-                        </template>
-                      </tbody>
-                    </table>
-                  </div>
-                  <div class="empty-state py-8" x-show="!detailDrafts.length">
-                    <p class="text-dim text-sm">No drafts in <code style="color:var(--accent)">backlog/drafts</code>.</p>
                   </div>
                 </div>
               </div>
@@ -2879,6 +2973,9 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('milestones')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.milestones && !detailErrors.milestones">
+                  <div class="flex flex-wrap gap-2 mb-3 items-center">
+                    <button type="button" class="btn btn-primary btn-sm" @click="openMilestoneCreateModal()">New milestone</button>
+                  </div>
                   <p class="text-sm text-dim mb-3">Progress uses tasks whose <code style="color:var(--accent)">milestone</code> field matches the milestone id (same as API).</p>
                   <div class="flex flex-col gap-3" x-show="detailMilestones.length">
                     <template x-for="m in detailMilestones" :key="m.id">
@@ -2888,19 +2985,40 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                             <div class="font-semibold" x-text="m.title || m.id"></div>
                             <p class="text-xs text-dim mt-1" x-show="milestoneDescPreview(m)" x-text="milestoneDescPreview(m)"></p>
                           </div>
-                          <button
-                            type="button"
-                            class="btn btn-ghost btn-sm flex-shrink-0"
-                            :disabled="milestoneArchiveBusyId === m.id"
-                            @click="milestoneArchive(m)"
-                            x-text="milestoneArchiveBusyId === m.id ? 'Archiving…' : 'Archive'"
-                          ></button>
+                          <div class="flex gap-1 flex-shrink-0 flex-wrap">
+                            <button type="button" class="btn btn-ghost btn-sm" @click="openMilestoneEditModal(m)">Edit</button>
+                            <button
+                              type="button"
+                              class="btn btn-danger btn-sm"
+                              :disabled="milestoneDeleteBusyId === m.id || milestoneArchiveBusyId === m.id"
+                              @click="confirmDeleteMilestone(m)"
+                              x-text="milestoneDeleteBusyId === m.id ? 'Deleting…' : 'Delete'"
+                            ></button>
+                            <button
+                              type="button"
+                              class="btn btn-ghost btn-sm"
+                              :disabled="milestoneArchiveBusyId === m.id || milestoneDeleteBusyId === m.id"
+                              @click="milestoneArchive(m)"
+                              x-text="milestoneArchiveBusyId === m.id ? 'Archiving…' : 'Archive'"
+                            ></button>
+                          </div>
                         </div>
                         <div class="mt-2 text-xs text-dim">
                           <span x-text="(m.taskDone != null ? m.taskDone : 0) + ' / ' + (m.taskTotal != null ? m.taskTotal : 0) + ' tasks done'"></span>
                         </div>
                         <div class="progress-bar mt-2">
                           <div class="progress-bar-fill" :style="'width:' + milestoneProgressPct(m) + '%'"></div>
+                        </div>
+                        <div class="mt-3 pt-3" style="border-top:1px solid var(--border)">
+                          <span class="text-xs text-dim font-semibold uppercase tracking-wide">Milestone detail</span>
+                          <div class="mt-2">
+                            <button
+                              type="button"
+                              class="btn btn-primary btn-sm"
+                              :disabled="milestoneArchiveBusyId === m.id || milestoneDeleteBusyId === m.id"
+                              @click="openMilestoneAddTaskModal(m)"
+                            >Add task</button>
+                          </div>
                         </div>
                       </div>
                     </template>
@@ -2921,8 +3039,19 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <div class="flex flex-col gap-2" x-show="milestonesArchivedOpen">
                       <template x-for="am in detailArchivedMilestones" :key="am.id">
                         <div class="card" style="padding:10px;opacity:0.85">
-                          <div class="text-sm font-medium" x-text="am.title || am.id"></div>
-                          <p class="text-xs text-dim mt-1" x-show="milestoneDescPreview(am)" x-text="milestoneDescPreview(am)"></p>
+                          <div class="flex justify-between items-start gap-2 flex-wrap">
+                            <div class="min-w-0 flex-1">
+                              <div class="text-sm font-medium" x-text="am.title || am.id"></div>
+                              <p class="text-xs text-dim mt-1" x-show="milestoneDescPreview(am)" x-text="milestoneDescPreview(am)"></p>
+                            </div>
+                            <button
+                              type="button"
+                              class="btn btn-danger btn-sm flex-shrink-0"
+                              :disabled="milestoneDeleteBusyId === am.id"
+                              @click="confirmDeleteMilestone(am)"
+                              x-text="milestoneDeleteBusyId === am.id ? 'Deleting…' : 'Delete'"
+                            ></button>
+                          </div>
                         </div>
                       </template>
                     </div>
@@ -3036,6 +3165,54 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                 </div>
               </div>
+
+              <div x-show="detailTab === 'workflows'" class="mt-4">
+                <div x-show="detailLoading.workflows" class="loading-state"><div class="spinner"></div><span>Loading workflows…</span></div>
+                <div x-show="detailErrors.workflows && !detailLoading.workflows" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.workflows"></p>
+                  <button type="button" class="btn btn-ghost btn-sm" @click="retryLoad('workflows')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.workflows && !detailErrors.workflows">
+                  <p class="text-xs text-dim mb-3">Workflows assigned to this project (<code class="font-mono text-dim">project_id</code> on the workflow). Each step’s agent must be bound here or have its workspace under a project spoke. Runs use the project-scoped API so agents are validated before execution.</p>
+                  <div class="table-wrap" x-show="projectWorkflows.length">
+                    <table>
+                      <thead><tr><th>Name</th><th>Steps</th><th></th></tr></thead>
+                      <tbody>
+                        <template x-for="wf in projectWorkflows" :key="wf.id">
+                          <tr>
+                            <td class="text-sm" style="font-weight:600" x-text="wf.name || wf.id"></td>
+                            <td class="text-xs text-dim" x-text="wf.steps != null ? wf.steps : '—'"></td>
+                            <td><button type="button" class="btn btn-primary btn-sm" @click="openWfRunModal(wf)">Start</button></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="empty-state py-8" x-show="!projectWorkflows.length">
+                    <p class="text-dim text-sm mb-2">No workflows are assigned to this project yet.</p>
+                    <p class="text-xs text-dim">Create a workflow from the Workflows page and include <code class="font-mono">project_id</code> in the JSON body, or PUT <code class="font-mono">/api/workflows/{id}</code> with <code class="font-mono">project_id</code> set to this project’s id.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="wfRunModal">
+          <div class="modal-overlay" @click.self="closeWfRunModal()" @keydown.escape.window="closeWfRunModal()">
+            <div class="modal" @click.stop>
+              <div class="modal-header">
+                <h3>Start workflow</h3>
+                <button type="button" class="modal-close" @click="closeWfRunModal()">&times;</button>
+              </div>
+              <p class="text-sm mb-2" x-text="wfRunModal && wfRunModal.name ? wfRunModal.name : ''"></p>
+              <div class="form-group">
+                <label>Initial input</label>
+                <textarea class="form-input" rows="4" x-model="wfRunInput" placeholder="Passed as {{input}} to the first step"></textarea>
+              </div>
+              <p class="text-xs text-danger mb-2" x-show="wfRunError" x-text="wfRunError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="wfRunSubmitting" @click="submitProjectWorkflowRun()" x-text="wfRunSubmitting ? 'Running…' : 'Run'"></button>
             </div>
           </div>
         </template>
@@ -3053,102 +3230,395 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
           </div>
         </template>
 
+        <template x-if="docEditorModalOpen">
+          <div class="modal-overlay" @click.self="closeDocEditorModal()" @keydown.escape.window="closeDocEditorModal()">
+            <div class="modal" style="max-width:720px;width:92vw" @click.stop>
+              <div class="modal-header">
+                <h3 x-text="docEditorMode === 'create' ? 'New document' : 'Edit document'"></h3>
+                <button type="button" class="modal-close" @click="closeDocEditorModal()">&times;</button>
+              </div>
+              <div class="form-group"><label>Title</label><input class="form-input" x-model="docEditorForm.title" placeholder="Document title"></div>
+              <template x-if="docEditorMode === 'create'">
+                <div class="form-group">
+                  <label>Type</label>
+                  <select class="form-input" x-model="docEditorForm.docType">
+                    <option value="guide">guide</option>
+                    <option value="reference">reference</option>
+                    <option value="other">other</option>
+                  </select>
+                </div>
+              </template>
+              <template x-if="docEditorMode === 'create'">
+                <div class="form-group">
+                  <label>Category path</label>
+                  <input class="form-input" x-model="docEditorForm.categoryPath" placeholder="e.g. overview/backlog (under backlog/docs/)">
+                  <p class="text-xs text-dim mt-1">Leave empty for docs at the root of <code style="color:var(--accent)">docs/</code>.</p>
+                </div>
+              </template>
+              <div class="form-group">
+                <label>Body (markdown)</label>
+                <textarea class="form-input" rows="16" x-model="docEditorForm.content" style="font-family:var(--font-mono);font-size:12px;line-height:1.4" placeholder="Markdown body"></textarea>
+              </div>
+              <p class="text-xs text-danger mb-2" x-show="docEditorError" x-text="docEditorError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="docEditorSaving" @click="submitDocEditor()" x-text="docEditorSaving ? 'Saving…' : (docEditorMode === 'create' ? 'Create' : 'Save')"></button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="decisionEditorModalOpen">
+          <div class="modal-overlay" @click.self="closeDecisionEditorModal()" @keydown.escape.window="closeDecisionEditorModal()">
+            <div class="modal" style="max-width:720px;width:92vw" @click.stop>
+              <div class="modal-header">
+                <h3 x-text="decisionEditorMode === 'create' ? 'New decision' : 'Edit decision'"></h3>
+                <button type="button" class="modal-close" @click="closeDecisionEditorModal()">&times;</button>
+              </div>
+              <div class="form-group"><label>Title</label><input class="form-input" x-model="decisionEditorForm.title" placeholder="Decision title"></div>
+              <template x-if="decisionEditorMode === 'edit'">
+                <div>
+                  <div class="form-group">
+                    <label>Status</label>
+                    <select class="form-input" x-model="decisionEditorForm.status">
+                      <option value="proposed">proposed</option>
+                      <option value="accepted">accepted</option>
+                      <option value="rejected">rejected</option>
+                      <option value="superseded">superseded</option>
+                    </select>
+                  </div>
+                  <div class="form-group"><label>Context (markdown)</label><textarea class="form-input" rows="5" x-model="decisionEditorForm.context" style="font-family:var(--font-mono);font-size:12px;line-height:1.4"></textarea></div>
+                  <div class="form-group"><label>Decision (markdown)</label><textarea class="form-input" rows="5" x-model="decisionEditorForm.decision" style="font-family:var(--font-mono);font-size:12px;line-height:1.4"></textarea></div>
+                  <div class="form-group"><label>Consequences (markdown)</label><textarea class="form-input" rows="5" x-model="decisionEditorForm.consequences" style="font-family:var(--font-mono);font-size:12px;line-height:1.4"></textarea></div>
+                  <div class="form-group"><label>Alternatives (markdown)</label><textarea class="form-input" rows="4" x-model="decisionEditorForm.alternatives" style="font-family:var(--font-mono);font-size:12px;line-height:1.4" placeholder="Optional"></textarea></div>
+                </div>
+              </template>
+              <p class="text-xs text-danger mb-2" x-show="decisionEditorError" x-text="decisionEditorError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="decisionEditorSaving" @click="submitDecisionEditor()" x-text="decisionEditorSaving ? 'Saving…' : (decisionEditorMode === 'create' ? 'Create' : 'Save')"></button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="milestoneEditorModalOpen">
+          <div class="modal-overlay" @click.self="closeMilestoneEditorModal()" @keydown.escape.window="closeMilestoneEditorModal()">
+            <div class="modal" style="max-width:560px;width:92vw" @click.stop>
+              <div class="modal-header">
+                <h3 x-text="milestoneEditorMode === 'create' ? 'New milestone' : 'Edit milestone'"></h3>
+                <button type="button" class="modal-close" @click="closeMilestoneEditorModal()">&times;</button>
+              </div>
+              <div class="form-group"><label>Title</label><input class="form-input" x-model="milestoneEditorForm.title" placeholder="Milestone title"></div>
+              <div class="form-group"><label>Description (markdown)</label><textarea class="form-input" rows="10" x-model="milestoneEditorForm.description" style="font-family:var(--font-mono);font-size:12px;line-height:1.4"></textarea></div>
+              <p class="text-xs text-danger mb-2" x-show="milestoneEditorError" x-text="milestoneEditorError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="milestoneEditorSaving" @click="submitMilestoneEditor()" x-text="milestoneEditorSaving ? 'Saving…' : (milestoneEditorMode === 'create' ? 'Create' : 'Save')"></button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="backlogCleanupModalOpen">
+          <div class="modal-overlay" @click.self="closeBacklogCleanupModal()" @keydown.escape.window="closeBacklogCleanupModal()">
+            <div class="modal" style="max-width:560px;width:92vw" @click.stop>
+              <div class="modal-header">
+                <h3>Cleanup old tasks</h3>
+                <button type="button" class="modal-close" @click="closeBacklogCleanupModal()">&times;</button>
+              </div>
+              <p class="text-xs text-dim mb-3">Moves <strong>Done</strong> tasks that are still under <code style="color:var(--accent)">backlog/tasks</code> into <code style="color:var(--accent)">backlog/completed</code> when their <strong>updated</strong> date (or <strong>created</strong> if no update) is older than the age you set. Same rules as Backlog.md cleanup.</p>
+              <div class="form-group">
+                <label>Age (days)</label>
+                <input type="number" min="0" class="form-input" x-model="cleanupAgeInput" @change="refreshBacklogCleanupPreview()">
+              </div>
+              <button type="button" class="btn btn-ghost btn-sm mb-3" :disabled="cleanupPreviewLoading" @click="refreshBacklogCleanupPreview()">Refresh preview</button>
+              <div x-show="cleanupPreviewLoading" class="loading-state py-4"><div class="spinner"></div><span>Loading preview…</span></div>
+              <template x-if="!cleanupPreviewLoading && cleanupPreview">
+                <div class="mb-3">
+                  <p class="text-sm mb-2"><strong x-text="cleanupPreview.count != null ? cleanupPreview.count : 0"></strong> task(s) would be moved.</p>
+                  <div class="table-wrap" style="max-height:220px;overflow:auto" x-show="(cleanupPreview.tasks || []).length">
+                    <table class="task-list-table">
+                      <thead><tr><th>ID</th><th>Title</th><th>Reference date</th></tr></thead>
+                      <tbody>
+                        <template x-for="(row, ri) in (cleanupPreview.tasks || [])" :key="row.id || ri">
+                          <tr>
+                            <td class="text-xs font-mono" x-text="row.id"></td>
+                            <td class="text-xs" x-text="row.title"></td>
+                            <td class="text-xs text-dim" x-text="row.updatedDate || row.createdDate || '—'"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </template>
+              <p class="text-xs text-danger mb-2" x-show="cleanupModalError" x-text="cleanupModalError"></p>
+              <button type="button" class="btn btn-primary btn-block" :disabled="cleanupExecuteLoading || cleanupPreviewLoading" @click="executeBacklogCleanup()" x-text="cleanupExecuteLoading ? 'Working…' : 'Move to completed'"></button>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="milestoneAddTaskModalOpen">
+          <div class="modal-overlay" @click.self="closeMilestoneAddTaskModal()" @keydown.escape.window="closeMilestoneAddTaskModal()">
+            <div class="modal" style="max-width:520px;width:92vw" @click.stop>
+              <div class="modal-header">
+                <div>
+                  <h3>Add task to milestone</h3>
+                  <p class="text-xs text-dim mt-1" x-show="milestoneAddTaskMilestone">
+                    <span x-text="milestoneAddTaskMilestone && (milestoneAddTaskMilestone.title || milestoneAddTaskMilestone.id)"></span>
+                    <span class="font-mono ml-1" x-text="milestoneAddTaskMilestone && milestoneAddTaskMilestone.id ? '(' + milestoneAddTaskMilestone.id + ')' : ''"></span>
+                  </p>
+                </div>
+                <button type="button" class="modal-close" @click="closeMilestoneAddTaskModal()">&times;</button>
+              </div>
+              <div x-show="milestoneAddTaskLoading" class="loading-state py-4"><div class="spinner"></div><span>Loading tasks…</span></div>
+              <div x-show="!milestoneAddTaskLoading">
+                <div class="form-group">
+                  <label>Task</label>
+                  <select class="form-input" x-model="milestoneAddTaskTaskId" :disabled="!milestoneAddTaskRows.length">
+                    <option value="">Select a task…</option>
+                    <template x-for="row in milestoneAddTaskRows" :key="row.id">
+                      <option :value="row.id" x-text="row.label"></option>
+                    </template>
+                  </select>
+                  <p class="text-xs text-dim mt-1" x-show="!milestoneAddTaskLoading && !milestoneAddTaskRows.length && !milestoneAddTaskError">No open backlog tasks in this project.</p>
+                </div>
+                <p class="text-xs text-danger mb-2" x-show="milestoneAddTaskError" x-text="milestoneAddTaskError"></p>
+                <button
+                  type="button"
+                  class="btn btn-primary btn-block"
+                  :disabled="milestoneAddTaskSaving || milestoneAddTaskLoading || !milestoneAddTaskTaskId"
+                  @click="submitMilestoneAddTask()"
+                  x-text="milestoneAddTaskSaving ? 'Saving…' : 'Assign to milestone'"
+                ></button>
+              </div>
+            </div>
+          </div>
+        </template>
+
         <template x-if="taskModalOpen">
           <div class="modal-overlay" @click.self="closeTaskModal()" @keydown.escape.window="closeTaskModal()">
-            <div class="modal" style="max-width:720px;max-height:90vh;overflow:auto">
-              <div class="modal-header flex justify-between items-start gap-2 flex-wrap">
-                <h3 style="margin:0" x-text="taskModalTitle"></h3>
-                <div class="flex gap-2 flex-wrap" x-show="backlogDetailTask && !taskModalLoading && taskModalTaskActions">
-                  <template x-if="!taskDetailEditMode">
-                    <span>
+            <div class="modal modal--task-detail" @click.stop>
+              <header class="task-detail-modal__header">
+                <div class="task-detail-modal__header-text">
+                  <h3 class="task-detail-modal__title" x-show="taskModalLoading" x-text="taskModalTitle"></h3>
+                  <template x-if="!taskModalLoading && backlogDetailTask">
+                    <h3 class="task-detail-modal__title">
+                      <code class="task-detail-modal__task-id" x-text="backlogDetailTask.id"></code>
+                      <span class="task-detail-modal__title-sep"> — </span>
+                      <span class="task-detail-modal__title-line" x-text="backlogDetailTask.title || backlogDetailTask.id"></span>
+                    </h3>
+                  </template>
+                  <h3 class="task-detail-modal__title" x-show="!taskModalLoading && !backlogDetailTask" x-text="taskModalTitle"></h3>
+                </div>
+                <div class="task-detail-modal__header-actions">
+                  <template x-if="backlogDetailTask && !taskModalLoading && taskModalTaskActions && !taskDetailEditMode">
+                    <span class="flex gap-2 flex-wrap items-center">
+                      <button type="button" class="btn btn-success btn-sm" @click="backlogCompleteTask()">Mark as completed</button>
                       <button type="button" class="btn btn-ghost btn-sm" @click="taskDetailEnterEdit()">Edit</button>
                       <button type="button" class="btn btn-ghost btn-sm" @click="backlogArchiveTask()">Archive</button>
-                      <button type="button" class="btn btn-primary btn-sm" @click="backlogCompleteTask()">Complete</button>
                     </span>
                   </template>
-                  <template x-if="taskDetailEditMode">
-                    <span>
+                  <template x-if="backlogDetailTask && !taskModalLoading && taskModalTaskActions && taskDetailEditMode">
+                    <span class="flex gap-2 flex-wrap items-center">
                       <button type="button" class="btn btn-primary btn-sm" :disabled="taskDetailSaving" @click="taskDetailSaveEdit()" x-text="taskDetailSaving ? 'Saving…' : 'Save'"></button>
                       <button type="button" class="btn btn-ghost btn-sm" @click="taskDetailCancelEdit()">Cancel</button>
                     </span>
                   </template>
-                  <button type="button" class="modal-close" @click="closeTaskModal()">&times;</button>
+                  <button type="button" class="modal-close task-detail-modal__close" @click="closeTaskModal()" aria-label="Close">&times;</button>
                 </div>
-              </div>
-              <div class="modal-body">
-                <div x-show="taskModalLoading" class="loading-state py-6"><div class="spinner"></div><span>Loading task...</span></div>
-                <p class="text-danger text-sm" x-show="taskModalError && !taskModalLoading" x-text="taskModalError"></p>
-                <div x-show="!taskModalLoading && !taskModalError && backlogDetailTask" class="task-detail-md" style="font-size:13px;line-height:1.5">
-                  <template x-if="!taskDetailEditMode">
-                    <div class="grid gap-2 mb-4" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));font-size:12px">
-                      <div><span class="text-dim">ID</span><br><code x-text="backlogDetailTask.id"></code></div>
-                      <div><span class="text-dim">Status</span><br><span x-text="backlogDetailTask.status || '—'"></span></div>
-                      <div><span class="text-dim">Priority</span><br><span x-text="backlogDetailTask.priority || '—'"></span></div>
-                      <div><span class="text-dim">Milestone</span><br><span x-text="backlogDetailTask.milestone || '—'"></span></div>
-                      <div style="grid-column:1/-1"><span class="text-dim">Assignee</span><br><span x-text="taskJoin(backlogDetailTask.assignee)"></span></div>
-                      <div style="grid-column:1/-1"><span class="text-dim">Labels</span><br><span x-text="taskJoin(backlogDetailTask.labels)"></span></div>
-                      <div style="grid-column:1/-1"><span class="text-dim">Dependencies</span><br><span x-text="taskJoin(backlogDetailTask.dependencies)"></span></div>
-                    </div>
-                  </template>
-                  <template x-if="taskDetailEditMode">
-                    <div class="form-group"><label>Status</label>
-                      <select class="form-input" x-model="taskEditForm.status">
-                        <template x-for="st in taskEditStatusOptions()" :key="String(st)">
-                          <option :value="st" x-text="st"></option>
+              </header>
+              <div class="task-detail-modal__body">
+                <div class="task-detail-modal__loading" x-show="taskModalLoading">
+                  <div class="loading-state py-6"><div class="spinner"></div><span>Loading task...</span></div>
+                </div>
+                <p class="text-danger text-sm task-detail-modal__banner" x-show="taskModalError && !taskModalLoading" x-text="taskModalError"></p>
+                <template x-if="!taskModalLoading && !taskModalError && backlogDetailTask">
+                <div class="task-detail-modal__columns">
+                  <div class="task-detail-modal__main">
+                    <template x-if="taskDetailEditMode">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">Description</h4>
+                        <textarea x-ref="taskEasymdeDesc" class="task-detail-easymde-source" data-task-easymde="desc" aria-label="Task description (markdown)"></textarea>
+                      </section>
+                    </template>
+                    <template x-if="backlogDetailTask.description && !taskDetailEditMode">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">Description</h4>
+                        <div class="message-bubble markdown-body task-detail-modal__md" x-html="backlogDetailMd(backlogDetailTask.description)"></div>
+                      </section>
+                    </template>
+                    <section class="task-detail-modal__section">
+                      <h4 class="task-detail-modal__section-title">References</h4>
+                      <template x-if="!(backlogDetailTask.references || []).length">
+                        <p class="text-dim text-sm">No references</p>
+                      </template>
+                      <ul class="task-detail-modal__ref-list text-sm" x-show="(backlogDetailTask.references || []).length">
+                        <template x-for="(refUrl, ri) in (backlogDetailTask.references || [])" :key="ri">
+                          <li><a :href="refUrl" class="text-accent" x-text="refUrl" target="_blank" rel="noopener noreferrer"></a></li>
                         </template>
-                      </select>
-                    </div>
-                    <div class="form-group"><label>Priority</label>
-                      <select class="form-input" x-model="taskEditForm.priority">
-                        <option value="">(none)</option>
-                        <option value="high">high</option>
-                        <option value="medium">medium</option>
-                        <option value="low">low</option>
-                      </select>
-                    </div>
-                    <div class="form-group"><label>Assignees (one per line)</label>
-                      <textarea class="form-input" rows="3" x-model="taskEditForm.assigneeText"></textarea>
-                    </div>
-                    <div class="form-group"><label>Labels (comma-separated)</label>
-                      <input class="form-input" x-model="taskEditForm.labelsText">
-                    </div>
-                  </template>
-                  <template x-if="backlogDetailTask.description && !taskDetailEditMode">
-                    <h4 class="text-sm font-semibold mt-2">Description</h4>
-                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.description)"></div>
-                  </template>
-                  <template x-if="(backlogDetailTask.acceptanceCriteriaItems || []).length && !taskDetailEditMode && taskModalTaskActions">
-                    <h4 class="text-sm font-semibold mt-3">Acceptance criteria</h4>
-                    <div class="text-sm">
-                      <template x-for="(ac, idx) in backlogDetailTask.acceptanceCriteriaItems" :key="idx">
-                        <label class="flex gap-2 py-1 cursor-pointer" style="align-items:flex-start">
-                          <input type="checkbox" :checked="ac.checked" @click.prevent="toggleBacklogAc(idx)" style="margin-top:3px;flex-shrink:0">
-                          <span x-text="ac.text"></span>
-                        </label>
-                      </template>
-                    </div>
-                  </template>
-                  <template x-if="(backlogDetailTask.acceptanceCriteriaItems || []).length && !taskDetailEditMode && !taskModalTaskActions">
-                    <h4 class="text-sm font-semibold mt-3">Acceptance criteria</h4>
-                    <ul class="text-sm text-dim pl-4" style="list-style:disc">
-                      <template x-for="(ac, idx) in backlogDetailTask.acceptanceCriteriaItems" :key="idx">
-                        <li x-text="(ac.checked ? '\u2713 ' : '') + ac.text"></li>
-                      </template>
-                    </ul>
-                  </template>
-                  <template x-if="backlogDetailTask.implementationPlan && !taskDetailEditMode">
-                    <h4 class="text-sm font-semibold mt-3">Implementation plan</h4>
-                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.implementationPlan)"></div>
-                  </template>
-                  <template x-if="backlogDetailTask.implementationNotes && !taskDetailEditMode">
-                    <h4 class="text-sm font-semibold mt-3">Implementation notes</h4>
-                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.implementationNotes)"></div>
-                  </template>
-                  <template x-if="backlogDetailTask.finalSummary && !taskDetailEditMode">
-                    <h4 class="text-sm font-semibold mt-3">Final summary</h4>
-                    <div class="message-bubble markdown-body" x-html="backlogDetailMd(backlogDetailTask.finalSummary)"></div>
-                  </template>
+                      </ul>
+                    </section>
+                    <template x-if="taskDetailEditMode">
+                      <div class="task-detail-modal__edit-fields">
+                        <section class="task-detail-modal__section">
+                          <h4 class="task-detail-modal__section-title">Acceptance criteria</h4>
+                          <div class="task-detail-modal__ac-edit">
+                            <template x-for="(row, acIdx) in (taskEditForm.acEditRows || [])" :key="'ac-' + acIdx">
+                              <div class="task-detail-modal__ac-edit-row">
+                                <input type="checkbox" class="task-detail-modal__ac-edit-check" x-model="row.checked" title="Done">
+                                <input type="text" class="form-input" x-model="row.text" placeholder="Criterion text">
+                                <button type="button" class="btn btn-ghost btn-sm task-detail-modal__ac-edit-remove" @click="taskDetailRemoveAcRow(acIdx)" title="Remove" :disabled="(taskEditForm.acEditRows || []).length <= 1">&times;</button>
+                              </div>
+                            </template>
+                            <button type="button" class="btn btn-ghost btn-sm mt-1" @click="taskDetailAddAcRow()">Add criterion</button>
+                          </div>
+                        </section>
+                        <section class="task-detail-modal__section">
+                          <h4 class="task-detail-modal__section-title">Implementation plan</h4>
+                          <textarea x-ref="taskEasymdePlan" class="task-detail-easymde-source" data-task-easymde="plan" aria-label="Implementation plan (markdown)"></textarea>
+                        </section>
+                        <section class="task-detail-modal__section">
+                          <h4 class="task-detail-modal__section-title">Implementation notes</h4>
+                          <textarea x-ref="taskEasymdeNotes" class="task-detail-easymde-source" data-task-easymde="notes" aria-label="Implementation notes (markdown)"></textarea>
+                        </section>
+                        <section class="task-detail-modal__section">
+                          <h4 class="task-detail-modal__section-title">Final summary</h4>
+                          <textarea x-ref="taskEasymdeSummary" class="task-detail-easymde-source task-detail-easymde-source--short" data-task-easymde="summary" aria-label="Final summary (markdown)"></textarea>
+                        </section>
+                      </div>
+                    </template>
+                    <template x-if="(backlogDetailTask.acceptanceCriteriaItems || []).length && !taskDetailEditMode && taskModalTaskActions">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">
+                          Acceptance criteria (<span x-text="taskAcDoneCount()"></span>/<span x-text="taskAcTotalCount()"></span>)
+                        </h4>
+                        <div class="task-detail-modal__ac-list">
+                          <template x-for="(ac, idx) in backlogDetailTask.acceptanceCriteriaItems" :key="idx">
+                            <label class="task-detail-modal__ac-row">
+                              <input type="checkbox" :checked="ac.checked" @click.prevent="toggleBacklogAc(idx)">
+                              <span x-text="ac.text"></span>
+                            </label>
+                          </template>
+                        </div>
+                      </section>
+                    </template>
+                    <template x-if="(backlogDetailTask.acceptanceCriteriaItems || []).length && !taskDetailEditMode && !taskModalTaskActions">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">Acceptance criteria</h4>
+                        <ul class="text-sm text-dim pl-4 task-detail-modal__ac-readonly" style="list-style:disc">
+                          <template x-for="(ac, idx) in backlogDetailTask.acceptanceCriteriaItems" :key="idx">
+                            <li x-text="(ac.checked ? '\u2713 ' : '') + ac.text"></li>
+                          </template>
+                        </ul>
+                      </section>
+                    </template>
+                    <template x-if="backlogDetailTask.implementationPlan && !taskDetailEditMode">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">Implementation plan</h4>
+                        <div class="message-bubble markdown-body task-detail-modal__md" x-html="backlogDetailMd(backlogDetailTask.implementationPlan)"></div>
+                      </section>
+                    </template>
+                    <template x-if="backlogDetailTask.implementationNotes && !taskDetailEditMode">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">Implementation notes</h4>
+                        <div class="message-bubble markdown-body task-detail-modal__md" x-html="backlogDetailMd(backlogDetailTask.implementationNotes)"></div>
+                      </section>
+                    </template>
+                    <template x-if="backlogDetailTask.finalSummary && !taskDetailEditMode">
+                      <section class="task-detail-modal__section">
+                        <h4 class="task-detail-modal__section-title">Final summary</h4>
+                        <div class="message-bubble markdown-body task-detail-modal__md" x-html="backlogDetailMd(backlogDetailTask.finalSummary)"></div>
+                      </section>
+                    </template>
+                  </div>
+                  <aside class="task-detail-modal__sidebar">
+                    <template x-if="!taskDetailEditMode">
+                      <div class="task-detail-modal__meta">
+                        <div class="task-detail-modal__meta-row">
+                          <span class="task-detail-modal__meta-label">Created</span>
+                          <span class="task-detail-modal__meta-value" x-text="backlogDetailTask.createdDate || backlogDetailTask.created_date || '—'"></span>
+                        </div>
+                        <div class="task-detail-modal__meta-row">
+                          <span class="task-detail-modal__meta-label">Updated</span>
+                          <span class="task-detail-modal__meta-value" x-text="backlogDetailTask.updatedDate || backlogDetailTask.updated_date || '—'"></span>
+                        </div>
+                        <div class="task-detail-modal__meta-block">
+                          <span class="task-detail-modal__meta-label">Title</span>
+                          <p class="task-detail-modal__sidebar-title" x-text="backlogDetailTask.title || '—'"></p>
+                        </div>
+                        <div class="task-detail-modal__meta-row">
+                          <span class="task-detail-modal__meta-label">Status</span>
+                          <span class="task-detail-modal__meta-value" x-text="backlogDetailTask.status || '—'"></span>
+                        </div>
+                        <div class="task-detail-modal__meta-row">
+                          <span class="task-detail-modal__meta-label">Milestone</span>
+                          <span class="task-detail-modal__meta-value" x-text="backlogDetailTask.milestone || '—'"></span>
+                        </div>
+                        <div class="task-detail-modal__meta-block">
+                          <span class="task-detail-modal__meta-label">Assignee</span>
+                          <p class="task-detail-modal__meta-value" x-text="taskJoin(backlogDetailTask.assignee)"></p>
+                        </div>
+                        <div class="task-detail-modal__meta-block">
+                          <span class="task-detail-modal__meta-label">Labels</span>
+                          <div class="flex flex-wrap gap-1 mt-1" x-show="(backlogDetailTask.labels || []).length">
+                            <template x-for="(lb, li) in (backlogDetailTask.labels || [])" :key="li">
+                              <span class="badge badge-info text-xs" x-text="lb"></span>
+                            </template>
+                          </div>
+                          <p class="text-dim text-sm" x-show="!(backlogDetailTask.labels || []).length">—</p>
+                        </div>
+                        <div class="task-detail-modal__meta-row">
+                          <span class="task-detail-modal__meta-label">Priority</span>
+                          <span class="task-detail-modal__meta-value"><span class="badge" :class="priorityClass(backlogDetailTask.priority)" x-text="taskDetailPriorityDisplay()"></span></span>
+                        </div>
+                        <div class="task-detail-modal__meta-block">
+                          <span class="task-detail-modal__meta-label">Dependencies</span>
+                          <p class="task-detail-modal__meta-value text-xs font-mono" x-text="taskJoin(backlogDetailTask.dependencies)"></p>
+                        </div>
+                      </div>
+                    </template>
+                    <template x-if="taskDetailEditMode">
+                      <div class="task-detail-modal__edit">
+                        <div class="form-group" style="margin-bottom:12px">
+                          <label>Title</label>
+                          <textarea class="form-input" rows="2" x-model="taskEditForm.title" placeholder="Task title"></textarea>
+                        </div>
+                        <div class="form-group" style="margin-bottom:12px">
+                          <label>Status</label>
+                          <select class="form-input" x-model="taskEditForm.status">
+                            <template x-for="st in taskEditStatusOptions()" :key="String(st)">
+                              <option :value="st" x-text="st"></option>
+                            </template>
+                          </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:12px">
+                          <label>Priority</label>
+                          <select class="form-input" x-model="taskEditForm.priority">
+                            <option value="">(none)</option>
+                            <option value="high">high</option>
+                            <option value="medium">medium</option>
+                            <option value="low">low</option>
+                          </select>
+                        </div>
+                        <div class="form-group" style="margin-bottom:12px" x-show="selectedProject">
+                          <label>Milestone</label>
+                          <select
+                            class="form-input"
+                            x-model="taskEditForm.milestoneId"
+                            :key="'milestonesel-' + taskEditSessionKey"
+                          >
+                            <template x-for="(row, ri) in taskDetailMilestoneSelectRows()" :key="'tm-' + taskEditSessionKey + '-' + ri + '-' + (row.value || 'none')">
+                              <option :value="row.value" x-text="row.text"></option>
+                            </template>
+                          </select>
+                          <p class="text-xs text-dim mt-1" x-show="selectedProject && (!detailMilestones || !detailMilestones.length)">No active milestones. Add some under the Milestones tab.</p>
+                        </div>
+                        <div class="form-group" style="margin-bottom:12px">
+                          <label>Assignees (one per line)</label>
+                          <textarea class="form-input" rows="3" x-model="taskEditForm.assigneeText" placeholder="Type name and press Enter between lines"></textarea>
+                        </div>
+                        <div class="form-group" style="margin-bottom:0">
+                          <label>Labels (comma-separated)</label>
+                          <input class="form-input" type="text" x-model="taskEditForm.labelsText">
+                        </div>
+                      </div>
+                    </template>
+                  </aside>
                 </div>
+                </template>
               </div>
             </div>
           </div>
@@ -4755,16 +5225,15 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       </div>
     </template>
 
-    <!-- Page: Sessions -->
-    <template x-if="page === 'sessions'">
+    <!-- Page: Sessions (agents hub) -->
+    <template x-if="page === 'agents' && agentsHubTab === 'sessions'">
       <div x-data="sessionsPage">
-        <div class="page-header">
-          <h2>Sessions</h2>
-          <input class="form-input" style="width:200px" placeholder="Filter by agent..." x-model="searchFilter" x-show="tab === 'sessions'">
-        </div>
-        <div class="tabs">
-          <div class="tab" :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">Sessions</div>
-          <div class="tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">Memory</div>
+        <div class="flex flex-wrap gap-2 items-end mb-2 justify-between">
+          <div class="tabs" style="margin:0">
+            <div class="tab" :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">Sessions</div>
+            <div class="tab" :class="{ active: tab === 'memory' }" @click="tab = 'memory'">Memory</div>
+          </div>
+          <input class="form-input" style="width:200px;max-width:100%" placeholder="Filter by agent..." x-model="searchFilter" x-show="tab === 'sessions'">
         </div>
         <div class="page-body" x-init="loadSessions()">
           <!-- Sessions tab -->
@@ -4807,7 +5276,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
               <h3>No sessions yet</h3>
               <p>Sessions are created when you chat with agents. Start a conversation to see session history here.</p>
-              <button class="btn btn-primary" @click="location.hash='agents'">Start Chatting</button>
+              <button class="btn btn-primary" @click="navigate('agents/chat')">Open chat</button>
             </div>
             <div class="empty-state" x-show="!filteredSessions.length && searchFilter"><p>No sessions match your filter.</p></div>
             </div>
@@ -5013,12 +5482,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
       </div>
     </template>
 
-    <!-- Page: Comms -->
-    <template x-if="page === 'comms'">
+    <!-- Page: Comms (agents hub) -->
+    <template x-if="page === 'agents' && agentsHubTab === 'comms'">
       <div x-data="commsPage" x-init="loadData()" @page-leave.window="stopSSE()">
-        <div class="page-header">
-          <h2>Agent Comms</h2>
-          <div class="flex items-center gap-2">
+        <div class="page-body">
+          <div class="flex flex-wrap items-center gap-2 mb-4">
             <button class="btn btn-primary btn-sm" @click="openSendModal()">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>
               Send Message
@@ -5031,8 +5499,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0115-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 01-15 6.7L3 16"/></svg>
             </button>
           </div>
-        </div>
-        <div class="page-body">
           <!-- Loading -->
           <div x-show="loading" style="animation:fadeIn 0.2s">
             <div class="card mb-4"><div class="skeleton skeleton-text" style="width:160px;margin-bottom:8px"></div><div class="skeleton skeleton-card" style="height:120px"></div></div>

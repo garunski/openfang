@@ -555,7 +555,7 @@ function wizardPage() {
       if (this.createdAgent) {
         var agent = this.createdAgent;
         Alpine.store('app').pendingAgent = { id: agent.id, name: agent.name, model_provider: '?', model_name: '?' };
-        window.location.hash = 'agents';
+        window.location.hash = 'agents/chat';
       } else {
         window.location.hash = 'overview';
       }

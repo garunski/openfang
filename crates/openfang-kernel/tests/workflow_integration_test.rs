@@ -139,6 +139,7 @@ memory_write = ["self.*"]
                 output_var: None,
             },
         ],
+        project_id: None,
         created_at: chrono::Utc::now(),
     };
 
@@ -213,6 +214,7 @@ memory_write = ["self.*"]
             error_mode: ErrorMode::Fail,
             output_var: None,
         }],
+        project_id: None,
         created_at: chrono::Utc::now(),
     };
 
@@ -354,6 +356,7 @@ async fn test_workflow_e2e_with_groq() {
                 output_var: None,
             },
         ],
+        project_id: None,
         created_at: chrono::Utc::now(),
     };
 
@@ -364,6 +367,7 @@ async fn test_workflow_e2e_with_groq() {
         .run_workflow(
             wf_id,
             "The Rust programming language is growing rapidly.".to_string(),
+            None,
         )
         .await;
 

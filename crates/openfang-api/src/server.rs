@@ -152,6 +152,10 @@ pub async fn build_router(
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
         .route(
+            "/vendor/fa4/{name}",
+            axum::routing::get(webchat::fa4_font),
+        )
+        .route(
             "/api/metrics",
             axum::routing::get(routes::prometheus_metrics),
         )
@@ -387,6 +391,10 @@ pub async fn build_router(
             "/api/projects/{id}/pipelines",
             axum::routing::get(routes::list_project_pipelines),
         )
+        .route(
+            "/api/projects/{id}/workflows/{workflow_id}/run",
+            axum::routing::post(routes::run_project_workflow),
+        )
         // Backlog.md-style task API (cached via BacklogStore)
         .route(
             "/api/projects/{id}/backlog/config",
@@ -395,6 +403,14 @@ pub async fn build_router(
         .route(
             "/api/projects/{id}/backlog/tasks/reorder",
             axum::routing::post(routes::backlog_reorder_tasks),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/cleanup/execute",
+            axum::routing::post(routes::backlog_cleanup_tasks_execute),
+        )
+        .route(
+            "/api/projects/{id}/backlog/tasks/cleanup",
+            axum::routing::get(routes::backlog_cleanup_tasks_preview),
         )
         .route(
             "/api/projects/{id}/backlog/tasks/{task_id}/complete",
@@ -412,7 +428,9 @@ pub async fn build_router(
         )
         .route(
             "/api/projects/{id}/backlog/docs/{doc_id}",
-            axum::routing::get(routes::backlog_get_doc).put(routes::backlog_update_doc),
+            axum::routing::get(routes::backlog_get_doc)
+                .put(routes::backlog_update_doc)
+                .delete(routes::backlog_delete_doc),
         )
         .route(
             "/api/projects/{id}/backlog/docs",
@@ -431,20 +449,19 @@ pub async fn build_router(
             axum::routing::post(routes::backlog_archive_milestone),
         )
         .route(
+            "/api/projects/{id}/backlog/milestones/{milestone_id}",
+            axum::routing::put(routes::backlog_update_milestone)
+                .delete(routes::backlog_delete_milestone),
+        )
+        .route(
             "/api/projects/{id}/backlog/milestones",
             axum::routing::get(routes::backlog_list_milestones).post(routes::backlog_create_milestone),
         )
         .route(
-            "/api/projects/{id}/backlog/drafts/{draft_id}/promote",
-            axum::routing::post(routes::backlog_promote_draft),
-        )
-        .route(
-            "/api/projects/{id}/backlog/drafts",
-            axum::routing::get(routes::backlog_list_drafts),
-        )
-        .route(
             "/api/projects/{id}/backlog/decisions/{decision_id}",
-            axum::routing::get(routes::backlog_get_decision).put(routes::backlog_update_decision),
+            axum::routing::get(routes::backlog_get_decision)
+                .put(routes::backlog_update_decision)
+                .delete(routes::backlog_delete_decision),
         )
         .route(
             "/api/projects/{id}/backlog/decisions",
@@ -453,6 +470,10 @@ pub async fn build_router(
         .route(
             "/api/projects/{id}/backlog/search",
             axum::routing::get(routes::backlog_search),
+        )
+        .route(
+            "/api/projects/{id}/backlog/overview",
+            axum::routing::get(routes::backlog_overview),
         )
         .route(
             "/api/projects/{id}/backlog/statistics",

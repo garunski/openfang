@@ -9,7 +9,7 @@
 /* Sidebar */
 .sidebar {
   width: var(--sidebar-width);
-  background: var(--bg-primary);
+  background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -159,6 +159,26 @@
   box-shadow: var(--shadow-sm), 0 2px 8px rgba(255, 92, 0, 0.2);
 }
 
+.nav-item-nested {
+  padding-left: 28px;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.nav-item-nested .nav-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar.collapsed .nav-item-nested {
+  padding-left: 12px;
+}
+
+.main-content > .agents-hub-chrome {
+  flex: 0 0 auto;
+}
+
 .nav-icon {
   width: 18px;
   height: 18px;
@@ -211,6 +231,16 @@
   overflow: hidden;
 }
 
+/* Extra wrapper from Alpine x-if (e.g. projects list vs detail) — must continue the flex column so .page-body scrolls */
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
 .page-header {
   padding: 14px 24px;
   border-bottom: 1px solid var(--border);
@@ -225,6 +255,97 @@
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+
+/* Project detail: back + title/path left, search right; wrap on narrow viewports */
+.page-header.page-header--project {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px 28px;
+  min-height: 0;
+  background: var(--chrome-surface);
+  border-bottom-color: var(--border-subtle);
+}
+
+/* Subnav: scrollable tabs under project header (matches compact dashboard layout) */
+.project-subnav {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-surface);
+  flex-shrink: 0;
+}
+
+.page-body--project {
+  background: var(--content-canvas);
+}
+
+.page-header__project-lead {
+  display: flex;
+  align-items: center;
+  gap: 12px 16px;
+  min-width: 0;
+  flex: 1 1 200px;
+}
+
+.page-header__project-back {
+  flex-shrink: 0;
+  margin: 0;
+}
+
+.page-header__project-text {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.page-header__project-text h2 {
+  margin: 0;
+  line-height: 1.25;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.page-header__project-path {
+  margin: 4px 0 0;
+  word-break: break-all;
+  line-height: 1.35;
+}
+
+.page-header__project-search {
+  flex: 1 1 260px;
+  max-width: min(480px, 100%);
+  width: 100%;
+  min-width: 0;
+}
+
+.page-header__search-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.page-header__search-popover {
+  max-height: 280px;
+  overflow-y: auto;
+  box-shadow: var(--shadow-lg);
+}
+
+@media (max-width: 768px) {
+  .page-header.page-header--project {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .page-header__project-lead {
+    flex-wrap: wrap;
+  }
+  .page-header__project-search {
+    max-width: none;
+  }
 }
 
 .page-body {

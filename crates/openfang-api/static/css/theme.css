@@ -6,6 +6,10 @@
   /* Backgrounds — layered depth */
   --bg: #F5F4F2;
   --bg-primary: #EDECEB;
+  /* Project chrome (header + tab bar) — aligns with dashboard mockups */
+  --chrome-surface: #ffffff;
+  --content-canvas: #f9fafb;
+  --sidebar-bg: #fbfbfb;
   --bg-elevated: #F8F7F6;
   --surface: #FFFFFF;
   --surface2: #F0EEEC;
@@ -90,6 +94,9 @@
 [data-theme="dark"] {
   --bg: #080706;
   --bg-primary: #0F0E0E;
+  --chrome-surface: var(--bg-primary);
+  --content-canvas: var(--bg);
+  --sidebar-bg: var(--bg-primary);
   --bg-elevated: #161413;
   --surface: #1F1D1C;
   --surface2: #2A2725;

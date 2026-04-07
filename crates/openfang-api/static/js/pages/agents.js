@@ -314,6 +314,10 @@ function agentsPage() {
     closeChat() {
       this.activeChatAgent = null;
       OpenFangAPI.wsDisconnect();
+      var segs = window.location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+      if (segs[0] === 'agents' && segs[1] === 'chat') {
+        window.location.hash = 'agents/sessions';
+      }
     },
 
     async showDetail(agent) {

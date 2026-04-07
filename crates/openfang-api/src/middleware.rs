@@ -89,6 +89,7 @@ pub async fn auth(
     let is_public = path == "/"
         || path == "/logo.png"
         || path == "/favicon.ico"
+        || (path.starts_with("/vendor/fa4/") && is_get)
         || (path == "/.well-known/agent.json" && is_get)
         || (path.starts_with("/a2a/") && is_get)
         || path == "/api/health"

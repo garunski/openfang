@@ -1074,7 +1074,10 @@ function chatPage() {
         el.scrollTop = el.scrollHeight;
         // Debounce LaTeX rendering to avoid running on every streaming token
         if (self._latexTimer) clearTimeout(self._latexTimer);
-        self._latexTimer = setTimeout(function() { renderLatex(el); }, 150);
+        self._latexTimer = setTimeout(function() {
+          renderLatex(el);
+          if (typeof renderMermaidIn === 'function') renderMermaidIn(el);
+        }, 150);
       });
     },
 

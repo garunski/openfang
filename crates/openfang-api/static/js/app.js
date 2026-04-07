@@ -1,12 +1,37 @@
 // OpenFang App — Alpine.js init, hash router, global store
 'use strict';
 
+function escapeHtml(text) {
+  var div = document.createElement('div');
+  div.textContent = text || '';
+  return div.innerHTML;
+}
+
 // Marked.js configuration
 if (typeof marked !== 'undefined') {
+  marked.use({
+    renderer: {
+      code: function (token) {
+        var rawLang = token.lang != null ? String(token.lang) : '';
+        var lang = rawLang.trim().split(/\s+/)[0].replace(/\{.*$/, '').trim().toLowerCase();
+        if (lang === 'mermaid') {
+          return (
+            '<div class="mermaid of-mermaid-pending">' +
+            escapeHtml(token.text != null ? String(token.text) : '') +
+            '</div>\n'
+          );
+        }
+        return false;
+      },
+    },
+  });
   marked.setOptions({
     breaks: true,
     gfm: true,
     highlight: function(code, lang) {
+      if (lang && String(lang).trim().split(/\s+/)[0].replace(/\{.*$/, '').trim().toLowerCase() === 'mermaid') {
+        return code;
+      }
       if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
         try { return hljs.highlight(code, { language: lang }).value; } catch(e) {}
       }
@@ -15,37 +40,28 @@ if (typeof marked !== 'undefined') {
   });
 }
 
-function escapeHtml(text) {
-  var div = document.createElement('div');
-  div.textContent = text || '';
-  return div.innerHTML;
-}
-
-function renderMarkdown(text) {
+function renderMarkdownInternal(text, opts) {
+  opts = opts || {};
+  var withCopyButtons = opts.withCopyButtons !== false;
   if (!text) return '';
   if (typeof marked !== 'undefined') {
-    // Protect LaTeX blocks from marked.js mangling (underscores, backslashes, etc.)
     var latexBlocks = [];
     var protected_ = text;
-    // Protect display math $$...$$ first (greedy across lines)
     protected_ = protected_.replace(/\$\$([\s\S]+?)\$\$/g, function(match) {
       var idx = latexBlocks.length;
       latexBlocks.push(match);
       return '\x00LATEX' + idx + '\x00';
     });
-    // Protect inline math $...$ (single line, not empty, not starting/ending with space)
     protected_ = protected_.replace(/\$([^\s$](?:[^$]*[^\s$])?)\$/g, function(match) {
       var idx = latexBlocks.length;
       latexBlocks.push(match);
       return '\x00LATEX' + idx + '\x00';
     });
-    // Protect \[...\] display math
     protected_ = protected_.replace(/\\\[([\s\S]+?)\\\]/g, function(match) {
       var idx = latexBlocks.length;
       latexBlocks.push(match);
       return '\x00LATEX' + idx + '\x00';
     });
-    // Protect \(...\) inline math
     protected_ = protected_.replace(/\\\(([\s\S]+?)\\\)/g, function(match) {
       var idx = latexBlocks.length;
       latexBlocks.push(match);
@@ -53,17 +69,25 @@ function renderMarkdown(text) {
     });
 
     var html = marked.parse(protected_);
-    // Restore LaTeX blocks
     for (var i = 0; i < latexBlocks.length; i++) {
       html = html.replace('\x00LATEX' + i + '\x00', latexBlocks[i]);
     }
-    // Add copy buttons to code blocks
-    html = html.replace(/<pre><code/g, '<pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code');
-    // Open external links in new tab
+    if (withCopyButtons) {
+      html = html.replace(/<pre><code/g, '<pre><button class="copy-btn" onclick="copyCode(this)">Copy</button><code');
+    }
     html = html.replace(/<a\s+href="(https?:\/\/[^"]*)"(?![^>]*target=)([^>]*)>/gi, '<a href="$1" target="_blank" rel="noopener"$2>');
     return html;
   }
   return escapeHtml(text);
+}
+
+function renderMarkdown(text) {
+  return renderMarkdownInternal(text, { withCopyButtons: true });
+}
+
+/** Markdown for EasyMDE preview / CSP: no inline onclick on copy buttons */
+function renderMarkdownPreview(text) {
+  return renderMarkdownInternal(text, { withCopyButtons: false });
 }
 
 function copyCode(btn) {
@@ -283,10 +307,48 @@ document.addEventListener('alpine:init', function() {
   });
 });
 
+// Top-level dashboard pages (first hash segment). Sub-routes use extra segments, e.g. #projects/<id>/<tab>.
+var APP_TOP_PAGES = [
+  'overview',
+  'projects',
+  'agents',
+  'workflows',
+  'scheduler',
+  'channels',
+  'skills',
+  'hands',
+  'analytics',
+  'logs',
+  'runtime',
+  'settings',
+  'wizard',
+];
+var APP_PAGE_REDIRECTS = {
+  chat: 'agents/chat',
+  templates: 'agents/chat',
+  sessions: 'agents/sessions',
+  approvals: 'agents/approvals',
+  comms: 'agents/comms',
+  triggers: 'workflows',
+  cron: 'scheduler',
+  schedules: 'scheduler',
+  memory: 'agents/sessions',
+  audit: 'logs',
+  security: 'settings',
+  peers: 'settings',
+  usage: 'analytics',
+  approval: 'agents/approvals',
+};
+
 // Main app component
 function app() {
   return {
-    page: 'agents',
+    page: 'overview',
+    /** When page === 'agents': 'sessions' | 'approvals' | 'comms' | 'chat' */
+    agentsHubTab: 'sessions',
+    /** Selected project id from hash #projects/<id>/... for sidebar highlight */
+    projectRouteId: null,
+    sidebarProjects: [],
     themeMode: localStorage.getItem('openfang-theme-mode') || 'system',
     theme: (() => {
       var mode = localStorage.getItem('openfang-theme-mode') || 'system';
@@ -312,28 +374,37 @@ function app() {
         }
       });
 
-      // Hash routing
-      var validPages = ['overview','projects','agents','sessions','approvals','comms','workflows','scheduler','channels','skills','hands','analytics','logs','runtime','settings','wizard'];
-      var pageRedirects = {
-        'chat': 'agents',
-        'templates': 'agents',
-        'triggers': 'workflows',
-        'cron': 'scheduler',
-        'schedules': 'scheduler',
-        'memory': 'sessions',
-        'audit': 'logs',
-        'security': 'settings',
-        'peers': 'settings',
-        'usage': 'analytics',
-        'approval': 'approvals'
-      };
+      // Hash routing — first path segment selects the page; further segments are page-specific (e.g. projects).
       function handleHash() {
-        var hash = window.location.hash.replace('#', '') || 'agents';
-        if (pageRedirects[hash]) {
-          hash = pageRedirects[hash];
-          window.location.hash = hash;
+        var raw = window.location.hash.replace(/^#\/?/, '').trim() || 'overview';
+        var parts = raw.split('/').filter(Boolean);
+        var head = parts[0] || 'overview';
+        self.projectRouteId = null;
+        if (head === 'projects' && parts[1]) {
+          self.projectRouteId = parts[1];
         }
-        if (validPages.indexOf(hash) >= 0) self.page = hash;
+        if (APP_PAGE_REDIRECTS[head]) {
+          window.location.hash = APP_PAGE_REDIRECTS[head];
+          return;
+        }
+        if (head === 'agents') {
+          self.page = 'agents';
+          var sub = parts[1] || 'sessions';
+          if (sub === 'chat') {
+            self.agentsHubTab = 'chat';
+          } else if (['sessions', 'approvals', 'comms'].indexOf(sub) >= 0) {
+            self.agentsHubTab = sub;
+          } else {
+            self.agentsHubTab = 'sessions';
+          }
+          return;
+        }
+        if (APP_TOP_PAGES.indexOf(head) < 0) {
+          self.page = 'overview';
+          window.location.hash = 'overview';
+          return;
+        }
+        self.page = head;
       }
       window.addEventListener('hashchange', handleHash);
       handleHash();
@@ -343,12 +414,12 @@ function app() {
         // Ctrl+K — focus agent switch / go to agents
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
           e.preventDefault();
-          self.navigate('agents');
+          self.navigate('agents/sessions');
         }
-        // Ctrl+N — new agent
+        // Ctrl+N — new agent (spawn wizard lives in chat view)
         if ((e.ctrlKey || e.metaKey) && e.key === 'n' && !e.shiftKey) {
           e.preventDefault();
-          self.navigate('agents');
+          self.navigate('agents/chat');
         }
         // Ctrl+Shift+F — toggle focus mode
         if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'F') {
@@ -368,19 +439,72 @@ function app() {
 
       // Initial data load
       this.pollStatus();
+      this.refreshSidebarProjects();
       Alpine.store('app').refreshApprovals();
       Alpine.store('app').checkOnboarding();
       Alpine.store('app').checkAuth();
       setInterval(function() {
         self.pollStatus();
+        self.refreshSidebarProjects();
         Alpine.store('app').refreshApprovals();
       }, 5000);
     },
 
-    navigate(p) {
-      this.page = p;
-      window.location.hash = p;
+    navigate(target) {
+      var path = String(target == null ? 'overview' : target)
+        .replace(/^#\/?/, '')
+        .trim() || 'overview';
+      var parts = path.split('/').filter(Boolean);
+      var head = parts[0] || 'overview';
+      if (APP_PAGE_REDIRECTS[head]) {
+        window.location.hash = APP_PAGE_REDIRECTS[head];
+        this.mobileMenuOpen = false;
+        return;
+      }
+      if (head === 'agents') {
+        var sub = parts[1] || 'sessions';
+        if (sub === 'chat') {
+          this.agentsHubTab = 'chat';
+        } else if (['sessions', 'approvals', 'comms'].indexOf(sub) >= 0) {
+          this.agentsHubTab = sub;
+        } else {
+          this.agentsHubTab = 'sessions';
+        }
+        this.page = 'agents';
+        var normAgents = parts.length >= 2 ? path : 'agents/' + this.agentsHubTab;
+        window.location.hash = normAgents;
+        this.mobileMenuOpen = false;
+        return;
+      }
+      if (APP_TOP_PAGES.indexOf(head) < 0) {
+        this.page = 'overview';
+        window.location.hash = 'overview';
+        this.mobileMenuOpen = false;
+        return;
+      }
+      this.page = head;
+      window.location.hash = path;
       this.mobileMenuOpen = false;
+    },
+
+    setAgentsHubTab(tab) {
+      if (tab === 'chat') {
+        this.agentsHubTab = 'chat';
+        window.location.hash = 'agents/chat';
+      } else if (['sessions', 'approvals', 'comms'].indexOf(tab) >= 0) {
+        this.agentsHubTab = tab;
+        window.location.hash = 'agents/' + tab;
+      }
+      this.mobileMenuOpen = false;
+    },
+
+    async refreshSidebarProjects() {
+      try {
+        var list = await OpenFangAPI.get('/api/projects');
+        this.sidebarProjects = Array.isArray(list) ? list : [];
+      } catch (e) {
+        this.sidebarProjects = [];
+      }
     },
 
     setTheme(mode) {

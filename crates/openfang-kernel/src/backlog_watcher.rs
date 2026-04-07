@@ -5,14 +5,15 @@
 
 use crate::backlog_store::BacklogStore;
 use crossbeam::channel::{select, unbounded, RecvTimeoutError};
+use notify::event::{EventKind, MetadataKind, ModifyKind};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use openfang_types::project::ProjectId;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 const DEBOUNCE: Duration = Duration::from_millis(500);
 
@@ -45,6 +46,15 @@ pub fn backlog_entity_for_rel_path(rel: &str) -> &'static str {
         return "milestone";
     }
     "unknown"
+}
+
+/// Non-mutating filesystem notifications (and atime bumps from our own `read_all` during refresh).
+/// Without this, `refresh` → read tree → access/atime events → `refresh` loops at ~debounce interval.
+fn ignore_notify_event_kind(kind: &EventKind) -> bool {
+    matches!(
+        kind,
+        EventKind::Access(_) | EventKind::Modify(ModifyKind::Metadata(MetadataKind::AccessTime))
+    )
 }
 
 fn ignore_event_path(path: &Path) -> bool {
@@ -106,6 +116,9 @@ impl BacklogWatcherManager {
             let mut watcher = match RecommendedWatcher::new(
                 move |res: notify::Result<Event>| {
                     if let Ok(ev) = res {
+                        if ignore_notify_event_kind(&ev.kind) {
+                            return;
+                        }
                         for p in ev.paths {
                             let _ = event_tx.send(p);
                         }
@@ -141,26 +154,46 @@ impl BacklogWatcherManager {
                                 Err(RecvTimeoutError::Disconnected) => break,
                             }
                         }
+                        let raw_batch_len = batch.len();
                         let mut kinds: HashSet<&'static str> = HashSet::new();
-                        let mut any = false;
+                        let mut trigger_rels: BTreeSet<String> = BTreeSet::new();
+                        let mut skipped_ignore = 0u32;
+                        let mut skipped_prefix = 0u32;
+                        let mut skipped_git = 0u32;
                         for p in batch {
                             if ignore_event_path(&p) {
+                                skipped_ignore += 1;
                                 continue;
                             }
                             let rel = match p.strip_prefix(&root_watch) {
                                 Ok(r) => r,
-                                Err(_) => continue,
+                                Err(_) => {
+                                    skipped_prefix += 1;
+                                    continue;
+                                }
                             };
                             let rel_str = rel.to_string_lossy();
                             if rel_str.contains(".git/") || rel_str.contains(".git\\") {
+                                skipped_git += 1;
                                 continue;
                             }
-                            any = true;
+                            let norm = rel_str
+                                .trim_start_matches(['/', '\\'])
+                                .replace('\\', "/");
+                            trigger_rels.insert(norm);
                             kinds.insert(backlog_entity_for_rel_path(
                                 rel_str.trim_start_matches(['/', '\\']),
                             ));
                         }
-                        if !any {
+                        if trigger_rels.is_empty() {
+                            debug!(
+                                ?project_id,
+                                raw_batch_len,
+                                skipped_ignore,
+                                skipped_prefix,
+                                skipped_git,
+                                "backlog watch: debounced batch produced no actionable paths"
+                            );
                             continue;
                         }
                         if let Err(e) = store.refresh(&project_id) {
@@ -174,6 +207,24 @@ impl BacklogWatcherManager {
                         } else {
                             "mixed"
                         };
+                        let paths_vec: Vec<String> = trigger_rels.iter().cloned().collect();
+                        let total_paths = paths_vec.len();
+                        const LOG_PATH_CAP: usize = 32;
+                        let preview: Vec<String> = paths_vec.iter().take(LOG_PATH_CAP).cloned().collect();
+                        let omitted = total_paths.saturating_sub(LOG_PATH_CAP);
+                        info!(
+                            project_id = %project_id,
+                            entity_type = entity,
+                            raw_notify_events = raw_batch_len,
+                            actionable_paths = total_paths,
+                            skipped_ignored_name = skipped_ignore,
+                            skipped_outside_backlog_root = skipped_prefix,
+                            skipped_under_dot_git = skipped_git,
+                            paths_preview = %preview.join(", "),
+                            omitted_paths = omitted,
+                            backlog_root = %root_watch.display(),
+                            "backlog watch: refresh + backlog-updated broadcast (paths_preview = relative paths under backlog_root)"
+                        );
                         sink(project_id, entity);
                         debug!(?project_id, %entity, "backlog store refreshed from filesystem watch");
                     }
@@ -212,6 +263,21 @@ impl BacklogWatcherManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use notify::event::{AccessKind, DataChange};
+
+    #[test]
+    fn ignore_notify_skips_access_and_atime_metadata() {
+        assert!(ignore_notify_event_kind(&EventKind::Access(AccessKind::Read)));
+        assert!(ignore_notify_event_kind(&EventKind::Modify(ModifyKind::Metadata(
+            MetadataKind::AccessTime,
+        ))));
+        assert!(!ignore_notify_event_kind(&EventKind::Modify(ModifyKind::Data(
+            DataChange::Content,
+        ))));
+        assert!(!ignore_notify_event_kind(&EventKind::Create(
+            notify::event::CreateKind::File,
+        )));
+    }
 
     #[test]
     fn classify_rel_paths() {
