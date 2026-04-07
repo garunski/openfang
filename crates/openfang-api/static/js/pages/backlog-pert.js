@@ -242,6 +242,9 @@ function backlogPertMixins() {
       var GAP_X = 56;
       var GAP_Y = 20;
       var PAD = 20;
+      /** Top band for dependency “bus” so edges skipping columns don’t cut through intermediate nodes */
+      var EDGE_LANE_H = 24;
+      var pertBusY = PAD + 8;
 
       var allTasks = Array.isArray(this._pertDataTasks) ? this._pertDataTasks.slice() : [];
       var fs = String(this.pertFilterStatus || '').trim();
@@ -414,7 +417,12 @@ function backlogPertMixins() {
         for (j = 0; j < rowTasks.length; j++) {
           var rid = rowTasks[j].id ? String(rowTasks[j].id) : '';
           if (!rid) continue;
-          pos[rid] = { x: PAD + col * (NODE_W + GAP_X), y: PAD + j * (NODE_H + GAP_Y), col: col, row: j };
+          pos[rid] = {
+            x: PAD + col * (NODE_W + GAP_X),
+            y: PAD + EDGE_LANE_H + j * (NODE_H + GAP_Y),
+            col: col,
+            row: j,
+          };
         }
       }
 
@@ -483,6 +491,7 @@ function backlogPertMixins() {
         var gutter = arr[0].x2 - arr[0].x1;
         var step = n > 1 ? Math.min(14, Math.max(6, (gutter - 16) / n)) : 0;
         var baseMid = (arr[0].x1 + arr[0].x2) / 2;
+        var laneMax = PAD + EDGE_LANE_H - 4;
         for (j = 0; j < n; j++) {
           var ej = arr[j];
           var off = n === 1 ? 0 : (j - (n - 1) / 2) * step;
@@ -492,23 +501,55 @@ function backlogPertMixins() {
           if (maxM > minM) midX = Math.max(minM, Math.min(maxM, midX));
           var endX = ej.x2 - ARROW_GAP;
           if (endX <= ej.x1 + 2) endX = ej.x2 - 2;
-          var dMan =
-            'M ' +
-            ej.x1 +
-            ' ' +
-            ej.y1 +
-            ' L ' +
-            midX +
-            ' ' +
-            ej.y1 +
-            ' L ' +
-            midX +
-            ' ' +
-            ej.y2 +
-            ' L ' +
-            endX +
-            ' ' +
-            ej.y2;
+          var dMan;
+          if (ej.c2 > ej.c1 + 1) {
+            var busY = Math.min(laneMax, pertBusY + j * 5);
+            var xL = ej.x1 + GAP_X / 2;
+            var xR = ej.x2 - GAP_X / 2;
+            dMan =
+              'M ' +
+              ej.x1 +
+              ' ' +
+              ej.y1 +
+              ' L ' +
+              xL +
+              ' ' +
+              ej.y1 +
+              ' L ' +
+              xL +
+              ' ' +
+              busY +
+              ' L ' +
+              xR +
+              ' ' +
+              busY +
+              ' L ' +
+              xR +
+              ' ' +
+              ej.y2 +
+              ' L ' +
+              endX +
+              ' ' +
+              ej.y2;
+          } else {
+            dMan =
+              'M ' +
+              ej.x1 +
+              ' ' +
+              ej.y1 +
+              ' L ' +
+              midX +
+              ' ' +
+              ej.y1 +
+              ' L ' +
+              midX +
+              ' ' +
+              ej.y2 +
+              ' L ' +
+              endX +
+              ' ' +
+              ej.y2;
+          }
           layoutEdges.push({ key: ej.from + '->' + ej.to, d: dMan });
           this._pertEdgeSpecs.push({ from: ej.from, to: ej.to, d: dMan });
         }
@@ -565,6 +606,13 @@ function backlogPertMixins() {
       var t = n && n.task && n.task.title ? String(n.task.title) : '';
       if (t.length > 72) return t.slice(0, 70) + '\u2026';
       return t || '\u2014';
+    },
+
+    /** Aligns with statusClass() / list view: terminal backlog states */
+    pertTaskIsCompleted(t) {
+      if (!t || t.status == null || t.status === '') return false;
+      var x = String(t.status).toLowerCase().trim();
+      return x === 'done' || x === 'closed' || x === 'complete' || x === 'completed';
     },
 
     async loadPertTab(force, silent) {

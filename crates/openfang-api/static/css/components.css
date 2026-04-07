@@ -5397,6 +5397,8 @@ mark.search-highlight {
 
 .pert-chart-stage {
   margin: 0;
+  position: relative;
+  isolation: isolate;
 }
 
 .pert-edges-svg {
@@ -5409,7 +5411,7 @@ mark.search-highlight {
 
 .pert-node {
   position: absolute;
-  z-index: 1;
+  z-index: 2;
   box-sizing: border-box;
   padding: 8px 10px;
   border-radius: var(--radius-md);
@@ -5422,6 +5424,37 @@ mark.search-highlight {
   gap: 4px;
   box-shadow: var(--shadow-sm);
   text-align: left;
+}
+
+.pert-node__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.pert-node__head .pert-node__id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pert-node__status {
+  flex-shrink: 0;
+  max-width: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Opaque fill: edges render below nodes; translucent --success-subtle showed strokes through boxes */
+.pert-node--completed {
+  border-color: var(--border-subtle);
+  background: var(--surface2);
+  background: color-mix(in srgb, var(--success) 14%, var(--surface2));
 }
 
 .pert-node:hover {
@@ -5437,6 +5470,7 @@ mark.search-highlight {
 .pert-node__id {
   color: var(--accent);
   font-weight: 600;
+  min-width: 0;
 }
 
 .pert-node__title {

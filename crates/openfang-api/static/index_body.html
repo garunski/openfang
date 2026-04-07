@@ -2881,17 +2881,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                         :style="'position:relative;width:' + pertChartWidth + 'px;height:' + pertChartHeight + 'px'"
                         @mouseleave="pertSetChartFocus(null)"
                       >
-                        <svg
-                          class="pert-edges-svg"
-                          :width="pertChartWidth"
-                          :height="pertChartHeight"
-                          xmlns="http://www.w3.org/2000/svg"
-                        >
-                          <g class="pert-underlay" x-html="pertSvgUnderlay"></g>
-                        </svg>
                         <template x-for="n in pertLayoutNodes" :key="n.id">
                           <div
                             class="pert-node"
+                            :class="{ 'pert-node--completed': pertTaskIsCompleted(n.task) }"
                             role="button"
                             tabindex="0"
                             :style="'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px;--pert-ms:' + n.accentColor"
@@ -2899,11 +2892,28 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                             @click="openBacklogTaskDetail(n.task)"
                             @keydown.enter="openBacklogTaskDetail(n.task)"
                           >
-                            <div class="pert-node__id font-mono text-xs" x-text="n.id"></div>
+                            <div class="pert-node__head">
+                              <div class="pert-node__id font-mono text-xs" x-text="n.id"></div>
+                              <span
+                                class="badge text-xs pert-node__status"
+                                :class="statusClass(n.task && n.task.status)"
+                                x-show="n.task && n.task.status"
+                                x-text="n.task.status"
+                              ></span>
+                            </div>
                             <div class="pert-node__title text-sm" x-text="pertNodeTitle(n)"></div>
                             <div class="pert-node__meta text-xs text-dim" x-show="n.milestoneId" x-text="n.milestoneId"></div>
                           </div>
                         </template>
+                        <svg
+                          class="pert-edges-svg"
+                          :width="pertChartWidth"
+                          :height="pertChartHeight"
+                          xmlns="http://www.w3.org/2000/svg"
+                          aria-hidden="true"
+                        >
+                          <g class="pert-underlay" x-html="pertSvgUnderlay"></g>
+                        </svg>
                       </div>
                     </div>
                   </div>
