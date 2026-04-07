@@ -32,17 +32,19 @@
     <div class="sidebar-header">
       <div class="sidebar-header-text">
         <div class="sidebar-logo">
-          <img src="/logo.png" alt="OpenFang" width="28" height="28">
-          <div>
+          <span class="sidebar-logo__mark" aria-hidden="true">
+            <img src="/logo.png" alt="" width="22" height="22">
+          </span>
+          <div class="sidebar-logo__text">
             <h1>OPENFANG</h1>
             <div class="version" x-text="'v' + version"></div>
           </div>
         </div>
       </div>
-      <div class="theme-switcher">
-        <button class="theme-opt" :class="{ active: themeMode === 'light' }" @click="setTheme('light')" title="Light">&#9788;</button>
-        <button class="theme-opt" :class="{ active: themeMode === 'system' }" @click="setTheme('system')" title="System">&#9675;</button>
-        <button class="theme-opt" :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')" title="Dark">&#9790;</button>
+      <div class="theme-switcher" role="group" aria-label="Color theme">
+        <button type="button" class="theme-opt" :class="{ active: themeMode === 'light' }" @click="setTheme('light')" title="Light" aria-label="Light theme"><i class="fa fa-sun-o" aria-hidden="true"></i></button>
+        <button type="button" class="theme-opt" :class="{ active: themeMode === 'system' }" @click="setTheme('system')" title="System" aria-label="Match system theme"><i class="fa fa-adjust" aria-hidden="true"></i></button>
+        <button type="button" class="theme-opt" :class="{ active: themeMode === 'dark' }" @click="setTheme('dark')" title="Dark" aria-label="Dark theme"><i class="fa fa-moon-o" aria-hidden="true"></i></button>
       </div>
     </div>
 
@@ -2412,32 +2414,102 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <div class="project-subnav__mobile">
                 <label class="text-xs text-dim font-semibold" for="project-section-select" style="letter-spacing:0.02em">Section</label>
                 <select id="project-section-select" class="form-input project-subnav__select" :value="detailTab" @change="onDetailTabChange($event.target.value)">
-                  <option value="overview">Overview</option>
-                  <option value="backlog">List</option>
-                  <option value="board">Board</option>
-                  <option value="pert">PERT</option>
-                  <option value="docs">Docs</option>
-                  <option value="decisions">Decisions</option>
-                  <option value="milestones">Milestones</option>
-                  <option value="spokes">Spokes</option>
-                  <option value="agents">Agents</option>
-                  <option value="pipelines">Pipelines</option>
-                  <option value="workflows">Workflows</option>
+                  <optgroup label="Overview">
+                    <option value="overview">Overview</option>
+                  </optgroup>
+                  <optgroup label="Tasks">
+                    <option value="backlog">List</option>
+                    <option value="board">Board</option>
+                    <option value="pert">PERT</option>
+                    <option value="milestones">Milestones</option>
+                  </optgroup>
+                  <optgroup label="Knowledge">
+                    <option value="docs">Docs</option>
+                    <option value="decisions">Decisions</option>
+                  </optgroup>
+                  <optgroup label="Automation">
+                    <option value="spokes">Spokes</option>
+                    <option value="agents">Agents</option>
+                    <option value="pipelines">Pipelines</option>
+                    <option value="workflows">Workflows</option>
+                  </optgroup>
                 </select>
+                <div class="project-subnav__mobile-actions">
+                  <button
+                    type="button"
+                    class="button is-primary is-small is-fullwidth"
+                    x-show="detailTab === 'board' || detailTab === 'backlog'"
+                    @click="boardOpenNewTask()"
+                  >
+                    <i class="fa fa-plus" aria-hidden="true"></i><span>New task</span>
+                  </button>
+                  <button type="button" class="button is-primary is-small is-fullwidth" x-show="detailTab === 'docs'" @click="openDocCreateModal()">
+                    <i class="fa fa-plus" aria-hidden="true"></i><span>New document</span>
+                  </button>
+                  <button type="button" class="button is-primary is-small is-fullwidth" x-show="detailTab === 'decisions'" @click="openDecisionCreateModal()">
+                    <i class="fa fa-plus" aria-hidden="true"></i><span>New decision</span>
+                  </button>
+                  <button type="button" class="button is-primary is-small is-fullwidth" x-show="detailTab === 'milestones'" @click="openMilestoneCreateModal()">
+                    <i class="fa fa-plus" aria-hidden="true"></i><span>New milestone</span>
+                  </button>
+                  <button type="button" class="button is-ghost is-small is-fullwidth" x-show="detailTab === 'pert'" @click="loadPertTab(true)">
+                    <i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh chart</span>
+                  </button>
+                  <button type="button" class="button is-primary is-small is-fullwidth" x-show="detailTab === 'spokes'" @click="discoverSpokes()">
+                    <i class="fa fa-search" aria-hidden="true"></i><span>Discover spokes</span>
+                  </button>
+                </div>
               </div>
-              <nav class="of-tabs of-tabs--project-chrome project-subnav__tabs">
-                <div class="of-tab" :class="{ active: detailTab === 'overview' }" @click="onDetailTabChange('overview')">Overview</div>
-                <div class="of-tab" :class="{ active: detailTab === 'backlog' }" @click="onDetailTabChange('backlog')">List</div>
-                <div class="of-tab" :class="{ active: detailTab === 'board' }" @click="onDetailTabChange('board')">Board</div>
-                <div class="of-tab" :class="{ active: detailTab === 'pert' }" @click="onDetailTabChange('pert')">PERT</div>
-                <div class="of-tab" :class="{ active: detailTab === 'docs' }" @click="onDetailTabChange('docs')">Docs</div>
-                <div class="of-tab" :class="{ active: detailTab === 'decisions' }" @click="onDetailTabChange('decisions')">Decisions</div>
-                <div class="of-tab" :class="{ active: detailTab === 'milestones' }" @click="onDetailTabChange('milestones')">Milestones</div>
-                <div class="of-tab" :class="{ active: detailTab === 'spokes' }" @click="onDetailTabChange('spokes')">Spokes</div>
-                <div class="of-tab" :class="{ active: detailTab === 'agents' }" @click="onDetailTabChange('agents')">Agents</div>
-                <div class="of-tab" :class="{ active: detailTab === 'pipelines' }" @click="onDetailTabChange('pipelines')">Pipelines</div>
-                <div class="of-tab" :class="{ active: detailTab === 'workflows' }" @click="onDetailTabChange('workflows')">Workflows</div>
-              </nav>
+              <div class="project-subnav__desktop">
+                <nav class="of-tabs of-tabs--project-primary" aria-label="Project areas">
+                  <div class="of-tab" :class="{ active: detailCategory === 'overview' }" @click="onDetailCategoryChange('overview')">Overview</div>
+                  <div class="of-tab" :class="{ active: detailCategory === 'tasks' }" @click="onDetailCategoryChange('tasks')">Tasks</div>
+                  <div class="of-tab" :class="{ active: detailCategory === 'knowledge' }" @click="onDetailCategoryChange('knowledge')">Knowledge</div>
+                  <div class="of-tab" :class="{ active: detailCategory === 'automation' }" @click="onDetailCategoryChange('automation')">Automation</div>
+                </nav>
+                <div class="project-subnav__trailing">
+                  <div class="project-segment" role="tablist" aria-label="Section view" x-show="detailCategory !== 'overview'">
+                    <template x-for="st in projectDetailSubtabs()" :key="st">
+                      <button
+                        type="button"
+                        role="tab"
+                        class="project-segment__btn"
+                        :class="{ active: detailTab === st }"
+                        :aria-selected="detailTab === st"
+                        @click="onDetailTabChange(st)"
+                      >
+                        <i class="project-segment__icon" :class="projectDetailSubtabIcon(st)" aria-hidden="true"></i>
+                        <span x-text="projectDetailSubtabLabel(st)"></span>
+                      </button>
+                    </template>
+                  </div>
+                  <div class="project-subnav__actions">
+                    <button
+                      type="button"
+                      class="button is-primary is-small"
+                      x-show="detailTab === 'board' || detailTab === 'backlog'"
+                      @click="boardOpenNewTask()"
+                    >
+                      <i class="fa fa-plus" aria-hidden="true"></i><span>New task</span>
+                    </button>
+                    <button type="button" class="button is-primary is-small" x-show="detailTab === 'docs'" @click="openDocCreateModal()">
+                      <i class="fa fa-plus" aria-hidden="true"></i><span>New document</span>
+                    </button>
+                    <button type="button" class="button is-primary is-small" x-show="detailTab === 'decisions'" @click="openDecisionCreateModal()">
+                      <i class="fa fa-plus" aria-hidden="true"></i><span>New decision</span>
+                    </button>
+                    <button type="button" class="button is-primary is-small" x-show="detailTab === 'milestones'" @click="openMilestoneCreateModal()">
+                      <i class="fa fa-plus" aria-hidden="true"></i><span>New milestone</span>
+                    </button>
+                    <button type="button" class="button is-ghost is-small" x-show="detailTab === 'pert'" @click="loadPertTab(true)">
+                      <i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh</span>
+                    </button>
+                    <button type="button" class="button is-primary is-small" x-show="detailTab === 'spokes'" @click="discoverSpokes()">
+                      <i class="fa fa-search" aria-hidden="true"></i><span>Discover spokes</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
             </div>
             <div class="page-body page-body--project">
               <div x-show="detailTab === 'overview'" class="mt-4">
@@ -2621,7 +2693,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       <button type="button" class="button is-ghost is-small" @click="openBacklogCleanupModal()"><i class="fa fa-archive" aria-hidden="true"></i><span>Cleanup old tasks</span></button>
                     </div>
                   </div>
-                  <div class="table-wrap" x-show="detailTasks.length">
+                  <div class="table-wrap table-wrap--flush" x-show="detailTasks.length">
                     <table class="task-list-table">
                       <thead>
                         <tr>
@@ -2659,21 +2731,14 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
 
               <!-- kanban board view (grep: kanban board) -->
-              <div x-show="detailTab === 'board'" class="mt-4">
+              <div x-show="detailTab === 'board'" class="project-board-tab">
                 <div x-show="boardLoading" class="loading-state"><div class="spinner"></div><span>Loading board...</span></div>
                 <div x-show="boardError && !boardLoading" class="error-state">
                   <span class="error-icon">!</span>
                   <p x-text="boardError"></p>
                   <button type="button" class="button is-ghost is-small" @click="loadBoardData(true)">Retry</button>
                 </div>
-                <div x-show="!boardLoading && !boardError">
-                  <div class="board-toolbar">
-                    <div class="board-toolbar__text">
-                      <h3 class="board-toolbar__title">Kanban board</h3>
-                      <p class="board-toolbar__hint text-dim">Drag cards between columns or reorder within a column. Drag empty space (column header, gaps, or empty column) to pan the board.</p>
-                    </div>
-                    <button type="button" class="button is-primary is-small" @click="boardOpenNewTask()"><i class="fa fa-plus" aria-hidden="true"></i><span>New task</span></button>
-                  </div>
+                <div x-show="!boardLoading && !boardError" class="project-board-tab__fill">
                   <div
                     class="kanban-board-viewport"
                     x-show="boardStatuses.length"
@@ -2759,114 +2824,105 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </div>
 
-              <div x-show="detailTab === 'pert'" class="mt-4">
+              <div x-show="detailTab === 'pert'" class="project-pert-tab">
                 <div x-show="pertLoading" class="loading-state"><div class="spinner"></div><span>Loading chart…</span></div>
                 <div x-show="pertError && !pertLoading" class="error-state">
                   <span class="error-icon">!</span>
                   <p x-text="pertError"></p>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('pert')">Retry</button>
                 </div>
-                <div x-show="!pertLoading && !pertError">
-                  <div class="pert-toolbar board-toolbar">
-                    <div class="board-toolbar__text">
-                      <h3 class="board-toolbar__title">PERT chart</h3>
-                      <p class="board-toolbar__hint text-dim">Edges: <code style="color:var(--accent)">dependencies</code> + <code style="color:var(--accent)">parentTaskId</code> (orthogonal lines, arrows). Hover a task to dim unrelated links. Drag empty chart area to pan. Filter by status and/or label below. No milestone = gray accent.</p>
-                    </div>
-                    <button type="button" class="button is-ghost is-small" @click="loadPertTab(true)"><i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh</span></button>
-                  </div>
-                  <div class="flex flex-wrap gap-3 items-end mb-3" x-show="_pertDataTasks.length">
-                    <div class="form-group" style="margin:0;min-width:160px">
-                      <label class="text-xs text-dim">Status</label>
-                      <select class="form-input" x-model="pertFilterStatus" @change="rebuildPertLayout()">
-                        <option value="">All</option>
-                        <template x-for="st in pertStatusOptions" :key="String(st)">
-                          <option :value="st" x-text="st"></option>
-                        </template>
-                      </select>
-                    </div>
-                    <div class="form-group" style="margin:0;min-width:160px" x-show="pertLabelOptions.length">
-                      <label class="text-xs text-dim">Label</label>
-                      <select class="form-input" x-model="pertFilterLabel" @change="rebuildPertLayout()">
-                        <option value="">All labels</option>
-                        <template x-for="lb in pertLabelOptions" :key="String(lb)">
-                          <option :value="lb" x-text="lb"></option>
-                        </template>
-                      </select>
-                    </div>
-                  </div>
-                  <p class="text-xs text-dim mb-2" x-show="pertHasCycle || pertSkippedDeps > 0">
-                    <span x-show="pertHasCycle" class="text-dim" style="color:var(--warn, #d97706)">Cycle detected in dependencies — layout may be misleading.</span>
-                    <span x-show="pertHasCycle && pertSkippedDeps > 0"> · </span>
-                    <span x-show="pertSkippedDeps > 0" x-text="pertSkippedDeps + ' dependency reference(s) point to unknown tasks (not in this list).'"></span>
-                  </p>
-                  <div class="pert-legend flex flex-wrap gap-3 mb-3" x-show="pertLegend.length">
-                    <template x-for="row in pertLegend" :key="row.id">
-                      <div class="pert-legend-item text-xs flex items-center gap-2">
-                        <span class="pert-legend-swatch" :style="row.swatchStyle"></span>
-                        <span x-text="row.title + ' (' + row.count + ')'"></span>
+                <div x-show="!pertLoading && !pertError" class="project-pert-tab__fill">
+                  <div class="pert-chrome">
+                    <div class="flex flex-wrap gap-3 items-end mb-3" x-show="_pertDataTasks.length">
+                      <div class="form-group" style="margin:0;min-width:160px">
+                        <label class="text-xs text-dim">Status</label>
+                        <select class="form-input" x-model="pertFilterStatus" @change="rebuildPertLayout()">
+                          <option value="">All</option>
+                          <template x-for="st in pertStatusOptions" :key="String(st)">
+                            <option :value="st" x-text="st"></option>
+                          </template>
+                        </select>
                       </div>
-                    </template>
+                      <div class="form-group" style="margin:0;min-width:160px" x-show="pertLabelOptions.length">
+                        <label class="text-xs text-dim">Label</label>
+                        <select class="form-input" x-model="pertFilterLabel" @change="rebuildPertLayout()">
+                          <option value="">All labels</option>
+                          <template x-for="lb in pertLabelOptions" :key="String(lb)">
+                            <option :value="lb" x-text="lb"></option>
+                          </template>
+                        </select>
+                      </div>
+                    </div>
+                    <p class="text-xs text-dim mb-2" x-show="pertHasCycle || pertSkippedDeps > 0">
+                      <span x-show="pertHasCycle" class="text-dim" style="color:var(--warn, #d97706)">Cycle detected in dependencies — layout may be misleading.</span>
+                      <span x-show="pertHasCycle && pertSkippedDeps > 0"> · </span>
+                      <span x-show="pertSkippedDeps > 0" x-text="pertSkippedDeps + ' dependency reference(s) point to unknown tasks (not in this list).'"></span>
+                    </p>
+                    <div class="pert-legend flex flex-wrap gap-3 mb-3" x-show="pertLegend.length">
+                      <template x-for="row in pertLegend" :key="row.id">
+                        <div class="pert-legend-item text-xs flex items-center gap-2">
+                          <span class="pert-legend-swatch" :style="row.swatchStyle"></span>
+                          <span x-text="row.title + ' (' + row.count + ')'"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <p class="text-xs text-dim mb-2" x-show="_pertDataTasks.length && (pertFilterStatus || pertFilterLabel) && !pertLayoutNodes.length">No tasks match the selected filters.</p>
                   </div>
-                  <p class="text-xs text-dim mb-2" x-show="_pertDataTasks.length && (pertFilterStatus || pertFilterLabel) && !pertLayoutNodes.length">No tasks match the selected filters.</p>
                   <div
-                    class="pert-scroll-wrap"
+                    class="pert-scroll-wrap pert-scroll-wrap--project"
                     x-ref="pertScrollWrap"
                     :class="{ 'pert-scroll-wrap--panning': pertPanning }"
                     x-show="_pertDataTasks.length && pertLayoutNodes.length"
                     @mousedown="pertPanPointerDown($event)"
                   >
-                    <div
-                      class="pert-chart-stage"
-                      :style="'position:relative;width:' + pertChartWidth + 'px;height:' + pertChartHeight + 'px'"
-                      @mouseleave="pertSetChartFocus(null)"
-                    >
-                      <svg
-                        class="pert-edges-svg"
-                        :width="pertChartWidth"
-                        :height="pertChartHeight"
-                        xmlns="http://www.w3.org/2000/svg"
+                    <div class="pert-scroll-wrap__inner">
+                      <div
+                        class="pert-chart-stage"
+                        :style="'position:relative;width:' + pertChartWidth + 'px;height:' + pertChartHeight + 'px'"
+                        @mouseleave="pertSetChartFocus(null)"
                       >
-                        <g class="pert-underlay" x-html="pertSvgUnderlay"></g>
-                      </svg>
-                      <template x-for="n in pertLayoutNodes" :key="n.id">
-                        <div
-                          class="pert-node"
-                          role="button"
-                          tabindex="0"
-                          :style="'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px;--pert-ms:' + n.accentColor"
-                          @mouseenter="pertSetChartFocus(n.id)"
-                          @click="openBacklogTaskDetail(n.task)"
-                          @keydown.enter="openBacklogTaskDetail(n.task)"
+                        <svg
+                          class="pert-edges-svg"
+                          :width="pertChartWidth"
+                          :height="pertChartHeight"
+                          xmlns="http://www.w3.org/2000/svg"
                         >
-                          <div class="pert-node__id font-mono text-xs" x-text="n.id"></div>
-                          <div class="pert-node__title text-sm" x-text="pertNodeTitle(n)"></div>
-                          <div class="pert-node__meta text-xs text-dim" x-show="n.milestoneId" x-text="n.milestoneId"></div>
-                        </div>
-                      </template>
+                          <g class="pert-underlay" x-html="pertSvgUnderlay"></g>
+                        </svg>
+                        <template x-for="n in pertLayoutNodes" :key="n.id">
+                          <div
+                            class="pert-node"
+                            role="button"
+                            tabindex="0"
+                            :style="'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px;--pert-ms:' + n.accentColor"
+                            @mouseenter="pertSetChartFocus(n.id)"
+                            @click="openBacklogTaskDetail(n.task)"
+                            @keydown.enter="openBacklogTaskDetail(n.task)"
+                          >
+                            <div class="pert-node__id font-mono text-xs" x-text="n.id"></div>
+                            <div class="pert-node__title text-sm" x-text="pertNodeTitle(n)"></div>
+                            <div class="pert-node__meta text-xs text-dim" x-show="n.milestoneId" x-text="n.milestoneId"></div>
+                          </div>
+                        </template>
+                      </div>
                     </div>
                   </div>
                   <div class="empty-state py-8" x-show="!_pertDataTasks.length">
                     <p class="text-dim text-sm">No tasks in <code style="color:var(--accent)">backlog/tasks</code> for this project.</p>
                   </div>
-                  <p class="text-xs text-dim mt-2" x-show="_pertDataTasks.length && pertLayoutNodes.length && !pertLayoutEdges.length && !pertHasCycle">No in-list dependencies yet — tasks appear in a single column. Add <code style="color:var(--accent)">dependencies</code> in task front matter.</p>
+                  <p class="text-xs text-dim mt-2 flex-shrink-0" x-show="_pertDataTasks.length && pertLayoutNodes.length && !pertLayoutEdges.length && !pertHasCycle">No in-list dependencies yet — tasks appear in a single column. Add <code style="color:var(--accent)">dependencies</code> in task front matter.</p>
                 </div>
               </div>
 
-              <div x-show="detailTab === 'docs'" class="mt-4">
+              <div x-show="detailTab === 'docs'" class="project-docs-tab">
                 <div x-show="detailLoading.docs" class="loading-state"><div class="spinner"></div><span>Loading docs...</span></div>
                 <div x-show="detailErrors.docs && !detailLoading.docs" class="error-state">
                   <span class="error-icon">!</span>
                   <p x-text="detailErrors.docs"></p>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('docs')">Retry</button>
                 </div>
-                <div x-show="!detailLoading.docs && !detailErrors.docs">
-                  <section class="docs-shell">
-                    <header class="docs-shell__toolbar">
-                      <div class="docs-shell__toolbar-inner">
-                        <span class="docs-shell__toolbar-label text-dim">Docs</span>
-                        <button type="button" class="button is-primary is-small" @click="openDocCreateModal()"><i class="fa fa-plus" aria-hidden="true"></i><span>New document</span></button>
-                      </div>
-                    </header>
+                <div x-show="!detailLoading.docs && !detailErrors.docs" class="project-docs-tab__fill">
+                  <section class="docs-shell docs-shell--project">
                     <div class="docs-shell__layout">
                       <div class="docs-shell__picker">
                         <label class="docs-shell__picker-label" for="docs-nav-select">Open document</label>
@@ -2883,7 +2939,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                         </select>
                       </div>
                       <aside class="docs-shell__sidebar" aria-label="Documents">
-                        <p class="docs-shell__folders-heading">Documents</p>
                         <template x-for="row in docSidebarRows()" :key="row.doc.id">
                           <div class="docs-shell__tree-row">
                             <button
@@ -2939,12 +2994,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('decisions')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.decisions && !detailErrors.decisions">
-                  <section class="decisions-shell box">
-                    <header class="decisions-shell__header">
-                      <h3 class="title is-6 mb-0"><i class="fa fa-balance-scale text-dim" style="margin-right:8px" aria-hidden="true"></i>Decisions</h3>
-                      <button type="button" class="button is-primary is-small" @click="openDecisionCreateModal()"><i class="fa fa-plus" aria-hidden="true"></i><span>New decision</span></button>
-                    </header>
-                    <p class="text-xs text-dim mb-3">Open a card to read the full record. Edit and delete are available in the popup.</p>
+                  <section class="decisions-shell decisions-shell--project">
                     <div class="decisions-index" x-show="detailDecisions.length">
                       <template x-for="r in detailDecisions" :key="r.id">
                         <button
@@ -2975,10 +3025,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('milestones')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.milestones && !detailErrors.milestones">
-                  <div class="flex flex-wrap gap-2 mb-3 items-center">
-                    <button type="button" class="button is-primary is-small" @click="openMilestoneCreateModal()"><i class="fa fa-plus" aria-hidden="true"></i><span>New milestone</span></button>
-                  </div>
-                  <p class="text-sm text-dim mb-3">Progress uses tasks whose <code style="color:var(--accent)">milestone</code> field matches the milestone id (same as API).</p>
                   <div class="flex flex-col gap-3" x-show="detailMilestones.length">
                     <template x-for="m in detailMilestones" :key="m.id">
                       <div class="of-card" style="padding:12px">
@@ -3071,10 +3117,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
 
               <div x-show="detailTab === 'spokes'" class="mt-4">
-                <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-                  <span class="text-sm text-dim">Spokes from project configuration</span>
-                  <button type="button" class="button is-primary is-small" @click="discoverSpokes()"><i class="fa fa-search" aria-hidden="true"></i><span>Discover spokes</span></button>
-                </div>
                 <div x-show="detailLoading.spokes" class="loading-state"><div class="spinner"></div><span>Loading spokes...</span></div>
                 <div x-show="detailErrors.spokes && !detailLoading.spokes" class="error-state">
                   <span class="error-icon">!</span>
@@ -3185,7 +3227,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('workflows')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.workflows && !detailErrors.workflows">
-                  <p class="text-xs text-dim mb-3">Workflows assigned to this project (<code class="font-mono text-dim">project_id</code> on the workflow). Each step’s agent must be bound here or have its workspace under a project spoke. Runs use the project-scoped API so agents are validated before execution.</p>
                   <div class="table-wrap" x-show="projectWorkflows.length">
                     <table>
                       <thead><tr><th>Name</th><th>Steps</th><th></th></tr></thead>

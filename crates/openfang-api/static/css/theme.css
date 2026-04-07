@@ -8,8 +8,10 @@
   --bg-primary: #EDECEB;
   /* Project chrome (header + tab bar) — aligns with dashboard mockups */
   --chrome-surface: #ffffff;
-  --content-canvas: #f9fafb;
-  --sidebar-bg: #fbfbfb;
+  /* Same as main column (--bg) so rails (sidebar, Knowledge doc list) read consistently */
+  --content-canvas: var(--bg);
+  /* Left app rail + Knowledge doc list (must be one value) */
+  --sidebar-bg: #e8e7e5;
   --bg-elevated: #F8F7F6;
   --surface: #FFFFFF;
   --surface2: #F0EEEC;

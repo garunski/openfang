@@ -202,6 +202,13 @@ a.button:active {
   background: var(--surface);
 }
 
+/* Project task list / other rails: no outer “card” around full-width tables */
+.table-wrap--flush {
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
@@ -579,7 +586,7 @@ tr:hover td { background: var(--surface2); }
   gap: 6px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-primary);
+  background: var(--sidebar-bg);
 }
 
 .docs-shell__picker-label {
@@ -610,7 +617,7 @@ tr:hover td { background: var(--surface2); }
   flex-direction: column;
   min-width: 0;
   padding: 16px 12px 20px;
-  background: var(--bg-primary);
+  background: transparent;
   border-right: 1px solid var(--border);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -881,6 +888,103 @@ tr:hover td { background: var(--surface2); }
   .docs-article {
     padding: 16px 18px 32px;
   }
+}
+
+/* Project detail — docs fills chrome; no outer card frame */
+.docs-shell.docs-shell--project {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.docs-shell.docs-shell--project .docs-shell__layout {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+  background: transparent;
+}
+
+.docs-shell.docs-shell--project .docs-shell__sidebar {
+  background: transparent;
+  /* Lighter edge vs reader: same family as rail, less “second panel” */
+  border-right: 1px solid var(--border-subtle);
+  /* Match .sidebar-nav horizontal inset */
+  padding: 8px 8px 12px;
+}
+
+.docs-shell.docs-shell--project .docs-shell__picker {
+  padding: 8px 10px;
+  background-color: var(--sidebar-bg);
+  border-bottom: 1px solid var(--border);
+}
+
+/* Mobile doc chooser: default .form-input uses --bg; force rail to match .sidebar */
+.docs-shell.docs-shell--project .docs-shell__picker .form-input,
+.docs-shell.docs-shell--project .docs-shell__picker select.form-input {
+  background-color: var(--sidebar-bg);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.docs-shell.docs-shell--project .docs-shell__picker .form-input:focus,
+.docs-shell.docs-shell--project .docs-shell__picker select.form-input:focus {
+  background-color: var(--sidebar-bg);
+}
+
+/* Doc list rows: same hover affordance as .nav-item (no white ghost chrome) */
+.docs-shell.docs-shell--project .docs-shell__tree-btn.button.is-ghost {
+  background-color: transparent !important;
+  border-color: transparent !important;
+}
+
+.docs-shell.docs-shell--project .docs-shell__tree-btn.button.is-ghost:hover:not(:disabled) {
+  background-color: var(--surface2) !important;
+  color: var(--text) !important;
+  border-color: transparent !important;
+}
+
+.docs-shell.docs-shell--project .docs-shell__article {
+  max-height: none;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: var(--surface);
+}
+
+.docs-shell.docs-shell--project .docs-article {
+  max-width: none;
+  margin: 0;
+  padding: 10px 20px 28px;
+}
+
+.docs-shell.docs-shell--project .docs-article__toolbar {
+  padding-bottom: 10px;
+  margin-bottom: 6px;
+}
+
+.docs-shell.docs-shell--project .docs-shell__empty-hint {
+  padding: 16px 20px;
+}
+
+@media (max-width: 899px) {
+  .docs-shell.docs-shell--project .docs-shell__article {
+    max-height: none;
+  }
+
+  .docs-shell.docs-shell--project .docs-article {
+    padding: 10px 14px 24px;
+  }
+}
+
+.decisions-shell.decisions-shell--project {
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
 /* Decisions index + cards */
@@ -2460,6 +2564,94 @@ mark.search-highlight {
   font-weight: 500;
 }
 
+/* Project detail — 4 primary tabs + segmented sub-views */
+.of-tabs.of-tabs--project-primary {
+  display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-bottom: 0;
+  border-bottom: none;
+  gap: 0 1.5rem;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding-top: 0.25rem;
+}
+
+.of-tabs.of-tabs--project-primary::-webkit-scrollbar {
+  height: 0;
+}
+
+.of-tabs.of-tabs--project-primary .of-tab {
+  flex-shrink: 0;
+  padding: 0.75rem 0 0.65rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.of-tabs.of-tabs--project-primary .of-tab.active {
+  font-weight: 700;
+}
+
+.project-segment {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-lg);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  flex: 0 0 auto;
+  max-width: 100%;
+  margin-left: auto;
+}
+
+.project-segment__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.project-segment__btn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.project-segment__btn.active {
+  background: var(--surface);
+  color: var(--text);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
+.project-segment__icon {
+  font-size: 0.75rem;
+  opacity: 0.45;
+  line-height: 1;
+}
+
+.project-segment__btn.active .project-segment__icon {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* Stats row */
 .stats-row {
   display: flex;
@@ -2502,25 +2694,52 @@ mark.search-highlight {
   font-weight: 500;
 }
 
-/* Theme switcher — 3-mode pill (Light / System / Dark) */
+/* Theme switcher — matches .project-segment (design system) */
 .theme-switcher {
-  display: inline-flex;
-  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-lg);
+  background: var(--surface2);
   border: 1px solid var(--border);
-  overflow: hidden;
 }
 .theme-opt {
   cursor: pointer;
-  padding: 4px 8px;
-  font-size: 14px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  padding: 6px 7px;
+  font-size: 0.8125rem;
   line-height: 1;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--text-muted);
+  transition:
+    background var(--transition-fast),
+    color var(--transition-fast),
+    box-shadow var(--transition-fast),
+    border-color var(--transition-fast);
 }
-.theme-opt:hover { color: var(--text-primary); background: var(--bg-hover); }
-.theme-opt.active { color: var(--accent); background: var(--accent-glow); }
+.theme-opt:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.theme-opt.active {
+  background: var(--surface);
+  color: var(--accent);
+  border-color: var(--border);
+  box-shadow: var(--shadow-xs);
+}
+
+.theme-switcher .fa {
+  line-height: 1;
+  font-size: 0.875rem;
+  pointer-events: none;
+}
 
 /* Utility */
 .flex { display: flex; }
@@ -4771,6 +4990,7 @@ mark.search-highlight {
   justify-content: space-between;
   gap: 16px;
   flex-wrap: wrap;
+  flex-shrink: 0;
   margin-bottom: 16px;
   padding-bottom: 14px;
   border-bottom: 1px solid var(--border);
@@ -4791,14 +5011,27 @@ mark.search-highlight {
   max-width: 42rem;
 }
 
+/* Board tab layout: fill space under toolbar; viewport is the single outer scroll for pan */
+.project-board-tab__fill,
+.project-docs-tab__fill,
+.project-pert-tab__fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* Scroll + click-drag pan (see boardPanPointerDown in backlog-board.js) */
 .kanban-board-viewport {
   overflow: auto;
-  max-height: min(72vh, calc(100vh - 220px));
-  padding: 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   -webkit-overflow-scrolling: touch;
   cursor: grab;
 }
@@ -4814,7 +5047,8 @@ mark.search-highlight {
   padding: 0;
   align-items: stretch;
   width: max-content;
-  min-height: min(64vh, calc(100vh - 260px));
+  min-height: 100%;
+  box-sizing: border-box;
 }
 
 .kanban-column {
@@ -4827,9 +5061,36 @@ mark.search-highlight {
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
-  max-height: min(72vh, calc(100vh - 200px));
-  min-height: 200px;
+  align-self: stretch;
+  min-height: 0;
+  max-height: none;
   overflow: hidden;
+}
+
+/* Medium + large: equal-width swimlanes so a typical 4-column board fits without horizontal pan */
+@media (min-width: 769px) {
+  .kanban-board {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    width: 100%;
+    max-width: 100%;
+    gap: 10px;
+    min-width: 0;
+  }
+
+  .kanban-column {
+    flex: none;
+    min-width: 0;
+    max-width: none;
+    width: auto;
+  }
+}
+
+@media (min-width: 1280px) {
+  .kanban-board {
+    gap: 12px;
+  }
 }
 
 .kanban-column-header {
@@ -4873,7 +5134,7 @@ mark.search-highlight {
   overflow-y: auto;
   overflow-x: hidden;
   flex: 1;
-  min-height: 140px;
+  min-height: 0;
   background: var(--surface);
 }
 
@@ -5086,19 +5347,43 @@ mark.search-highlight {
 @media (max-width: 768px) {
   .kanban-column {
     flex: 0 0 min(280px, 88vw);
-    max-height: min(65vh, 520px);
   }
 }
 
 /* PERT chart (project backlog) — class names include "pert-chart-stage" for dashboard embed checks */
+.pert-chrome {
+  flex-shrink: 0;
+}
+
 .pert-scroll-wrap {
   overflow: auto;
   max-height: min(72vh, calc(100vh - 220px));
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  padding: 8px;
+  padding: 0;
   cursor: grab;
+}
+
+/* Project detail: one scroll surface; fill column under filters (flush with canvas like Kanban) */
+.pert-scroll-wrap.pert-scroll-wrap--project {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.pert-scroll-wrap__inner {
+  padding: 8px;
+  display: inline-block;
+  vertical-align: top;
+  box-sizing: content-box;
+}
+
+.pert-scroll-wrap--project .pert-scroll-wrap__inner {
+  padding: 0;
 }
 
 .pert-scroll-wrap--panning {

@@ -9,7 +9,7 @@
 /* Sidebar */
 .sidebar {
   width: var(--sidebar-width);
-  background: var(--sidebar-bg);
+  background-color: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -29,33 +29,80 @@
 .sidebar.collapsed .nav-item { justify-content: center; padding: 12px 0; }
 
 .sidebar-header {
-  padding: 16px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--border);
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 60px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-height: 0;
+}
+
+.sidebar-header-text {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Theme row: full width inside rail, stays off the main chrome edge */
+.sidebar-header .theme-switcher {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  margin-top: 0;
+}
+
+.sidebar-header .theme-switcher .theme-opt {
+  flex: 1;
+  min-width: 0;
 }
 
 .sidebar-logo {
   display: flex;
   align-items: center;
   gap: 10px;
+  min-width: 0;
 }
 
-.sidebar-logo img {
-  width: 28px;
-  height: 28px;
-  opacity: 0.8;
-  transition: opacity 0.2s, transform 0.2s;
+.sidebar-logo__mark {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--surface2);
+  border: 1px solid var(--border-subtle);
+  box-shadow: var(--shadow-xs);
+  transition:
+    background var(--transition-fast),
+    border-color var(--transition-fast),
+    box-shadow var(--transition-fast);
 }
 
-.sidebar-logo img:hover {
+.sidebar-logo__mark:hover {
+  background: var(--surface3);
+  border-color: var(--border);
+}
+
+.sidebar-logo__mark img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  opacity: 0.92;
+  mix-blend-mode: multiply;
+  transition: opacity var(--transition-fast), transform var(--transition-fast);
+}
+
+.sidebar-logo__mark:hover img {
   opacity: 1;
-  transform: scale(1.05);
+  transform: scale(1.04);
 }
 
-[data-theme="light"] .sidebar-logo img,
+.sidebar-logo__text {
+  min-width: 0;
+}
+
 [data-theme="light"] .message-avatar img {
   filter: invert(1);
 }
@@ -275,7 +322,7 @@
   flex-direction: column;
   align-items: stretch;
   gap: 12px;
-  padding: 12px 24px 10px;
+  padding: 12px 24px 14px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome-surface);
   flex-shrink: 0;
@@ -293,30 +340,96 @@
   max-width: 100%;
 }
 
-.project-subnav__tabs {
+.project-subnav__desktop {
   display: none !important;
+  flex-direction: row;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 16px;
+  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.project-subnav__trailing {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.project-subnav__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.project-subnav__mobile-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 @media (min-width: 769px) {
   .project-subnav {
     flex-direction: row;
-    align-items: flex-end;
+    align-items: center;
     justify-content: space-between;
     gap: 16px;
-    padding: 0 24px;
+    padding: 10px 24px 16px;
   }
 
   .project-subnav__mobile {
     display: none;
   }
 
-  .project-subnav__tabs {
+  .project-subnav__desktop {
     display: flex !important;
   }
 }
 
-.page-body--project {
+.page-body.page-body--project {
   background: var(--content-canvas);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  /* One column scroll (same as .page-body): header + subnav stay put; list/overview scroll here */
+  overflow-x: hidden;
+  overflow-y: auto;
+  /* Match .project-subnav horizontal inset; space below subnav chrome */
+  padding: 8px 24px 8px;
+}
+
+@media (max-width: 1024px) {
+  .page-body.page-body--project {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
+
+/* Content-height tabs: grow with markup; .page-body--project scrolls as a whole */
+.page-body--project > div {
+  flex: 0 0 auto;
+  min-height: 0;
+  overflow: visible;
+}
+
+/* Fill-height tabs: consume remaining viewport; inner panes (Kanban, docs, PERT) scroll */
+.page-body--project > .project-board-tab,
+.page-body--project > .project-docs-tab,
+.page-body--project > .project-pert-tab {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  margin-top: 0;
 }
 
 .page-header__project-lead {

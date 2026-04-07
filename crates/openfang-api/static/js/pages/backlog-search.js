@@ -110,12 +110,20 @@ function backlogSearchMixins() {
       }
       if (hit.type === 'document' && hit.document) {
         this.detailTab = 'docs';
+        this.detailCategory =
+          typeof projectDetailCategoryForTab === 'function'
+            ? projectDetailCategoryForTab('docs')
+            : 'knowledge';
         await this.loadDocsTab(true);
         await this.docsSelectDoc(hit.document.id);
         return;
       }
       if (hit.type === 'decision' && hit.decision) {
         this.detailTab = 'decisions';
+        this.detailCategory =
+          typeof projectDetailCategoryForTab === 'function'
+            ? projectDetailCategoryForTab('decisions')
+            : 'knowledge';
         await this.loadDecisionsTab(true);
         await this.decisionsSelectRow(hit.decision, false, { openModal: true });
       }

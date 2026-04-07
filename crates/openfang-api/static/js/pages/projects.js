@@ -15,6 +15,33 @@ var PROJECT_DETAIL_TAB_SET = {
   workflows: true,
 };
 
+/** Primary nav groups (UI); `detailTab` remains the concrete section key for routes + content. */
+var PROJECT_DETAIL_TABS_BY_CATEGORY = {
+  overview: ['overview'],
+  tasks: ['backlog', 'board', 'pert', 'milestones'],
+  knowledge: ['docs', 'decisions'],
+  automation: ['spokes', 'agents', 'pipelines', 'workflows'],
+};
+
+function projectDetailCategoryForTab(tab) {
+  var c;
+  for (c in PROJECT_DETAIL_TABS_BY_CATEGORY) {
+    if (!Object.prototype.hasOwnProperty.call(PROJECT_DETAIL_TABS_BY_CATEGORY, c)) continue;
+    var list = PROJECT_DETAIL_TABS_BY_CATEGORY[c];
+    var i;
+    for (i = 0; i < list.length; i++) {
+      if (list[i] === tab) return c;
+    }
+  }
+  return 'overview';
+}
+
+function projectDetailDefaultTabForCategory(cat) {
+  if (cat === 'tasks') return 'board';
+  var list = PROJECT_DETAIL_TABS_BY_CATEGORY[cat];
+  return list && list.length ? list[0] : 'overview';
+}
+
 function projectsPage() {
   return Object.assign(
     {
@@ -23,6 +50,8 @@ function projectsPage() {
     projectsError: '',
     selectedProject: null,
     detailTab: 'overview',
+    /** @type {'overview'|'tasks'|'knowledge'|'automation'} */
+    detailCategory: 'overview',
     projectOverview: null,
     detailTasks: [],
     detailSpokes: [],
@@ -148,6 +177,7 @@ function projectsPage() {
         String(this.selectedProject.id) === String(pid) &&
         this.detailTab === tab
       ) {
+        this.detailCategory = projectDetailCategoryForTab(tab);
         if (tab === 'docs' && subId) {
           if (!this.docsSelectedDoc || String(this.docsSelectedDoc.id) !== String(subId)) {
             if (typeof this.docsSelectDoc === 'function') void this.docsSelectDoc(subId);
@@ -167,6 +197,7 @@ function projectsPage() {
       this._backlogWsReloadNextAt = 0;
       this.selectedProject = proj;
       this.detailTab = tab;
+      this.detailCategory = projectDetailCategoryForTab(tab);
       this.taskModalOpen = false;
       this.taskDetailHtml = '';
       this.backlogDetailTask = null;
@@ -339,6 +370,7 @@ function projectsPage() {
       this._backlogWsReloadNextAt = 0;
       this.selectedProject = project;
       this.detailTab = 'overview';
+      this.detailCategory = 'overview';
       this.taskModalOpen = false;
       this.taskDetailHtml = '';
       this.backlogDetailTask = null;
@@ -471,8 +503,53 @@ function projectsPage() {
         this.closeDecisionViewModal();
       }
       this.detailTab = tab;
+      this.detailCategory = projectDetailCategoryForTab(tab);
       await this.loadDetailTab(tab);
       this.pushProjectsHash();
+    },
+
+    async onDetailCategoryChange(category) {
+      if (projectDetailCategoryForTab(this.detailTab) === category) return;
+      var t = projectDetailDefaultTabForCategory(category);
+      await this.onDetailTabChange(t);
+    },
+
+    projectDetailSubtabs() {
+      return PROJECT_DETAIL_TABS_BY_CATEGORY[this.detailCategory] || ['overview'];
+    },
+
+    projectDetailSubtabLabel(tab) {
+      var labels = {
+        overview: 'Overview',
+        backlog: 'List',
+        board: 'Board',
+        pert: 'PERT',
+        milestones: 'Milestones',
+        docs: 'Docs',
+        decisions: 'Decisions',
+        spokes: 'Spokes',
+        agents: 'Agents',
+        pipelines: 'Pipelines',
+        workflows: 'Workflows',
+      };
+      return labels[tab] || tab;
+    },
+
+    projectDetailSubtabIcon(tab) {
+      var icons = {
+        overview: 'fa-home',
+        backlog: 'fa-list',
+        board: 'fa-th',
+        pert: 'fa-share-alt',
+        milestones: 'fa-flag',
+        docs: 'fa-file-text-o',
+        decisions: 'fa-check-square-o',
+        spokes: 'fa-code-fork',
+        agents: 'fa-cog',
+        pipelines: 'fa-terminal',
+        workflows: 'fa-sitemap',
+      };
+      return icons[tab] ? 'fa ' + icons[tab] : 'fa fa-circle-o';
     },
 
     async discoverSpokes() {
