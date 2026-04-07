@@ -206,34 +206,24 @@ function wizardPage() {
     channelType: '',
     channelOptions: [
       {
-        name: 'telegram',
-        display_name: 'Telegram',
-        icon: 'TG',
-        description: 'Connect your agent to a Telegram bot for messaging.',
-        token_label: 'Bot Token',
-        token_placeholder: '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
-        token_env: 'TELEGRAM_BOT_TOKEN',
-        help: 'Create a bot via @BotFather on Telegram to get your token.'
+        name: 'signal',
+        display_name: 'Signal',
+        icon: 'SG',
+        description: 'Connect via signal-cli REST API.',
+        token_label: 'N/A',
+        token_placeholder: '',
+        token_env: '',
+        help: 'Configure signal-cli and set api_url + phone_number in config.'
       },
       {
-        name: 'discord',
-        display_name: 'Discord',
-        icon: 'DC',
-        description: 'Connect your agent to a Discord server via bot token.',
+        name: 'mattermost',
+        display_name: 'Mattermost',
+        icon: 'MM',
+        description: 'Connect to a Mattermost server with a bot token.',
         token_label: 'Bot Token',
-        token_placeholder: 'MTIz...abc',
-        token_env: 'DISCORD_BOT_TOKEN',
-        help: 'Create a Discord application at discord.com/developers and add a bot.'
-      },
-      {
-        name: 'slack',
-        display_name: 'Slack',
-        icon: 'SL',
-        description: 'Connect your agent to a Slack workspace.',
-        token_label: 'Bot Token',
-        token_placeholder: 'xoxb-...',
-        token_env: 'SLACK_BOT_TOKEN',
-        help: 'Create a Slack app at api.slack.com/apps and install it to your workspace.'
+        token_placeholder: '',
+        token_env: 'MATTERMOST_TOKEN',
+        help: 'Create a bot in Mattermost System Console and set MATTERMOST_TOKEN.'
       }
     ],
     channelToken: '',

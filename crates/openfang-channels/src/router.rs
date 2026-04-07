@@ -10,7 +10,7 @@ use tracing::warn;
 /// Context for evaluating binding match rules against incoming messages.
 #[derive(Debug, Default)]
 pub struct BindingContext {
-    /// Channel type string (e.g., "telegram", "discord").
+    /// Channel type string (e.g., "signal", "mattermost").
     pub channel: String,
     /// Account/bot ID within the channel.
     pub account_id: Option<String>,
@@ -32,7 +32,7 @@ pub struct AgentRouter {
     direct_routes: DashMap<(String, String), AgentId>,
     /// System-wide default agent.
     default_agent: Option<AgentId>,
-    /// Per-channel-type default agent (e.g., Telegram -> agent_a, Discord -> agent_b).
+    /// Per-channel-type default agent (e.g., Signal -> agent_a, Mattermost -> agent_b).
     channel_defaults: DashMap<String, AgentId>,
     /// Per-channel-type default agent *name* (for re-resolution when UUID becomes stale).
     channel_default_names: DashMap<String, String>,
@@ -64,7 +64,7 @@ impl AgentRouter {
         self.default_agent = Some(agent_id);
     }
 
-    /// Set a per-channel-type default agent (e.g., "Telegram" -> agent_id).
+    /// Set a per-channel-type default agent (e.g., "Signal" -> agent_id).
     pub fn set_channel_default(&self, channel_key: String, agent_id: AgentId) {
         self.channel_defaults.insert(channel_key, agent_id);
     }
@@ -343,19 +343,11 @@ impl AgentRouter {
 /// Convert ChannelType to lowercase string for binding matching.
 fn channel_type_to_str(ct: &ChannelType) -> &str {
     match ct {
-        ChannelType::Telegram => "telegram",
-        ChannelType::Discord => "discord",
-        ChannelType::Slack => "slack",
-        ChannelType::WhatsApp => "whatsapp",
         ChannelType::Signal => "signal",
-        ChannelType::Matrix => "matrix",
-        ChannelType::Email => "email",
-        ChannelType::Teams => "teams",
         ChannelType::Mattermost => "mattermost",
         ChannelType::WebChat => "webchat",
         ChannelType::CLI => "cli",
         ChannelType::Custom(s) => s.as_str(),
-        _ => "unknown",
     }
 }
 
@@ -378,18 +370,18 @@ mod tests {
 
         router.set_default(default_agent);
         router.set_user_default("alice".to_string(), user_agent);
-        router.set_direct_route("Telegram".to_string(), "tg_123".to_string(), direct_agent);
+        router.set_direct_route("Signal".to_string(), "sig_123".to_string(), direct_agent);
 
         // Direct route wins
-        let resolved = router.resolve(&ChannelType::Telegram, "tg_123", Some("alice"));
+        let resolved = router.resolve(&ChannelType::Signal, "sig_123", Some("alice"));
         assert_eq!(resolved, Some(direct_agent));
 
         // User default for non-direct-routed user
-        let resolved = router.resolve(&ChannelType::WhatsApp, "wa_456", Some("alice"));
+        let resolved = router.resolve(&ChannelType::Mattermost, "mm_456", Some("alice"));
         assert_eq!(resolved, Some(user_agent));
 
         // System default for unknown user
-        let resolved = router.resolve(&ChannelType::Discord, "dc_789", None);
+        let resolved = router.resolve(&ChannelType::WebChat, "wc_789", None);
         assert_eq!(resolved, Some(default_agent));
     }
 
@@ -408,17 +400,15 @@ mod tests {
         router.load_bindings(&[AgentBinding {
             agent: "coder".to_string(),
             match_rule: openfang_types::config::BindingMatchRule {
-                channel: Some("telegram".to_string()),
+                channel: Some("signal".to_string()),
                 ..Default::default()
             },
         }]);
 
-        // Should match telegram
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Signal, "user1", None);
         assert_eq!(resolved, Some(agent_id));
 
-        // Should NOT match discord
-        let resolved = router.resolve(&ChannelType::Discord, "user1", None);
+        let resolved = router.resolve(&ChannelType::Mattermost, "user1", None);
         assert_eq!(resolved, None);
     }
 
@@ -435,10 +425,10 @@ mod tests {
             },
         }]);
 
-        let resolved = router.resolve(&ChannelType::Discord, "vip_user", None);
+        let resolved = router.resolve(&ChannelType::Mattermost, "vip_user", None);
         assert_eq!(resolved, Some(agent_id));
 
-        let resolved = router.resolve(&ChannelType::Discord, "other_user", None);
+        let resolved = router.resolve(&ChannelType::Mattermost, "other_user", None);
         assert_eq!(resolved, None);
     }
 
@@ -457,24 +447,24 @@ mod tests {
         }]);
 
         let ctx = BindingContext {
-            channel: "discord".to_string(),
+            channel: "mattermost".to_string(),
             peer_id: "user1".to_string(),
             guild_id: Some("guild_123".to_string()),
             roles: vec!["admin".to_string(), "user".to_string()],
             ..Default::default()
         };
-        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx);
+        let resolved = router.resolve_with_context(&ChannelType::Mattermost, "user1", None, &ctx);
         assert_eq!(resolved, Some(agent_id));
 
         // Wrong guild
         let ctx2 = BindingContext {
-            channel: "discord".to_string(),
+            channel: "mattermost".to_string(),
             peer_id: "user1".to_string(),
             guild_id: Some("guild_999".to_string()),
             roles: vec!["admin".to_string()],
             ..Default::default()
         };
-        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx2);
+        let resolved = router.resolve_with_context(&ChannelType::Mattermost, "user1", None, &ctx2);
         assert_eq!(resolved, None);
     }
 
@@ -491,14 +481,14 @@ mod tests {
             AgentBinding {
                 agent: "general".to_string(),
                 match_rule: openfang_types::config::BindingMatchRule {
-                    channel: Some("discord".to_string()),
+                    channel: Some("mattermost".to_string()),
                     ..Default::default()
                 },
             },
             AgentBinding {
                 agent: "specific".to_string(),
                 match_rule: openfang_types::config::BindingMatchRule {
-                    channel: Some("discord".to_string()),
+                    channel: Some("mattermost".to_string()),
                     peer_id: Some("user1".to_string()),
                     guild_id: Some("guild_1".to_string()),
                     ..Default::default()
@@ -508,12 +498,12 @@ mod tests {
 
         // More specific binding should win despite being loaded second
         let ctx = BindingContext {
-            channel: "discord".to_string(),
+            channel: "mattermost".to_string(),
             peer_id: "user1".to_string(),
             guild_id: Some("guild_1".to_string()),
             ..Default::default()
         };
-        let resolved = router.resolve_with_context(&ChannelType::Discord, "user1", None, &ctx);
+        let resolved = router.resolve_with_context(&ChannelType::Mattermost, "user1", None, &ctx);
         assert_eq!(resolved, Some(specific_id));
     }
 
@@ -550,23 +540,20 @@ mod tests {
     fn test_channel_default_routing() {
         let mut router = AgentRouter::new();
         let system_default = AgentId::new();
-        let telegram_default = AgentId::new();
-        let discord_default = AgentId::new();
+        let signal_default = AgentId::new();
+        let mattermost_default = AgentId::new();
 
         router.set_default(system_default);
-        router.set_channel_default("Telegram".to_string(), telegram_default);
-        router.set_channel_default("Discord".to_string(), discord_default);
+        router.set_channel_default("Signal".to_string(), signal_default);
+        router.set_channel_default("Mattermost".to_string(), mattermost_default);
 
-        // Telegram should use Telegram-specific default
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
-        assert_eq!(resolved, Some(telegram_default));
+        let resolved = router.resolve(&ChannelType::Signal, "user1", None);
+        assert_eq!(resolved, Some(signal_default));
 
-        // Discord should use Discord-specific default
-        let resolved = router.resolve(&ChannelType::Discord, "user1", None);
-        assert_eq!(resolved, Some(discord_default));
+        let resolved = router.resolve(&ChannelType::Mattermost, "user1", None);
+        assert_eq!(resolved, Some(mattermost_default));
 
-        // WhatsApp has no channel default — falls to system default
-        let resolved = router.resolve(&ChannelType::WhatsApp, "user1", None);
+        let resolved = router.resolve(&ChannelType::WebChat, "user1", None);
         assert_eq!(resolved, Some(system_default));
     }
 
@@ -578,7 +565,7 @@ mod tests {
         router.load_bindings(&[]);
 
         // Should fall through to system default
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Signal, "user1", None);
         assert_eq!(resolved, Some(default_id));
     }
 
@@ -589,12 +576,12 @@ mod tests {
         router.load_bindings(&[AgentBinding {
             agent: "ghost-agent".to_string(),
             match_rule: openfang_types::config::BindingMatchRule {
-                channel: Some("telegram".to_string()),
+                channel: Some("signal".to_string()),
                 ..Default::default()
             },
         }]);
 
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Signal, "user1", None);
         assert_eq!(resolved, None);
     }
 
@@ -609,7 +596,7 @@ mod tests {
         router.add_binding(AgentBinding {
             agent: "test".to_string(),
             match_rule: openfang_types::config::BindingMatchRule {
-                channel: Some("slack".to_string()),
+                channel: Some("mattermost".to_string()),
                 ..Default::default()
             },
         });
@@ -628,13 +615,13 @@ mod tests {
         assert_eq!(empty.specificity(), 0);
 
         let channel_only = BindingMatchRule {
-            channel: Some("discord".to_string()),
+            channel: Some("mattermost".to_string()),
             ..Default::default()
         };
         assert_eq!(channel_only.specificity(), 1);
 
         let full = BindingMatchRule {
-            channel: Some("discord".to_string()),
+            channel: Some("mattermost".to_string()),
             peer_id: Some("user".to_string()),
             guild_id: Some("guild".to_string()),
             roles: vec!["admin".to_string()],

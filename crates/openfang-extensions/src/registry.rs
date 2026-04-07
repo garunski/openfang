@@ -236,78 +236,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut reg = IntegrationRegistry::new(dir.path());
         let count = reg.load_bundled();
-        assert_eq!(count, 25);
-        assert_eq!(reg.template_count(), 25);
-    }
-
-    #[test]
-    fn registry_get_template() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut reg = IntegrationRegistry::new(dir.path());
-        reg.load_bundled();
-        let gh = reg.get_template("github").unwrap();
-        assert_eq!(gh.name, "GitHub");
-        assert_eq!(gh.category, IntegrationCategory::DevTools);
-    }
-
-    #[test]
-    fn registry_search() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut reg = IntegrationRegistry::new(dir.path());
-        reg.load_bundled();
-        let results = reg.search("search");
-        assert!(results.len() >= 2); // brave-search, exa-search
+        assert_eq!(count, 0);
+        assert_eq!(reg.template_count(), 0);
     }
 
     #[test]
     fn registry_install_uninstall() {
         let dir = tempfile::tempdir().unwrap();
-        let mut reg = IntegrationRegistry::new(dir.path());
-        reg.load_bundled();
-
-        let entry = InstalledIntegration {
-            id: "github".to_string(),
-            installed_at: chrono::Utc::now(),
-            enabled: true,
-            oauth_provider: None,
-            config: HashMap::new(),
-        };
-        reg.install(entry).unwrap();
-        assert!(reg.is_installed("github"));
-        assert_eq!(reg.installed_count(), 1);
-
-        // Double install should fail
-        let entry2 = InstalledIntegration {
-            id: "github".to_string(),
-            installed_at: chrono::Utc::now(),
-            enabled: true,
-            oauth_provider: None,
-            config: HashMap::new(),
-        };
-        assert!(reg.install(entry2).is_err());
-
-        reg.uninstall("github").unwrap();
-        assert!(!reg.is_installed("github"));
-    }
-
-    #[test]
-    fn registry_to_mcp_configs() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut reg = IntegrationRegistry::new(dir.path());
-        reg.load_bundled();
-
-        let entry = InstalledIntegration {
-            id: "github".to_string(),
-            installed_at: chrono::Utc::now(),
-            enabled: true,
-            oauth_provider: None,
-            config: HashMap::new(),
-        };
-        reg.install(entry).unwrap();
-
-        let configs = reg.to_mcp_configs();
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].name, "github");
+        let reg = IntegrationRegistry::new(dir.path());
+        assert_eq!(reg.installed_count(), 0);
     }
 
     #[test]
@@ -315,50 +252,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut reg = IntegrationRegistry::new(dir.path());
         reg.load_bundled();
-
-        let entry = InstalledIntegration {
-            id: "notion".to_string(),
-            installed_at: chrono::Utc::now(),
-            enabled: true,
-            oauth_provider: None,
-            config: HashMap::new(),
-        };
-        reg.install(entry).unwrap();
-
-        // Load from same path
-        let mut reg2 = IntegrationRegistry::new(dir.path());
-        reg2.load_bundled();
-        let count = reg2.load_installed().unwrap();
-        assert_eq!(count, 1);
-        assert!(reg2.is_installed("notion"));
-    }
-
-    #[test]
-    fn registry_list_by_category() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut reg = IntegrationRegistry::new(dir.path());
-        reg.load_bundled();
-        let devtools = reg.list_by_category(&IntegrationCategory::DevTools);
-        assert_eq!(devtools.len(), 6);
-    }
-
-    #[test]
-    fn registry_set_enabled() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut reg = IntegrationRegistry::new(dir.path());
-        reg.load_bundled();
-
-        let entry = InstalledIntegration {
-            id: "github".to_string(),
-            installed_at: chrono::Utc::now(),
-            enabled: true,
-            oauth_provider: None,
-            config: HashMap::new(),
-        };
-        reg.install(entry).unwrap();
-
-        reg.set_enabled("github", false).unwrap();
-        let configs = reg.to_mcp_configs();
-        assert!(configs.is_empty()); // disabled = not in MCP configs
+        assert_eq!(reg.template_count(), 0);
     }
 }

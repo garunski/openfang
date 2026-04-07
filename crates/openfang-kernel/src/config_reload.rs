@@ -431,9 +431,8 @@ mod tests {
     fn test_channels_hot_reload() {
         let a = default_cfg();
         let mut b = default_cfg();
-        // Change the channels config by adding a Telegram config
-        b.channels.telegram = Some(openfang_types::config::TelegramConfig {
-            bot_token_env: "TG_TOKEN".to_string(),
+        b.channels.signal = Some(openfang_types::config::SignalConfig {
+            phone_number: "+15550001".to_string(),
             ..Default::default()
         });
         let plan = build_reload_plan(&a, &b);

@@ -12,19 +12,10 @@ use futures::Stream;
 /// The type of messaging channel.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ChannelType {
-    Telegram,
-    WhatsApp,
-    Slack,
-    Discord,
     Signal,
-    Matrix,
-    Email,
-    Teams,
     Mattermost,
     WebChat,
     CLI,
-    /// MQTT pub/sub messaging.
-    Mqtt,
     Custom(String),
 }
 
@@ -284,7 +275,7 @@ pub trait ChannelAdapter: Send + Sync {
 /// Split a message into chunks of at most `max_len` characters,
 /// preferring to split at newline boundaries.
 ///
-/// Shared utility used by Telegram, Discord, and Slack adapters.
+/// Shared utility used by channel adapters that need length-limited outbound text.
 pub fn split_message(text: &str, max_len: usize) -> Vec<&str> {
     if text.len() <= max_len {
         return vec![text];
@@ -317,7 +308,7 @@ mod tests {
     #[test]
     fn test_channel_message_serialization() {
         let msg = ChannelMessage {
-            channel: ChannelType::Telegram,
+            channel: ChannelType::Signal,
             platform_message_id: "123".to_string(),
             sender: ChannelUser {
                 platform_id: "user1".to_string(),
@@ -334,7 +325,7 @@ mod tests {
 
         let json = serde_json::to_string(&msg).unwrap();
         let deserialized: ChannelMessage = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.channel, ChannelType::Telegram);
+        assert_eq!(deserialized.channel, ChannelType::Signal);
     }
 
     #[test]
@@ -350,19 +341,19 @@ mod tests {
     }
 
     #[test]
-    fn test_channel_type_matrix_serde() {
-        let ct = ChannelType::Matrix;
+    fn test_channel_type_mattermost_serde() {
+        let ct = ChannelType::Mattermost;
         let json = serde_json::to_string(&ct).unwrap();
         let back: ChannelType = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, ChannelType::Matrix);
+        assert_eq!(back, ChannelType::Mattermost);
     }
 
     #[test]
-    fn test_channel_type_email_serde() {
-        let ct = ChannelType::Email;
+    fn test_channel_type_custom_serde() {
+        let ct = ChannelType::Custom("irc".to_string());
         let json = serde_json::to_string(&ct).unwrap();
         let back: ChannelType = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, ChannelType::Email);
+        assert_eq!(back, ChannelType::Custom("irc".to_string()));
     }
 
     #[test]
@@ -451,7 +442,7 @@ mod tests {
     fn test_delivery_receipt_serde() {
         let receipt = DeliveryReceipt {
             message_id: "msg-123".to_string(),
-            channel: "telegram".to_string(),
+            channel: "signal".to_string(),
             recipient: "user-456".to_string(),
             status: DeliveryStatus::Sent,
             timestamp: Utc::now(),
@@ -467,7 +458,7 @@ mod tests {
     fn test_delivery_receipt_with_error() {
         let receipt = DeliveryReceipt {
             message_id: "msg-789".to_string(),
-            channel: "slack".to_string(),
+            channel: "mattermost".to_string(),
             recipient: "channel-abc".to_string(),
             status: DeliveryStatus::Failed,
             timestamp: Utc::now(),

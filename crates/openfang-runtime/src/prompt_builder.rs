@@ -35,7 +35,7 @@ pub struct PromptContext {
     pub canonical_context: Option<String>,
     /// Known user name (from shared memory).
     pub user_name: Option<String>,
-    /// Channel type (telegram, discord, web, etc.).
+    /// Channel type (signal, mattermost, webchat, cli, etc.).
     pub channel_type: Option<String>,
     /// Whether this agent was spawned as a subagent.
     pub is_subagent: bool,
@@ -55,7 +55,7 @@ pub struct PromptContext {
     pub peer_agents: Vec<(String, String, String)>,
     /// Current date/time string for temporal awareness.
     pub current_date: Option<String>,
-    /// Sender identity (e.g. WhatsApp phone number, Telegram user ID).
+    /// Sender identity (e.g. Signal number, Mattermost user id).
     pub sender_id: Option<String>,
     /// Sender display name.
     pub sender_name: Option<String>,
@@ -398,31 +398,22 @@ fn build_user_section(user_name: Option<&str>) -> String {
 
 fn build_channel_section(channel: &str) -> String {
     let (limit, hints) = match channel {
-        "telegram" => (
+        "signal" => (
             "4096",
-            "Use Telegram-compatible formatting (bold with *, code with `backticks`).",
+            "Use clear markdown; signal-cli delivery is plain-friendly.",
         ),
-        "discord" => (
-            "2000",
-            "Use Discord markdown. Split long responses across multiple messages if needed.",
+        "mattermost" => (
+            "16383",
+            "Use Mattermost markdown (headers, lists, code fences, links).",
         ),
-        "slack" => (
-            "4000",
-            "Use Slack mrkdwn formatting (*bold*, _italic_, `code`).",
+        "webchat" | "web" => (
+            "32000",
+            "Use markdown; the dashboard renders common markdown elements.",
         ),
-        "whatsapp" => (
-            "4096",
-            "Keep messages concise. WhatsApp has limited formatting.",
+        "cli" => (
+            "32000",
+            "Terminal output: prefer concise markdown or plain text.",
         ),
-        "irc" => (
-            "512",
-            "Keep messages very short. No markdown — plain text only.",
-        ),
-        "matrix" => (
-            "65535",
-            "Matrix supports rich formatting. Use markdown freely.",
-        ),
-        "teams" => ("28000", "Use Teams-compatible markdown."),
         _ => ("4096", "Use markdown formatting where supported."),
     };
     format!(
@@ -846,24 +837,24 @@ mod tests {
     }
 
     #[test]
-    fn test_channel_telegram() {
-        let section = build_channel_section("telegram");
+    fn test_channel_signal() {
+        let section = build_channel_section("signal");
         assert!(section.contains("4096"));
-        assert!(section.contains("Telegram"));
+        assert!(section.contains("signal"));
     }
 
     #[test]
-    fn test_channel_discord() {
-        let section = build_channel_section("discord");
-        assert!(section.contains("2000"));
-        assert!(section.contains("Discord"));
+    fn test_channel_mattermost() {
+        let section = build_channel_section("mattermost");
+        assert!(section.contains("16383"));
+        assert!(section.contains("Mattermost"));
     }
 
     #[test]
-    fn test_channel_irc() {
-        let section = build_channel_section("irc");
-        assert!(section.contains("512"));
-        assert!(section.contains("plain text"));
+    fn test_channel_webchat() {
+        let section = build_channel_section("webchat");
+        assert!(section.contains("32000"));
+        assert!(section.contains("dashboard"));
     }
 
     #[test]

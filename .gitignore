@@ -6,7 +6,6 @@
 # Environment & secrets
 .env
 .env.*
-!.env.example
 
 # Database
 *.db

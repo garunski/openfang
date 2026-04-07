@@ -145,7 +145,7 @@ pub enum CronDelivery {
     None,
     /// Deliver to a specific channel and recipient.
     Channel {
-        /// Channel identifier (e.g. `"telegram"`, `"slack"`).
+        /// Channel identifier (`signal`, `mattermost`).
         channel: String,
         /// Recipient in the channel.
         to: String,
@@ -744,7 +744,7 @@ mod tests {
     fn delivery_channel_empty_to() {
         let mut job = valid_job();
         job.delivery = CronDelivery::Channel {
-            channel: "slack".into(),
+            channel: "mattermost".into(),
             to: String::new(),
         };
         let err = job.validate(0).unwrap_err();
@@ -755,7 +755,7 @@ mod tests {
     fn delivery_channel_ok() {
         let mut job = valid_job();
         job.delivery = CronDelivery::Channel {
-            channel: "telegram".into(),
+            channel: "signal".into(),
             to: "chat_12345".into(),
         };
         assert!(job.validate(0).is_ok());

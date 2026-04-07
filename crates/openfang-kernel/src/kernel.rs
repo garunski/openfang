@@ -151,8 +151,6 @@ pub struct OpenFangKernel {
     pub peer_node: OnceLock<Arc<openfang_wire::PeerNode>>,
     /// Boot timestamp for uptime calculation.
     pub booted_at: std::time::Instant,
-    /// WhatsApp Web gateway child process PID (for shutdown cleanup).
-    pub whatsapp_gateway_pid: Arc<std::sync::Mutex<Option<u32>>>,
     /// Channel adapters registered at bridge startup (for proactive `channel_send` tool).
     pub channel_adapters:
         dashmap::DashMap<String, Arc<dyn openfang_channels::types::ChannelAdapter>>,
@@ -161,7 +159,7 @@ pub struct OpenFangKernel {
         std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
     /// Per-agent message locks — serializes LLM calls for the same agent to prevent
     /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
-    /// messages via Telegram). Different agents can still run in parallel.
+    /// messages via a channel). Different agents can still run in parallel.
     agent_msg_locks: dashmap::DashMap<AgentId, Arc<tokio::sync::Mutex<()>>>,
     /// Weak self-reference for trigger dispatch (set after Arc wrapping).
     self_handle: OnceLock<Weak<OpenFangKernel>>,
@@ -1100,7 +1098,6 @@ impl OpenFangKernel {
             peer_registry: OnceLock::new(),
             peer_node: OnceLock::new(),
             booted_at: std::time::Instant::now(),
-            whatsapp_gateway_pid: Arc::new(std::sync::Mutex::new(None)),
             channel_adapters: dashmap::DashMap::new(),
             default_model_override: std::sync::RwLock::new(None),
             agent_msg_locks: dashmap::DashMap::new(),
@@ -1586,7 +1583,7 @@ impl OpenFangKernel {
     ///
     /// When `content_blocks` is `Some`, the LLM agent loop receives structured
     /// multimodal content (text + images) instead of just a text string. This
-    /// enables vision models to process images sent from channels like Telegram.
+    /// enables vision models to process images sent from messaging channels.
     ///
     /// Per-agent locking ensures that concurrent messages for the same agent
     /// are serialized (preventing session corruption), while messages for
@@ -1602,7 +1599,7 @@ impl OpenFangKernel {
     ) -> KernelResult<AgentLoopResult> {
         // Acquire per-agent lock to serialize concurrent messages for the same agent.
         // This prevents session corruption when multiple messages arrive in quick
-        // succession (e.g. rapid voice messages via Telegram). Messages for different
+        // succession (e.g. rapid voice messages on one channel). Messages for different
         // agents are not blocked — each agent has its own independent lock.
         let lock = self
             .agent_msg_locks
@@ -4207,13 +4204,6 @@ impl OpenFangKernel {
             }
         }
 
-        // Start WhatsApp Web gateway if WhatsApp channel is configured
-        if self.config.channels.whatsapp.is_some() {
-            let kernel = Arc::clone(self);
-            tokio::spawn(async move {
-                crate::whatsapp_gateway::start_whatsapp_gateway(&kernel).await;
-            });
-        }
     }
 
     /// Start the heartbeat monitor background task.
@@ -4507,28 +4497,6 @@ impl OpenFangKernel {
     /// data so agents are restored on the next boot.
     pub fn shutdown(&self) {
         info!("Shutting down OpenFang kernel...");
-
-        // Kill WhatsApp gateway child process if running
-        if let Ok(guard) = self.whatsapp_gateway_pid.lock() {
-            if let Some(pid) = *guard {
-                info!("Stopping WhatsApp Web gateway (PID {pid})...");
-                // Best-effort kill — don't block shutdown on failure
-                #[cfg(unix)]
-                {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGTERM);
-                    }
-                }
-                #[cfg(windows)]
-                {
-                    let _ = std::process::Command::new("taskkill")
-                        .args(["/PID", &pid.to_string(), "/T", "/F"])
-                        .stdout(std::process::Stdio::null())
-                        .stderr(std::process::Stdio::null())
-                        .status();
-                }
-            }
-        }
 
         self.supervisor.shutdown();
 
@@ -6389,20 +6357,20 @@ impl KernelHandle for OpenFangKernel {
 
     async fn get_channel_default_recipient(&self, channel: &str) -> Option<String> {
         match channel {
-            "telegram" => self
+            "signal" => self
                 .config
                 .channels
-                .telegram
-                .as_ref()?
-                .default_chat_id
-                .clone(),
-            "discord" => self
+                .signal
+                .as_ref()
+                .map(|s| s.phone_number.clone())
+                .filter(|n| !n.trim().is_empty()),
+            "mattermost" => self
                 .config
                 .channels
-                .discord
-                .as_ref()?
-                .default_channel_id
-                .clone(),
+                .mattermost
+                .as_ref()
+                .and_then(|m| m.allowed_channels.first().cloned())
+                .filter(|id| !id.trim().is_empty()),
             _ => None,
         }
     }
@@ -6436,18 +6404,23 @@ impl KernelHandle for OpenFangKernel {
             openfang_user: None,
         };
 
-        let formatted = if channel == "wecom" {
-            let output_format = self
+        let output_format = match channel {
+            "signal" => self
                 .config
                 .channels
-                .wecom
+                .signal
                 .as_ref()
-                .and_then(|c| c.overrides.output_format)
-                .unwrap_or(OutputFormat::PlainText);
-            openfang_channels::formatter::format_for_wecom(message, output_format)
-        } else {
-            message.to_string()
-        };
+                .and_then(|c| c.overrides.output_format),
+            "mattermost" => self
+                .config
+                .channels
+                .mattermost
+                .as_ref()
+                .and_then(|c| c.overrides.output_format),
+            _ => None,
+        }
+        .unwrap_or(OutputFormat::Markdown);
+        let formatted = openfang_channels::formatter::format_for_channel(message, output_format);
 
         let content = openfang_channels::types::ChannelContent::Text(formatted);
 
@@ -6901,7 +6874,7 @@ mod tests {
     }
 
     #[test]
-    fn test_hand_activation_does_not_seed_runtime_tool_filters() {
+    fn test_hand_activation_not_found_when_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let home_dir = tmp.path().join("openfang-kernel-hand-test");
         std::fs::create_dir_all(&home_dir).unwrap();
@@ -6913,24 +6886,8 @@ mod tests {
         };
 
         let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
-        let instance = kernel
-            .activate_hand("browser", HashMap::new())
-            .expect("browser hand should activate");
-        let agent_id = instance.agent_id.expect("browser hand agent id");
-        let entry = kernel
-            .registry
-            .get(agent_id)
-            .expect("browser hand agent entry");
-
-        assert!(
-            entry.manifest.tool_allowlist.is_empty(),
-            "hand activation should leave the runtime tool allowlist empty so skill/MCP tools remain visible"
-        );
-        assert!(
-            entry.manifest.tool_blocklist.is_empty(),
-            "hand activation should not set a runtime blocklist by default"
-        );
-
+        let result = kernel.activate_hand("browser", HashMap::new());
+        assert!(result.is_err(), "should fail with no bundled hands");
         kernel.shutdown();
     }
 }

@@ -235,7 +235,6 @@ const PROVIDERS: &[ProviderInfo] = &[
 /// What the user chose to do after init completes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LaunchChoice {
-    Desktop,
     Dashboard,
     Chat,
 }
@@ -255,20 +254,11 @@ pub enum InitResult {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Step {
     Welcome,
-    Migration,
     Provider,
     ApiKey,
     Model,
     Routing,
     Complete,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MigrationPhase {
-    Detecting,
-    Offer,
-    Running,
-    Done,
 }
 
 /// Sub-state within the Routing step.
@@ -306,16 +296,6 @@ const ROUTING_TIER_DESC: [&str; 3] = [
 struct State {
     step: Step,
     tick: usize,
-
-    // Migration
-    migration_phase: MigrationPhase,
-    migration_choice_list: ListState,
-    openclaw_path: Option<PathBuf>,
-    openclaw_scan: Option<openfang_migrate::openclaw::ScanResult>,
-    migration_report: Option<openfang_migrate::report::MigrationReport>,
-    migration_error: Option<String>,
-    migration_done_at: Option<Instant>,
-    migrated_provider: Option<String>,
 
     // Provider selection
     provider_list: ListState,
@@ -356,14 +336,6 @@ impl State {
         let mut s = Self {
             step: Step::Welcome,
             tick: 0,
-            migration_phase: MigrationPhase::Detecting,
-            migration_choice_list: ListState::default(),
-            openclaw_path: None,
-            openclaw_scan: None,
-            migration_report: None,
-            migration_error: None,
-            migration_done_at: None,
-            migrated_provider: None,
             provider_list: ListState::default(),
             provider_order: Vec::new(),
             selected_provider: None,
@@ -389,7 +361,6 @@ impl State {
         };
         s.build_provider_order();
         s.provider_list.select(Some(0));
-        s.migration_choice_list.select(Some(0));
         s.routing_choice_list.select(Some(0));
         s.complete_list.select(Some(0));
         s
@@ -428,28 +399,13 @@ impl State {
 
     fn step_label(&self) -> &'static str {
         match self.step {
-            Step::Welcome => "1 of 7",
-            Step::Migration => "2 of 7",
-            Step::Provider => "3 of 7",
-            Step::ApiKey => "4 of 7",
-            Step::Model => "5 of 7",
-            Step::Routing => "6 of 7",
-            Step::Complete => "7 of 7",
+            Step::Welcome => "1 of 6",
+            Step::Provider => "2 of 6",
+            Step::ApiKey => "3 of 6",
+            Step::Model => "4 of 6",
+            Step::Routing => "5 of 6",
+            Step::Complete => "6 of 6",
         }
-    }
-
-    /// Advance to the Provider step, optionally pre-selecting a migrated provider.
-    fn advance_to_provider(&mut self) {
-        if let Some(ref prov_name) = self.migrated_provider {
-            // Find the provider in the ordered list and pre-select it
-            for (list_idx, &prov_idx) in self.provider_order.iter().enumerate() {
-                if PROVIDERS[prov_idx].name == prov_name.as_str() {
-                    self.provider_list.select(Some(list_idx));
-                    break;
-                }
-            }
-        }
-        self.step = Step::Provider;
     }
 
     fn is_provider_detected(&self, prov_idx: usize) -> bool {
@@ -608,8 +564,6 @@ pub fn run() -> InitResult {
     let mut state = State::new();
 
     let (test_tx, test_rx) = std::sync::mpsc::channel::<bool>();
-    let (migrate_tx, migrate_rx) =
-        std::sync::mpsc::channel::<Result<openfang_migrate::report::MigrationReport, String>>();
 
     let result = loop {
         terminal
@@ -640,68 +594,6 @@ pub fn run() -> InitResult {
             }
         }
 
-        // ── Migration detection (resolves in 1 frame) ──
-        if state.step == Step::Migration && state.migration_phase == MigrationPhase::Detecting {
-            match openfang_migrate::openclaw::detect_openclaw_home() {
-                None => {
-                    // No OpenClaw found — skip migration entirely
-                    state.advance_to_provider();
-                }
-                Some(path) => {
-                    let scan = openfang_migrate::openclaw::scan_openclaw_workspace(&path);
-                    let has_content = scan.has_config
-                        || !scan.agents.is_empty()
-                        || !scan.channels.is_empty()
-                        || !scan.skills.is_empty()
-                        || scan.has_memory;
-                    if has_content {
-                        state.openclaw_path = Some(path);
-                        state.openclaw_scan = Some(scan);
-                        state.migration_phase = MigrationPhase::Offer;
-                    } else {
-                        // Nothing useful to migrate
-                        state.advance_to_provider();
-                    }
-                }
-            }
-        }
-
-        // ── Migration background result polling ──
-        if state.step == Step::Migration && state.migration_phase == MigrationPhase::Running {
-            if let Ok(result) = migrate_rx.try_recv() {
-                match result {
-                    Ok(report) => {
-                        // Extract provider from first imported agent for pre-selection
-                        if let Some(scan) = &state.openclaw_scan {
-                            for agent in &scan.agents {
-                                if !agent.provider.is_empty() {
-                                    state.migrated_provider = Some(agent.provider.clone());
-                                    break;
-                                }
-                            }
-                        }
-                        state.migration_report = Some(report);
-                        state.migration_phase = MigrationPhase::Done;
-                        state.migration_done_at = Some(Instant::now());
-                    }
-                    Err(e) => {
-                        state.migration_error = Some(e);
-                        state.migration_phase = MigrationPhase::Done;
-                        state.migration_done_at = Some(Instant::now());
-                    }
-                }
-            }
-        }
-
-        // ── Migration auto-advance 1.5s after Done ──
-        if state.step == Step::Migration && state.migration_phase == MigrationPhase::Done {
-            if let Some(done_at) = state.migration_done_at {
-                if done_at.elapsed() >= Duration::from_millis(1500) {
-                    state.advance_to_provider();
-                }
-            }
-        }
-
         if event::poll(Duration::from_millis(50)).unwrap_or(false) {
             if let Ok(CtEvent::Key(key)) = event::read() {
                 if key.kind != KeyEventKind::Press {
@@ -719,14 +611,11 @@ pub fn run() -> InitResult {
                 match state.step {
                     Step::Welcome => match key.code {
                         KeyCode::Enter => {
-                            state.migration_phase = MigrationPhase::Detecting;
-                            state.step = Step::Migration;
+                            state.step = Step::Provider;
                         }
                         KeyCode::Esc => break InitResult::Cancelled,
                         _ => {}
                     },
-
-                    Step::Migration => handle_migration_key(&mut state, key.code, &migrate_tx),
 
                     Step::Provider => match key.code {
                         KeyCode::Esc => break InitResult::Cancelled,
@@ -867,28 +756,24 @@ pub fn run() -> InitResult {
                     Step::Complete => match key.code {
                         KeyCode::Up | KeyCode::Char('k') => {
                             let i = state.complete_list.selected().unwrap_or(0);
-                            let next = if i == 0 { 2 } else { i - 1 };
+                            let next = if i == 0 { 1 } else { 0 };
                             state.complete_list.select(Some(next));
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             let i = state.complete_list.selected().unwrap_or(0);
-                            let next = (i + 1) % 3;
+                            let next = if i == 0 { 1 } else { 0 };
                             state.complete_list.select(Some(next));
                         }
-                        // Number shortcuts: 1=Desktop, 2=Dashboard, 3=Chat
+                        // Number shortcuts: 1=Dashboard, 2=Chat
                         KeyCode::Char('1') => {
                             state.complete_list.select(Some(0));
                         }
                         KeyCode::Char('2') => {
                             state.complete_list.select(Some(1));
                         }
-                        KeyCode::Char('3') => {
-                            state.complete_list.select(Some(2));
-                        }
                         KeyCode::Enter => {
                             let choice = match state.complete_list.selected() {
-                                Some(0) => LaunchChoice::Desktop,
-                                Some(1) => LaunchChoice::Dashboard,
+                                Some(0) => LaunchChoice::Dashboard,
                                 _ => LaunchChoice::Chat,
                             };
                             break InitResult::Completed {
@@ -909,7 +794,7 @@ pub fn run() -> InitResult {
                                     .unwrap_or_default(),
                                 model: state.model_input.clone(),
                                 daemon_started: state.daemon_started,
-                                launch: LaunchChoice::Chat,
+                                launch: LaunchChoice::Dashboard,
                             };
                         }
                         _ => {}
@@ -923,70 +808,6 @@ pub fn run() -> InitResult {
 
     ratatui::restore();
     result
-}
-
-// ── Migration step key handler ─────────────────────────────────────────────
-
-fn handle_migration_key(
-    state: &mut State,
-    code: KeyCode,
-    migrate_tx: &std::sync::mpsc::Sender<Result<openfang_migrate::report::MigrationReport, String>>,
-) {
-    match state.migration_phase {
-        MigrationPhase::Detecting => {} // auto-resolves, no keys
-        MigrationPhase::Offer => match code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                let i = state.migration_choice_list.selected().unwrap_or(0);
-                state
-                    .migration_choice_list
-                    .select(Some(if i == 0 { 1 } else { 0 }));
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let i = state.migration_choice_list.selected().unwrap_or(0);
-                state
-                    .migration_choice_list
-                    .select(Some(if i == 0 { 1 } else { 0 }));
-            }
-            KeyCode::Esc => {
-                state.advance_to_provider();
-            }
-            KeyCode::Enter => {
-                let yes = state.migration_choice_list.selected() == Some(0);
-                if yes {
-                    state.migration_phase = MigrationPhase::Running;
-                    let source_dir = state.openclaw_path.clone().unwrap_or_default();
-                    let target_dir = if let Ok(h) = std::env::var("OPENFANG_HOME") {
-                        PathBuf::from(h)
-                    } else {
-                        dirs::home_dir()
-                            .unwrap_or_else(|| PathBuf::from("."))
-                            .join(".openfang")
-                    };
-                    let tx = migrate_tx.clone();
-                    std::thread::spawn(move || {
-                        let options = openfang_migrate::MigrateOptions {
-                            source: openfang_migrate::MigrateSource::OpenClaw,
-                            source_dir,
-                            target_dir,
-                            dry_run: false,
-                        };
-                        let result =
-                            openfang_migrate::run_migration(&options).map_err(|e| format!("{e}"));
-                        let _ = tx.send(result);
-                    });
-                } else {
-                    state.advance_to_provider();
-                }
-            }
-            _ => {}
-        },
-        MigrationPhase::Running => {} // ignore keys while running
-        MigrationPhase::Done => {
-            if code == KeyCode::Enter {
-                state.advance_to_provider();
-            }
-        }
-    }
 }
 
 // ── Routing step key handler ───────────────────────────────────────────────
@@ -1167,24 +988,6 @@ decay_rate = 0.05
     }
 }
 
-/// Check if the `openfang-desktop` binary exists next to the current exe.
-fn find_desktop_binary() -> Option<std::path::PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let dir = exe.parent()?;
-
-    #[cfg(windows)]
-    let name = "openfang-desktop.exe";
-    #[cfg(not(windows))]
-    let name = "openfang-desktop";
-
-    let path = dir.join(name);
-    if path.exists() {
-        Some(path)
-    } else {
-        None
-    }
-}
-
 // ── Drawing ────────────────────────────────────────────────────────────────
 
 fn draw(f: &mut Frame, area: Rect, state: &mut State) {
@@ -1216,7 +1019,7 @@ fn draw(f: &mut Frame, area: Rect, state: &mut State) {
     ])
     .split(content);
 
-    // Header: "OpenFang Init  Step X of 7"
+    // Header: "OpenFang Init  Step X of 6"
     let header = Line::from(vec![
         Span::styled(
             "OpenFang",
@@ -1240,7 +1043,6 @@ fn draw(f: &mut Frame, area: Rect, state: &mut State) {
     // Step content (full remaining area)
     match state.step {
         Step::Welcome => draw_welcome(f, chunks[3]),
-        Step::Migration => draw_migration(f, chunks[3], state),
         Step::Provider => draw_provider(f, chunks[3], state),
         Step::ApiKey => draw_api_key(f, chunks[3], state),
         Step::Model => draw_model(f, chunks[3], state),
@@ -1345,371 +1147,6 @@ fn draw_welcome(f: &mut Frame, area: Rect) {
         theme::hint_style(),
     )]));
     f.render_widget(hints, chunks[15]);
-}
-
-fn draw_migration(f: &mut Frame, area: Rect, state: &mut State) {
-    match state.migration_phase {
-        MigrationPhase::Detecting => draw_migration_detecting(f, area, state),
-        MigrationPhase::Offer => draw_migration_offer(f, area, state),
-        MigrationPhase::Running => draw_migration_running(f, area, state),
-        MigrationPhase::Done => draw_migration_done(f, area, state),
-    }
-}
-
-fn draw_migration_detecting(f: &mut Frame, area: Rect, state: &State) {
-    let chunks = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Min(0),
-    ])
-    .split(area);
-
-    let spinner = theme::SPINNER_FRAMES[state.tick % theme::SPINNER_FRAMES.len()];
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(spinner, Style::default().fg(theme::ACCENT)),
-            Span::raw(" Checking for existing installations..."),
-        ])),
-        chunks[1],
-    );
-}
-
-fn draw_migration_offer(f: &mut Frame, area: Rect, state: &mut State) {
-    let scan = match &state.openclaw_scan {
-        Some(s) => s,
-        None => return,
-    };
-
-    let path_display = state
-        .openclaw_path
-        .as_ref()
-        .map(|p| p.display().to_string())
-        .unwrap_or_default();
-
-    // Count content lines to determine layout
-    let mut content_lines: Vec<Line> = Vec::new();
-
-    if !scan.agents.is_empty() {
-        let names: Vec<&str> = scan.agents.iter().map(|a| a.name.as_str()).collect();
-        let names_str = names.join(", ");
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-            Span::raw(format!("{} agents ({})", scan.agents.len(), names_str)),
-        ]));
-    } else {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2500} ", theme::dim_style()),
-            Span::styled("No agents", theme::dim_style()),
-        ]));
-    }
-
-    if !scan.channels.is_empty() {
-        let chan_str = scan.channels.join(", ");
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-            Span::raw(format!("{} channels ({})", scan.channels.len(), chan_str)),
-        ]));
-    } else {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2500} ", theme::dim_style()),
-            Span::styled("No channels", theme::dim_style()),
-        ]));
-    }
-
-    if !scan.skills.is_empty() {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-            Span::raw(format!("{} skills", scan.skills.len())),
-        ]));
-    } else {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2500} ", theme::dim_style()),
-            Span::styled("No skills", theme::dim_style()),
-        ]));
-    }
-
-    if scan.has_memory {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-            Span::raw("Memory files"),
-        ]));
-    } else {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2500} ", theme::dim_style()),
-            Span::styled("No memory files", theme::dim_style()),
-        ]));
-    }
-
-    if scan.has_config {
-        content_lines.push(Line::from(vec![
-            Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-            Span::raw("Configuration"),
-        ]));
-    }
-
-    let chunks = Layout::vertical([
-        Constraint::Length(1),                          // 0: title
-        Constraint::Length(1),                          // 1: path
-        Constraint::Length(1),                          // 2: separator
-        Constraint::Length(content_lines.len() as u16), // 3: scan items
-        Constraint::Length(1),                          // 4: separator
-        Constraint::Length(1),                          // 5: spacer
-        Constraint::Length(1),                          // 6: option yes
-        Constraint::Length(1),                          // 7: option no
-        Constraint::Min(0),                             // 8: flex
-        Constraint::Length(1),                          // 9: hints
-    ])
-    .split(area);
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  OpenClaw Installation Detected",
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD),
-        )])),
-        chunks[0],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            format!("  {}", path_display),
-            theme::dim_style(),
-        )])),
-        chunks[1],
-    );
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  ".to_string() + &"\u{2500}".repeat(area.width.saturating_sub(6) as usize),
-            Style::default().fg(theme::BORDER),
-        )])),
-        chunks[2],
-    );
-
-    // Render scan items
-    for (i, line) in content_lines.iter().enumerate() {
-        if i < chunks[3].height as usize {
-            let line_area = Rect {
-                x: chunks[3].x,
-                y: chunks[3].y + i as u16,
-                width: chunks[3].width,
-                height: 1,
-            };
-            f.render_widget(Paragraph::new(line.clone()), line_area);
-        }
-    }
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  ".to_string() + &"\u{2500}".repeat(area.width.saturating_sub(6) as usize),
-            Style::default().fg(theme::BORDER),
-        )])),
-        chunks[4],
-    );
-
-    // Yes / No options
-    let options = [("Yes", "migrate settings and data"), ("No", "start fresh")];
-
-    for (i, (label, desc)) in options.iter().enumerate() {
-        let selected = state.migration_choice_list.selected() == Some(i);
-        let arrow = if selected {
-            Span::styled("  \u{25b8} ", Style::default().fg(theme::ACCENT))
-        } else {
-            Span::raw("    ")
-        };
-        let label_style = if selected {
-            Style::default()
-                .fg(theme::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT_PRIMARY)
-        };
-        f.render_widget(
-            Paragraph::new(Line::from(vec![
-                arrow,
-                Span::styled(format!("{:<6}", label), label_style),
-                Span::styled(*desc, theme::dim_style()),
-            ])),
-            chunks[6 + i],
-        );
-    }
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled(
-            "  [\u{2191}\u{2193}] Navigate  [Enter] Select  [Esc] Skip",
-            theme::hint_style(),
-        )])),
-        chunks[9],
-    );
-}
-
-fn draw_migration_running(f: &mut Frame, area: Rect, state: &State) {
-    let chunks = Layout::vertical([
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Min(0),
-    ])
-    .split(area);
-
-    let spinner = theme::SPINNER_FRAMES[state.tick % theme::SPINNER_FRAMES.len()];
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled(spinner, Style::default().fg(theme::ACCENT)),
-            Span::raw(" Migrating from OpenClaw..."),
-        ])),
-        chunks[1],
-    );
-}
-
-fn draw_migration_done(f: &mut Frame, area: Rect, state: &State) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    if let Some(ref error) = state.migration_error {
-        lines.push(Line::from(vec![
-            Span::styled("  \u{2718} ", Style::default().fg(theme::RED)),
-            Span::raw(format!("Migration failed: {}", error)),
-        ]));
-    } else if let Some(ref report) = state.migration_report {
-        // Group imported items by kind
-        use openfang_migrate::report::ItemKind;
-        let config_count = report
-            .imported
-            .iter()
-            .filter(|i| i.kind == ItemKind::Config)
-            .count();
-        let agent_items: Vec<&str> = report
-            .imported
-            .iter()
-            .filter(|i| i.kind == ItemKind::Agent)
-            .map(|i| i.name.as_str())
-            .collect();
-        let channel_items: Vec<&str> = report
-            .imported
-            .iter()
-            .filter(|i| i.kind == ItemKind::Channel)
-            .map(|i| i.name.as_str())
-            .collect();
-        let memory_count = report
-            .imported
-            .iter()
-            .filter(|i| i.kind == ItemKind::Memory)
-            .count();
-        let skill_count = report
-            .imported
-            .iter()
-            .filter(|i| i.kind == ItemKind::Skill)
-            .count();
-        let session_count = report
-            .imported
-            .iter()
-            .filter(|i| i.kind == ItemKind::Session)
-            .count();
-
-        if config_count > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-                Span::raw("Config migrated"),
-            ]));
-        }
-
-        if !agent_items.is_empty() {
-            let names = agent_items.join(", ");
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-                Span::raw(format!("{} agents imported ({})", agent_items.len(), names)),
-            ]));
-        }
-
-        if !channel_items.is_empty() {
-            let names = channel_items.join(", ");
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-                Span::raw(format!("{} channels ({})", channel_items.len(), names)),
-            ]));
-        }
-
-        if memory_count > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-                Span::raw("Memory files copied"),
-            ]));
-        }
-
-        if skill_count > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-                Span::raw(format!("{} skills imported", skill_count)),
-            ]));
-        }
-
-        if session_count > 0 {
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2714} ", Style::default().fg(theme::GREEN)),
-                Span::raw(format!("{} sessions imported", session_count)),
-            ]));
-        }
-
-        for skipped in &report.skipped {
-            lines.push(Line::from(vec![
-                Span::styled("  \u{26a0} ", Style::default().fg(theme::YELLOW)),
-                Span::raw(format!("{} skipped ({})", skipped.name, skipped.reason)),
-            ]));
-        }
-
-        for warning in &report.warnings {
-            lines.push(Line::from(vec![
-                Span::styled("  \u{26a0} ", Style::default().fg(theme::YELLOW)),
-                Span::raw(warning.clone()),
-            ]));
-        }
-
-        // Summary line
-        lines.push(Line::from(vec![Span::styled(
-            "  ".to_string() + &"\u{2500}".repeat(area.width.saturating_sub(6) as usize),
-            Style::default().fg(theme::BORDER),
-        )]));
-        lines.push(Line::from(vec![Span::raw(format!(
-            "  {} imported, {} skipped, {} warnings",
-            report.imported.len(),
-            report.skipped.len(),
-            report.warnings.len(),
-        ))]));
-    }
-
-    let content_height = lines.len() as u16;
-
-    let chunks = Layout::vertical([
-        Constraint::Length(1),              // 0: spacer
-        Constraint::Length(content_height), // 1: results
-        Constraint::Length(1),              // 2: spacer
-        Constraint::Min(0),                 // 3: flex
-        Constraint::Length(1),              // 4: hints
-    ])
-    .split(area);
-
-    // Render result lines
-    for (i, line) in lines.iter().enumerate() {
-        if i < chunks[1].height as usize {
-            let line_area = Rect {
-                x: chunks[1].x,
-                y: chunks[1].y + i as u16,
-                width: chunks[1].width,
-                height: 1,
-            };
-            f.render_widget(Paragraph::new(line.clone()), line_area);
-        }
-    }
-
-    f.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("  [Enter] Continue  ", theme::hint_style()),
-            Span::styled("(auto-advancing...)", theme::dim_style()),
-        ])),
-        chunks[4],
-    );
 }
 
 fn draw_provider(f: &mut Frame, area: Rect, state: &mut State) {
@@ -2143,8 +1580,6 @@ fn draw_complete(f: &mut Frame, area: Rect, state: &mut State) {
         &state.model_input
     };
 
-    let has_desktop = find_desktop_binary().is_some();
-
     let chunks = Layout::vertical([
         Constraint::Length(1), // 0: spacer
         Constraint::Length(1), // 1: status line
@@ -2157,11 +1592,10 @@ fn draw_complete(f: &mut Frame, area: Rect, state: &mut State) {
         Constraint::Length(1), // 8: spacer
         Constraint::Length(1), // 9: question
         Constraint::Length(1), // 10: spacer
-        Constraint::Length(1), // 11: option 1 — Desktop
-        Constraint::Length(1), // 12: option 2 — Dashboard
-        Constraint::Length(1), // 13: option 3 — Chat
-        Constraint::Min(0),    // 14: flex
-        Constraint::Length(1), // 15: hints
+        Constraint::Length(1), // 11: option 1 — Dashboard
+        Constraint::Length(1), // 12: option 2 — Chat
+        Constraint::Min(0),    // 13: flex
+        Constraint::Length(1), // 14: hints
     ])
     .split(area);
 
@@ -2277,15 +1711,12 @@ fn draw_complete(f: &mut Frame, area: Rect, state: &mut State) {
     );
 
     // ── Options ──
-    let desktop_hint = if has_desktop {
-        "native window with system tray"
-    } else {
-        "not installed"
-    };
-
-    let options: [(&str, &str, &str); 3] = [
-        ("Desktop app", "(recommended)", desktop_hint),
-        ("Web dashboard", "", "opens in your default browser"),
+    let options: [(&str, &str, &str); 2] = [
+        (
+            "Web dashboard",
+            "(recommended)",
+            "opens in your default browser",
+        ),
         ("Terminal chat", "", "interactive chat right here"),
     ];
 
@@ -2307,10 +1738,7 @@ fn draw_complete(f: &mut Frame, area: Rect, state: &mut State) {
             theme::dim_style()
         };
 
-        let label_style = if i == 0 && !has_desktop {
-            // Grey out desktop option if binary not found
-            theme::dim_style()
-        } else if selected {
+        let label_style = if selected {
             Style::default()
                 .fg(theme::TEXT_PRIMARY)
                 .add_modifier(Modifier::BOLD)
@@ -2324,11 +1752,7 @@ fn draw_complete(f: &mut Frame, area: Rect, state: &mut State) {
             Span::styled(format!(" {badge}"), Style::default().fg(theme::GREEN))
         };
 
-        let desc_span = if i == 0 && !has_desktop {
-            Span::styled(format!("  {desc}"), Style::default().fg(theme::YELLOW))
-        } else {
-            Span::styled(format!("  {desc}"), theme::dim_style())
-        };
+        let desc_span = Span::styled(format!("  {desc}"), theme::dim_style());
 
         f.render_widget(
             Paragraph::new(Line::from(vec![
@@ -2346,9 +1770,9 @@ fn draw_complete(f: &mut Frame, area: Rect, state: &mut State) {
     // ── Bottom hints ──
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            "  [\u{2191}\u{2193}/jk] Navigate  [Enter] Launch  [1/2/3] Quick select",
+            "  [\u{2191}\u{2193}/jk] Navigate  [Enter] Launch  [1/2] Quick select",
             theme::hint_style(),
         )])),
-        chunks[15],
+        chunks[14],
     );
 }

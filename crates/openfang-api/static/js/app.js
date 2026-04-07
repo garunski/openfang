@@ -324,7 +324,6 @@ function app() {
         'audit': 'logs',
         'security': 'settings',
         'peers': 'settings',
-        'migration': 'settings',
         'usage': 'analytics',
         'approval': 'approvals'
       };

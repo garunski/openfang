@@ -78,7 +78,7 @@ pub struct AutonomousConfig {
     pub max_restarts: u32,
     /// Heartbeat interval in seconds.
     pub heartbeat_interval_secs: u64,
-    /// Channel to send heartbeat status to (e.g., "telegram", "discord").
+    /// Channel to send heartbeat status to (e.g. `"signal"`, `"mattermost"`).
     pub heartbeat_channel: Option<String>,
 }
 

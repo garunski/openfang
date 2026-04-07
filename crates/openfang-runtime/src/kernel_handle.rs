@@ -184,10 +184,10 @@ pub trait KernelHandle: Send + Sync {
         None
     }
 
-    /// Send a message to a user on a named channel adapter (e.g., "email", "telegram").
+    /// Send a message to a user on a named channel adapter (`signal`, `mattermost`).
     /// When `thread_id` is provided, the message is sent as a thread reply.
     /// Returns a confirmation string on success.
-    /// Get the default recipient for a channel (e.g. default_chat_id for Telegram).
+    /// Get the default recipient for a channel when `recipient` is omitted in tools.
     async fn get_channel_default_recipient(&self, channel: &str) -> Option<String> {
         let _ = channel;
         None

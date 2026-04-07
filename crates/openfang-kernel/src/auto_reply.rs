@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 /// Where to deliver the auto-reply result.
 #[derive(Debug, Clone)]
 pub struct AutoReplyChannel {
-    /// Channel type string (e.g., "telegram", "discord").
+    /// Channel type string (e.g. `"signal"`, `"mattermost"`).
     pub channel_type: String,
     /// Peer/user ID to send the reply to.
     pub peer_id: String,
@@ -153,14 +153,14 @@ mod tests {
     fn test_disabled_engine() {
         let engine = AutoReplyEngine::new(test_config(false));
         let agent_id = AgentId::new();
-        assert!(engine.should_reply("hello", "telegram", agent_id).is_none());
+        assert!(engine.should_reply("hello", "signal", agent_id).is_none());
     }
 
     #[test]
     fn test_enabled_engine_allows() {
         let engine = AutoReplyEngine::new(test_config(true));
         let agent_id = AgentId::new();
-        let result = engine.should_reply("hello there", "telegram", agent_id);
+        let result = engine.should_reply("hello there", "signal", agent_id);
         assert_eq!(result, Some(agent_id));
     }
 
@@ -170,13 +170,13 @@ mod tests {
         let agent_id = AgentId::new();
 
         // Should be suppressed
-        assert!(engine.should_reply("/stop", "telegram", agent_id).is_none());
+        assert!(engine.should_reply("/stop", "signal", agent_id).is_none());
         assert!(engine
-            .should_reply("please /pause this", "telegram", agent_id)
+            .should_reply("please /pause this", "mattermost", agent_id)
             .is_none());
 
         // Not suppressed
-        assert!(engine.should_reply("hello", "telegram", agent_id).is_some());
+        assert!(engine.should_reply("hello", "mattermost", agent_id).is_some());
     }
 
     #[test]

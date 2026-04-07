@@ -648,99 +648,8 @@ mod tests {
     fn load_bundled_hands() {
         let reg = HandRegistry::new();
         let count = reg.load_bundled();
-        assert_eq!(count, 10);
-        assert!(!reg.list_definitions().is_empty());
-
-        // Clip hand should be loaded
-        let clip = reg.get_definition("clip");
-        assert!(clip.is_some());
-        let clip = clip.unwrap();
-        assert_eq!(clip.name, "Clip Hand");
-
-        // Einstein hands should be loaded
-        assert!(reg.get_definition("lead").is_some());
-        assert!(reg.get_definition("collector").is_some());
-        assert!(reg.get_definition("predictor").is_some());
-        assert!(reg.get_definition("researcher").is_some());
-        assert!(reg.get_definition("twitter").is_some());
-
-        // Browser hand should be loaded
-        assert!(reg.get_definition("browser").is_some());
-
-        assert!(reg.get_definition("pipeline-coordinator").is_some());
-    }
-
-    #[test]
-    fn activate_and_deactivate() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        let instance = reg.activate("clip", HashMap::new()).unwrap();
-        assert_eq!(instance.hand_id, "clip");
-        assert_eq!(instance.status, HandStatus::Active);
-
-        let instances = reg.list_instances();
-        assert_eq!(instances.len(), 1);
-
-        // Can't activate again while active
-        let err = reg.activate("clip", HashMap::new());
-        assert!(err.is_err());
-
-        // Deactivate
-        let removed = reg.deactivate(instance.instance_id).unwrap();
-        assert_eq!(removed.hand_id, "clip");
-        assert!(reg.list_instances().is_empty());
-    }
-
-    #[test]
-    fn pause_and_resume() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        let instance = reg.activate("clip", HashMap::new()).unwrap();
-        let id = instance.instance_id;
-
-        reg.pause(id).unwrap();
-        let paused = reg.get_instance(id).unwrap();
-        assert_eq!(paused.status, HandStatus::Paused);
-
-        reg.resume(id).unwrap();
-        let resumed = reg.get_instance(id).unwrap();
-        assert_eq!(resumed.status, HandStatus::Active);
-
-        reg.deactivate(id).unwrap();
-    }
-
-    #[test]
-    fn set_agent() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        let instance = reg.activate("clip", HashMap::new()).unwrap();
-        let id = instance.instance_id;
-        let agent_id = AgentId::new();
-
-        reg.set_agent(id, agent_id).unwrap();
-
-        let found = reg.find_by_agent(agent_id);
-        assert!(found.is_some());
-        assert_eq!(found.unwrap().instance_id, id);
-
-        reg.deactivate(id).unwrap();
-    }
-
-    #[test]
-    fn check_requirements() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        let results = reg.check_requirements("clip").unwrap();
-        assert!(!results.is_empty());
-        // Each result has a requirement and a bool
-        for (req, _satisfied) in &results {
-            assert!(!req.key.is_empty());
-            assert!(!req.label.is_empty());
-        }
+        assert_eq!(count, 0);
+        assert!(reg.list_definitions().is_empty());
     }
 
     #[test]
@@ -755,21 +664,9 @@ mod tests {
     }
 
     #[test]
-    fn set_error_status() {
+    fn set_error_status_not_found() {
         let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        let instance = reg.activate("clip", HashMap::new()).unwrap();
-        let id = instance.instance_id;
-
-        reg.set_error(id, "something broke".to_string()).unwrap();
-        let inst = reg.get_instance(id).unwrap();
-        assert_eq!(
-            inst.status,
-            HandStatus::Error("something broke".to_string())
-        );
-
-        reg.deactivate(id).unwrap();
+        assert!(reg.set_error(Uuid::new_v4(), "something broke".to_string()).is_err());
     }
 
     #[test]
@@ -815,75 +712,10 @@ mod tests {
     }
 
     #[test]
-    fn readiness_inactive_hand() {
+    fn readiness_nonexistent_after_empty_load() {
         let reg = HandRegistry::new();
         reg.load_bundled();
-
-        // Lead hand has no requirements, so requirements_met = true
-        let r = reg.readiness("lead").unwrap();
-        assert!(r.requirements_met);
-        assert!(!r.active);
-        assert!(!r.degraded);
-    }
-
-    #[test]
-    fn readiness_active_hand_all_met() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        // Lead hand has no requirements — activate it
-        let instance = reg.activate("lead", HashMap::new()).unwrap();
-        let r = reg.readiness("lead").unwrap();
-        assert!(r.requirements_met);
-        assert!(r.active);
-        assert!(!r.degraded); // all met, so not degraded
-
-        reg.deactivate(instance.instance_id).unwrap();
-    }
-
-    #[test]
-    fn readiness_active_hand_degraded() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        // Browser hand requires python3 (non-optional) + chromium (optional).
-        // requirements_met only reflects non-optional requirements.
-        // degraded = active + any requirement (including optional) unsatisfied.
-        let instance = reg.activate("browser", HashMap::new()).unwrap();
-        let r = reg.readiness("browser").unwrap();
-        assert!(r.active);
-
-        // Check individual requirements
-        let reqs = reg.check_requirements("browser").unwrap();
-        let python_met = reqs.iter().any(|(req, ok)| req.key == "python3" && *ok);
-        let chromium_met = reqs.iter().any(|(req, ok)| req.key == "chromium" && *ok);
-
-        // requirements_met only gates on non-optional (python3)
-        assert_eq!(r.requirements_met, python_met);
-
-        // degraded = active + any requirement unsatisfied
-        if python_met && chromium_met {
-            assert!(!r.degraded); // all met, not degraded
-        } else {
-            assert!(r.degraded); // something is missing, degraded
-        }
-
-        reg.deactivate(instance.instance_id).unwrap();
-    }
-
-    #[test]
-    fn readiness_paused_hand_not_active() {
-        let reg = HandRegistry::new();
-        reg.load_bundled();
-
-        let instance = reg.activate("lead", HashMap::new()).unwrap();
-        reg.pause(instance.instance_id).unwrap();
-
-        let r = reg.readiness("lead").unwrap();
-        assert!(!r.active); // Paused is not Active
-        assert!(!r.degraded);
-
-        reg.deactivate(instance.instance_id).unwrap();
+        assert!(reg.readiness("lead").is_none());
     }
 
     #[test]

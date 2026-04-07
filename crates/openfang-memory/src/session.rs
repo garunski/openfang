@@ -343,8 +343,8 @@ const DEFAULT_COMPACTION_THRESHOLD: usize = 100;
 /// A canonical session stores persistent cross-channel context for an agent.
 ///
 /// Unlike regular sessions (one per channel interaction), there is one canonical
-/// session per agent. All channels contribute to it, so what a user tells an agent
-/// on Telegram is remembered on Discord.
+/// session per agent. All channels contribute to it, so context carries across
+/// Signal, Mattermost, and other linked surfaces.
 #[derive(Debug, Clone)]
 pub struct CanonicalSession {
     /// The agent this session belongs to.
@@ -699,17 +699,17 @@ mod tests {
         let store = setup();
         let agent_id = AgentId::new();
 
-        // Append from "Telegram"
+        // Append from first channel
         let msgs1 = vec![
-            Message::user("Hello from Telegram"),
+            Message::user("Hello from Signal"),
             Message::assistant("Hi! I'm your agent."),
         ];
         store.append_canonical(agent_id, &msgs1, None).unwrap();
 
-        // Append from "Discord"
+        // Append from second channel
         let msgs2 = vec![
-            Message::user("Now I'm on Discord"),
-            Message::assistant("I remember you from Telegram!"),
+            Message::user("Now I'm on Mattermost"),
+            Message::assistant("I remember you from Signal!"),
         ];
         let canonical = store.append_canonical(agent_id, &msgs2, None).unwrap();
 

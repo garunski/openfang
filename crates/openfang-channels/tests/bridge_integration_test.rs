@@ -207,7 +207,7 @@ async fn test_bridge_dispatch_text_message() {
     // Pre-route the user to the agent
     router.set_user_default("user1".to_string(), agent_id);
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Telegram);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Signal);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle.clone(), router);
@@ -215,7 +215,7 @@ async fn test_bridge_dispatch_text_message() {
 
     // Inject a text message
     tx.send(make_text_msg(
-        ChannelType::Telegram,
+        ChannelType::Signal,
         "user1",
         "Hello agent!",
     ))
@@ -261,7 +261,7 @@ async fn test_bridge_dispatch_agents_command() {
     ]));
     let router = Arc::new(AgentRouter::new());
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Discord);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Mattermost);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle.clone(), router);
@@ -269,7 +269,7 @@ async fn test_bridge_dispatch_agents_command() {
 
     // Send /agents command as ChannelContent::Command
     tx.send(make_command_msg(
-        ChannelType::Discord,
+        ChannelType::Mattermost,
         "user1",
         "agents",
         vec![],
@@ -301,14 +301,14 @@ async fn test_bridge_dispatch_help_command() {
     let handle = Arc::new(MockHandle::new(vec![]));
     let router = Arc::new(AgentRouter::new());
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Slack);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::WebChat);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle, router);
     manager.start_adapter(adapter.clone()).await.unwrap();
 
     tx.send(make_command_msg(
-        ChannelType::Slack,
+        ChannelType::WebChat,
         "user1",
         "help",
         vec![],
@@ -333,7 +333,7 @@ async fn test_bridge_dispatch_agent_select_command() {
     let handle = Arc::new(MockHandle::new(vec![(agent_id, "coder".to_string())]));
     let router = Arc::new(AgentRouter::new());
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Telegram);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Signal);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle, router.clone());
@@ -341,7 +341,7 @@ async fn test_bridge_dispatch_agent_select_command() {
 
     // User selects "coder" agent
     tx.send(make_command_msg(
-        ChannelType::Telegram,
+        ChannelType::Signal,
         "user42",
         "agent",
         vec!["coder"],
@@ -360,7 +360,7 @@ async fn test_bridge_dispatch_agent_select_command() {
     );
 
     // Verify router was updated — user42 should now route to agent_id
-    let resolved = router.resolve(&ChannelType::Telegram, "user42", None);
+    let resolved = router.resolve(&ChannelType::Signal, "user42", None);
     assert_eq!(resolved, Some(agent_id));
 
     manager.stop().await;
@@ -372,14 +372,14 @@ async fn test_bridge_dispatch_no_agent_assigned() {
     let handle = Arc::new(MockHandle::new(vec![]));
     let router = Arc::new(AgentRouter::new());
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Telegram);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Signal);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle, router);
     manager.start_adapter(adapter.clone()).await.unwrap();
 
     // Send message with no agent routed
-    tx.send(make_text_msg(ChannelType::Telegram, "user1", "hello"))
+    tx.send(make_text_msg(ChannelType::Signal, "user1", "hello"))
         .await
         .unwrap();
 
@@ -403,14 +403,14 @@ async fn test_bridge_dispatch_slash_command_in_text() {
     let handle = Arc::new(MockHandle::new(vec![(agent_id, "writer".to_string())]));
     let router = Arc::new(AgentRouter::new());
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Telegram);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Signal);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle, router);
     manager.start_adapter(adapter.clone()).await.unwrap();
 
     // Send "/agents" as plain text (not as a Command variant)
-    tx.send(make_text_msg(ChannelType::Telegram, "user1", "/agents"))
+    tx.send(make_text_msg(ChannelType::Signal, "user1", "/agents"))
         .await
         .unwrap();
 
@@ -436,14 +436,14 @@ async fn test_bridge_dispatch_status_command() {
     ]));
     let router = Arc::new(AgentRouter::new());
 
-    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Telegram);
+    let (adapter, tx) = MockAdapter::new("test-adapter", ChannelType::Signal);
     let adapter_ref = adapter.clone();
 
     let mut manager = BridgeManager::new(handle, router);
     manager.start_adapter(adapter.clone()).await.unwrap();
 
     tx.send(make_command_msg(
-        ChannelType::Telegram,
+        ChannelType::Signal,
         "user1",
         "status",
         vec![],
@@ -511,54 +511,52 @@ async fn test_bridge_multiple_adapters() {
     let agent_id = AgentId::new();
     let handle = Arc::new(MockHandle::new(vec![(agent_id, "multi".to_string())]));
     let router = Arc::new(AgentRouter::new());
-    router.set_user_default("tg_user".to_string(), agent_id);
-    router.set_user_default("dc_user".to_string(), agent_id);
+    router.set_user_default("sig_user".to_string(), agent_id);
+    router.set_user_default("mm_user".to_string(), agent_id);
 
-    let (tg_adapter, tg_tx) = MockAdapter::new("telegram", ChannelType::Telegram);
-    let (dc_adapter, dc_tx) = MockAdapter::new("discord", ChannelType::Discord);
-    let tg_ref = tg_adapter.clone();
-    let dc_ref = dc_adapter.clone();
+    let (sig_adapter, sig_tx) = MockAdapter::new("signal", ChannelType::Signal);
+    let (mm_adapter, mm_tx) = MockAdapter::new("mattermost", ChannelType::Mattermost);
+    let sig_ref = sig_adapter.clone();
+    let mm_ref = mm_adapter.clone();
 
     let mut manager = BridgeManager::new(handle, router);
-    manager.start_adapter(tg_adapter).await.unwrap();
-    manager.start_adapter(dc_adapter).await.unwrap();
+    manager.start_adapter(sig_adapter).await.unwrap();
+    manager.start_adapter(mm_adapter).await.unwrap();
 
-    // Send to Telegram adapter
-    tg_tx
+    sig_tx
         .send(make_text_msg(
-            ChannelType::Telegram,
-            "tg_user",
-            "from telegram",
+            ChannelType::Signal,
+            "sig_user",
+            "from signal",
         ))
         .await
         .unwrap();
 
-    // Send to Discord adapter
-    dc_tx
+    mm_tx
         .send(make_text_msg(
-            ChannelType::Discord,
-            "dc_user",
-            "from discord",
+            ChannelType::Mattermost,
+            "mm_user",
+            "from mattermost",
         ))
         .await
         .unwrap();
 
     tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
 
-    let tg_sent = tg_ref.get_sent();
-    assert_eq!(tg_sent.len(), 1);
+    let sig_sent = sig_ref.get_sent();
+    assert_eq!(sig_sent.len(), 1);
     assert!(
-        tg_sent[0].1.contains("from telegram"),
-        "Expected 'from telegram' in: {}",
-        tg_sent[0].1
+        sig_sent[0].1.contains("from signal"),
+        "Expected 'from signal' in: {}",
+        sig_sent[0].1
     );
 
-    let dc_sent = dc_ref.get_sent();
-    assert_eq!(dc_sent.len(), 1);
+    let mm_sent = mm_ref.get_sent();
+    assert_eq!(mm_sent.len(), 1);
     assert!(
-        dc_sent[0].1.contains("from discord"),
-        "Expected 'from discord' in: {}",
-        dc_sent[0].1
+        mm_sent[0].1.contains("from mattermost"),
+        "Expected 'from mattermost' in: {}",
+        mm_sent[0].1
     );
 
     manager.stop().await;

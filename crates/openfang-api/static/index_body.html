@@ -1992,7 +1992,7 @@
 
           </div>
 
-          <!-- Setup modal (OpenClaw-style with QR support + 3-step flow) -->
+          <!-- Setup modal (3-step channel configure flow) -->
           <template x-if="setupModal">
             <div class="modal-overlay" @click.self="setupModal = null" @keydown.escape.window="setupModal = null">
               <div class="modal" style="max-width:480px">
@@ -2007,8 +2007,7 @@
                   <button class="modal-close" @click="setupModal = null">&times;</button>
                 </div>
 
-                <!-- 3-step progress indicator (non-QR channels only) -->
-                <div class="channel-steps" x-show="!isQrChannel()">
+                <div class="channel-steps">
                   <div class="channel-step-item">
                     <div class="channel-step-num" :class="{ active: setupStep === 1, done: setupStep > 1 }">
                       <span x-show="setupStep <= 1">1</span><span x-show="setupStep > 1">&#10003;</span>
@@ -2031,8 +2030,7 @@
                   </div>
                 </div>
 
-                <!-- Ready panel (step 3) for non-QR channels -->
-                <div x-show="!isQrChannel() && setupStep === 3 && testPassed" class="ready-panel">
+                <div x-show="setupStep === 3 && testPassed" class="ready-panel">
                   <div class="ready-panel-icon">&#10003;</div>
                   <div class="ready-panel-title" x-text="setupModal.display_name + ' is ready!'"></div>
                   <div class="ready-panel-desc">
@@ -2044,77 +2042,9 @@
                   </div>
                 </div>
 
-                <!-- ═══ QR CODE FLOW (WhatsApp Web style) ═══ -->
-                <template x-if="isQrChannel() && !showBusinessApi">
+                <template x-if="!(setupStep === 3 && testPassed)">
                   <div>
-                    <!-- QR: Loading -->
-                    <div x-show="qr.loading" style="text-align:center;padding:2rem 0">
-                      <div class="spinner"></div>
-                      <p class="text-sm text-dim mt-2">Connecting to WhatsApp Web gateway...</p>
-                    </div>
-
-                    <!-- QR: Gateway available — show QR code -->
-                    <div x-show="!qr.loading && qr.available && qr.dataUrl && !qr.connected" style="text-align:center">
-                      <div style="background:#fff;display:inline-block;padding:1rem;border-radius:12px;margin:0.5rem 0">
-                        <img :src="qr.dataUrl" alt="WhatsApp QR Code" style="width:256px;height:256px;image-rendering:pixelated">
-                      </div>
-                      <ol style="text-align:left;font-size:0.85rem;margin:1rem 0;padding-left:1.5rem;opacity:0.8">
-                        <template x-for="(step, i) in setupModal.setup_steps || []" :key="i">
-                          <li x-text="step" style="margin-bottom:0.25rem"></li>
-                        </template>
-                      </ol>
-                      <p class="text-xs text-dim" x-text="qr.message"></p>
-                      <button class="btn btn-ghost btn-sm mt-2" x-show="qr.expired" @click="startQR()">Generate New QR</button>
-                    </div>
-
-                    <!-- QR: Connected! -->
-                    <div x-show="!qr.loading && qr.connected" style="text-align:center;padding:2rem 0">
-                      <div style="font-size:3rem;margin-bottom:0.5rem">&#10003;</div>
-                      <p class="text-sm" style="font-weight:600" x-text="qr.message || 'WhatsApp linked successfully!'"></p>
-                      <p class="text-xs text-dim mt-1">Channel will activate automatically.</p>
-                    </div>
-
-                    <!-- QR: Gateway not available — show setup hint -->
-                    <div x-show="!qr.loading && !qr.available" style="padding:1rem 0">
-                      <div style="background:var(--bg-secondary,#1a1a2e);border-radius:8px;padding:1.25rem;text-align:center">
-                        <div style="font-size:2rem;margin-bottom:0.5rem;opacity:0.5">&#128241;</div>
-                        <p class="text-sm" x-text="qr.message || 'WhatsApp Web gateway not available'"></p>
-                        <p class="text-xs text-dim mt-2" x-show="qr.help" x-text="qr.help"></p>
-                        <p class="text-xs text-dim mt-1" x-show="qr.error" style="color:var(--red,#ef4444)" x-text="qr.error"></p>
-                      </div>
-                      <p class="text-xs text-dim mt-3" style="text-align:center">
-                        Or use the <button class="btn-link" @click="showBusinessApi = true" style="font-size:inherit;text-decoration:underline;cursor:pointer;background:none;border:none;color:var(--accent,#818cf8);padding:0">Business API</button> with a Meta developer account.
-                      </p>
-                    </div>
-
-                    <!-- QR: Switch to Business API link (always visible when gateway is available) -->
-                    <div x-show="!qr.loading && qr.available" class="text-xs text-dim mt-2" style="text-align:center">
-                      Have a Meta Business account? <button class="btn-link" @click="showBusinessApi = true" style="font-size:inherit;text-decoration:underline;cursor:pointer;background:none;border:none;color:var(--accent,#818cf8);padding:0">Use Business API instead</button>
-                    </div>
-
-                    <!-- Action buttons for QR mode -->
-                    <div class="flex gap-2 mt-4" style="flex-wrap:wrap;justify-content:center" x-show="!qr.loading">
-                      <button class="btn btn-ghost" x-show="qr.available && !qr.connected && !qr.expired" @click="startQR()">Refresh QR</button>
-                      <button class="btn btn-ghost" x-show="setupModal.configured" @click="testChannel()"
-                              :disabled="testing[setupModal.name]"
-                              x-text="testing[setupModal.name] ? 'Testing...' : 'Test Connection'">
-                      </button>
-                      <button class="btn btn-ghost" style="color:var(--red,#ef4444)" x-show="setupModal.configured" @click="removeChannel()">Remove</button>
-                    </div>
-                  </div>
-                </template>
-
-                <!-- ═══ STANDARD FORM FLOW (for non-QR channels, or Business API fallback) ═══ -->
-                <template x-if="(!isQrChannel() || showBusinessApi) && !(setupStep === 3 && testPassed && !isQrChannel())">
-                  <div>
-                    <!-- Back to QR link (only for QR channels in Business API mode) -->
-                    <div x-show="isQrChannel() && showBusinessApi" class="mb-3">
-                      <button class="btn btn-ghost btn-sm" @click="showBusinessApi = false" style="font-size:0.8rem">&larr; Back to QR scan</button>
-                      <p class="text-xs text-dim mt-1">Configure via WhatsApp Cloud API (requires a Meta Business developer account).</p>
-                    </div>
-
-                    <!-- Quick setup steps (collapsed, minimal) -->
-                    <details class="mb-4" style="font-size:0.8rem" x-show="!isQrChannel()">
+                    <details class="mb-4" style="font-size:0.8rem">
                       <summary class="text-dim" style="cursor:pointer">How to get credentials</summary>
                       <ol class="setup-steps" style="margin-top:0.5rem">
                         <template x-for="(step, i) in setupModal.setup_steps || []" :key="i">
@@ -2124,7 +2054,7 @@
                     </details>
 
                     <!-- Basic fields only (the minimum to get started) -->
-                    <template x-for="f in (isQrChannel() && showBusinessApi) ? advancedFields() : basicFields()" :key="f.key">
+                    <template x-for="f in basicFields()" :key="f.key">
                       <div style="margin-bottom:0.75rem">
                         <label class="text-sm" style="display:block;margin-bottom:0.25rem" x-text="f.label + (f.required ? ' *' : '')"></label>
                         <template x-if="f.type === 'secret'">
@@ -2149,8 +2079,7 @@
                       </div>
                     </template>
 
-                    <!-- Advanced toggle (only for non-QR channels) -->
-                    <template x-if="!isQrChannel() && hasAdvanced()">
+                    <template x-if="hasAdvanced()">
                       <div>
                         <button class="btn btn-ghost btn-sm mb-2" @click="showAdvanced = !showAdvanced"
                                 x-text="showAdvanced ? 'Hide advanced' : 'Show advanced (' + advancedFields().length + ')'"></button>
@@ -3959,7 +3888,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'network' }" @click="tab = 'network'; if (!peers.length && !peersLoading) { loadPeers(); startPeerPolling(); }">Network</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'budget' }" @click="tab = 'budget'">Budget</div>
             <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'info' }" @click="tab = 'info'">System</div>
-            <div class="tab tab-secondary" role="tab" :class="{ active: tab === 'migration' }" @click="tab = 'migration'">Migration</div>
           </div>
 
           <!-- Providers tab -->
@@ -4583,98 +4511,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 <div class="text-xs text-dim" x-show="!agentRanking.length">No spending recorded today.</div>
               </div>
             </template>
-          </div>
-
-          <!-- Migration tab -->
-          <div x-show="tab === 'migration'">
-            <div class="card mb-4" style="border-left:3px solid var(--accent)" x-show="migStep === 'intro'">
-              <div class="font-bold" style="font-size:14px;margin-bottom:6px">Migrate from OpenClaw</div>
-              <div class="text-sm text-dim" style="line-height:1.7">
-                Seamlessly transfer your agents, memory, workspace files, and channel configurations from OpenClaw to OpenFang.
-              </div>
-              <ul class="text-sm text-dim" style="margin:8px 0 0 16px;line-height:1.8">
-                <li>Converts agent.yaml to agent.toml with proper capabilities</li>
-                <li>Maps tools (read_file &rarr; file_read, execute_command &rarr; shell_exec, etc.)</li>
-                <li>Merges channel configs into config.toml</li>
-                <li>Copies workspace files and memory data</li>
-              </ul>
-              <div class="flex gap-2 mt-4">
-                <button class="btn btn-primary" @click="autoDetect()" :disabled="detecting">
-                  <span x-show="!detecting">Auto-Detect OpenClaw</span>
-                  <span x-show="detecting">Scanning...</span>
-                </button>
-                <button class="btn btn-ghost" @click="migStep = 'manual'">Enter Path Manually</button>
-              </div>
-            </div>
-
-            <div class="card mb-4" x-show="migStep === 'manual'" style="border-left:3px solid var(--accent)">
-              <div class="font-bold" style="font-size:14px;margin-bottom:8px">Specify OpenClaw Path</div>
-              <div class="form-group">
-                <label>OpenClaw Home Directory</label>
-                <input class="form-input" type="text" x-model="sourcePath" placeholder="~/.openclaw" style="font-family:monospace;font-size:12px">
-              </div>
-              <div class="form-group mt-2">
-                <label>OpenFang Target Directory</label>
-                <input class="form-input" type="text" x-model="targetPath" placeholder="~/.openfang (default)" style="font-family:monospace;font-size:12px">
-              </div>
-              <div class="flex gap-2 mt-4">
-                <button class="btn btn-primary" @click="scanPath()" :disabled="!sourcePath || scanning">
-                  <span x-show="!scanning">Scan Directory</span>
-                  <span x-show="scanning">Scanning...</span>
-                </button>
-                <button class="btn btn-ghost" @click="migStep = 'intro'">Back</button>
-              </div>
-            </div>
-
-            <template x-if="migStep === 'preview' && scanResult">
-              <div>
-                <div class="card mb-4" style="border-left:3px solid var(--success, #22c55e)">
-                  <div class="flex justify-between items-center mb-2">
-                    <div class="font-bold" style="font-size:14px">OpenClaw Workspace Found</div>
-                    <span class="badge badge-connected">Ready to Migrate</span>
-                  </div>
-                  <div class="text-sm text-dim" style="font-family:monospace" x-text="scanResult.path"></div>
-                </div>
-                <div class="stats-row mb-4">
-                  <div class="stat-card"><div class="stat-value" x-text="scanResult.agents ? scanResult.agents.length : 0"></div><div class="stat-label">Agents</div></div>
-                  <div class="stat-card"><div class="stat-value" x-text="scanResult.channels ? scanResult.channels.length : 0"></div><div class="stat-label">Channels</div></div>
-                  <div class="stat-card"><div class="stat-value" x-text="scanResult.skills ? scanResult.skills.length : 0"></div><div class="stat-label">Skills</div></div>
-                </div>
-                <div class="flex gap-2 mb-4">
-                  <button class="btn btn-primary" @click="runMigration(false)" :disabled="migrating">
-                    <span x-show="!migrating">Migrate Now</span>
-                    <span x-show="migrating">Migrating...</span>
-                  </button>
-                  <button class="btn btn-ghost" @click="runMigration(true)" :disabled="migrating">Dry Run</button>
-                  <button class="btn btn-ghost" @click="migStep = 'intro'; scanResult = null">Start Over</button>
-                </div>
-              </div>
-            </template>
-
-            <template x-if="migStep === 'result' && migResult">
-              <div>
-                <div class="card mb-4" :style="'border-left:3px solid ' + (migResult.status === 'completed' ? 'var(--success, #22c55e)' : 'var(--error)')">
-                  <div class="flex justify-between items-center mb-2">
-                    <div class="font-bold" style="font-size:14px" x-text="migResult.dry_run ? 'Dry Run Complete' : 'Migration Complete!'"></div>
-                    <span class="badge" :class="migResult.status === 'completed' ? 'badge-connected' : 'badge-crashed'" x-text="migResult.status === 'completed' ? 'SUCCESS' : 'FAILED'"></span>
-                  </div>
-                  <div class="text-sm text-dim" x-show="migResult.error" style="color:var(--error)" x-text="migResult.error"></div>
-                </div>
-                <div class="flex gap-2">
-                  <button class="btn btn-primary" x-show="migResult.dry_run" @click="runMigration(false)" :disabled="migrating">Run Migration for Real</button>
-                  <button class="btn btn-ghost" @click="migStep = 'intro'; migResult = null; scanResult = null">Start New Migration</button>
-                </div>
-              </div>
-            </template>
-
-            <div class="card" x-show="migStep === 'not_found'" style="border-left:3px solid var(--warning, #f59e0b)">
-              <div class="font-bold mb-2" style="font-size:14px">OpenClaw Not Found</div>
-              <div class="text-sm text-dim">Could not auto-detect an OpenClaw installation.</div>
-              <div class="flex gap-2 mt-4">
-                <button class="btn btn-primary" @click="migStep = 'manual'">Enter Path Manually</button>
-                <button class="btn btn-ghost" @click="migStep = 'intro'">Back</button>
-              </div>
-            </div>
           </div>
 
           </div>
@@ -5404,7 +5240,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                   <div style="display:flex;align-items:center;gap:10px;padding:8px 0">
                     <span class="badge badge-info" style="min-width:20px;justify-content:center">4</span>
-                    <span style="font-size:12px">Optionally connect a messaging channel (Telegram, Discord, Slack)</span>
+                    <span style="font-size:12px">Optionally connect Signal or Mattermost</span>
                   </div>
                 </div>
               </div>

@@ -42,7 +42,7 @@ pub struct MessageRequest {
     /// Optional file attachments (uploaded via /upload endpoint).
     #[serde(default)]
     pub attachments: Vec<AttachmentRef>,
-    /// Sender identity (e.g. WhatsApp phone number, Telegram user ID).
+    /// Sender identity (e.g. Signal number, Mattermost user id).
     #[serde(default)]
     pub sender_id: Option<String>,
     /// Sender display name.
@@ -83,22 +83,6 @@ pub struct AgentUpdateRequest {
 #[derive(Debug, Deserialize)]
 pub struct SetModeRequest {
     pub mode: openfang_types::agent::AgentMode,
-}
-
-/// Request to run a migration.
-#[derive(Debug, Deserialize)]
-pub struct MigrateRequest {
-    pub source: String,
-    pub source_dir: String,
-    pub target_dir: String,
-    #[serde(default)]
-    pub dry_run: bool,
-}
-
-/// Request to scan a directory for migration.
-#[derive(Debug, Deserialize)]
-pub struct MigrateScanRequest {
-    pub path: String,
 }
 
 /// Request to install a skill from ClawHub.

@@ -1352,7 +1352,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     },
                     "delivery": {
                         "type": "object",
-                        "description": "Delivery target: {\"kind\":\"none\"} or {\"kind\":\"channel\",\"channel\":\"telegram\"} or {\"kind\":\"last_channel\"}"
+                        "description": "Delivery target: {\"kind\":\"none\"} or {\"kind\":\"channel\",\"channel\":\"signal\"} or {\"kind\":\"last_channel\"}"
                     },
                     "one_shot": { "type": "boolean", "description": "If true, auto-delete after execution. Default: false" }
                 },
@@ -1381,19 +1381,19 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         // --- Channel send tool (proactive outbound messaging) ---
         ToolDefinition {
             name: "channel_send".to_string(),
-            description: "Send a message or media to a user on a configured channel (email, telegram, slack, etc). For email: recipient is the email address; optionally set subject. For media: set image_url, file_url, or file_path to send an image or file instead of (or alongside) text. Use thread_id to reply in a specific thread/topic.".to_string(),
+            description: "Send a message or media on a configured channel (`signal` or `mattermost`). For media: set image_url, file_url, or file_path. Use thread_id for Mattermost threaded replies.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "channel": { "type": "string", "description": "Channel adapter name (e.g., 'email', 'telegram', 'slack', 'discord')" },
-                    "recipient": { "type": "string", "description": "Platform-specific recipient identifier (email address, user ID, etc.)" },
-                    "subject": { "type": "string", "description": "Optional subject line (used for email; ignored for other channels)" },
-                    "message": { "type": "string", "description": "The message body to send (required for text, optional caption for media)" },
-                    "image_url": { "type": "string", "description": "URL of an image to send (supported on Telegram, Discord, Slack)" },
-                    "file_url": { "type": "string", "description": "URL of a file to send as attachment" },
-                    "file_path": { "type": "string", "description": "Local file path to send as attachment (reads from disk; use instead of file_url for local files)" },
-                    "filename": { "type": "string", "description": "Filename for file attachments (defaults to the basename of file_path, or 'file')" },
-                    "thread_id": { "type": "string", "description": "Thread/topic ID to reply in (e.g., Telegram message_thread_id, Slack thread_ts)" }
+                    "channel": { "type": "string", "description": "Channel name: `signal` or `mattermost`" },
+                    "recipient": { "type": "string", "description": "Recipient id (Signal number or Mattermost user/channel id); optional if a default is configured" },
+                    "subject": { "type": "string", "description": "Ignored for supported channels" },
+                    "message": { "type": "string", "description": "Message body (required for text; optional caption for media)" },
+                    "image_url": { "type": "string", "description": "URL of an image to attach" },
+                    "file_url": { "type": "string", "description": "URL of a file to attach" },
+                    "file_path": { "type": "string", "description": "Local file path to attach" },
+                    "filename": { "type": "string", "description": "Attachment filename hint" },
+                    "thread_id": { "type": "string", "description": "Mattermost thread root id when replying in-thread" }
                 },
                 "required": ["channel", "recipient"]
             }),
@@ -3281,8 +3281,7 @@ async fn tool_channel_send(
             Some(id) => id,
             None => {
                 return Err(format!(
-                "Missing 'recipient' parameter. Set default_chat_id in [channels.{channel}] config \
-                 or pass recipient explicitly."
+                "Missing 'recipient' parameter. Configure a default for [channels.{channel}] or pass recipient explicitly."
             ))
             }
         }

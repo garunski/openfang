@@ -80,11 +80,9 @@ fn phantom_action_detected(text: &str) -> bool {
     let lower = text.to_lowercase();
     let action_verbs = ["sent ", "posted ", "emailed ", "delivered ", "forwarded "];
     let channel_refs = [
-        "telegram",
-        "whatsapp",
-        "slack",
-        "discord",
-        "email",
+        "signal",
+        "mattermost",
+        "webchat",
         "channel",
         "message sent",
         "successfully sent",

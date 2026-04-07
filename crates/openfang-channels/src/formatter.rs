@@ -1,9 +1,9 @@
 //! Channel-specific message formatting.
 //!
-//! Converts standard Markdown into platform-specific markup:
-//! - Telegram HTML: `**bold**` → `<b>bold</b>`
-//! - Slack mrkdwn: `**bold**` → `*bold*`, `[text](url)` → `<url|text>`
-//! - Plain text: strips all formatting
+//! Converts standard Markdown into channel output formats (`OutputFormat`):
+//! - `TelegramHtml`: Telegram-style HTML (`**bold**` → `<b>bold</b>`, etc.)
+//! - `SlackMrkdwn`: Slack-style mrkdwn (`**bold**` → `*bold*`, links adjusted)
+//! - Plain text: strips formatting
 
 use openfang_types::config::OutputFormat;
 
@@ -26,7 +26,7 @@ pub fn format_for_wecom(text: &str, format: OutputFormat) -> String {
     }
 }
 
-/// Convert Markdown to Telegram HTML subset.
+/// Convert Markdown to the Telegram-style HTML subset (`OutputFormat::TelegramHtml`).
 ///
 /// Supported tags: `<b>`, `<i>`, `<code>`, `<pre>`, `<a href="">`, `<blockquote>`.
 fn markdown_to_telegram_html(text: &str) -> String {

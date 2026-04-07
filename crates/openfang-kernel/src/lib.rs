@@ -24,7 +24,6 @@ pub mod registry;
 pub mod scheduler;
 pub mod supervisor;
 pub mod triggers;
-pub mod whatsapp_gateway;
 pub mod wizard;
 pub mod workflow;
 

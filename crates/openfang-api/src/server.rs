@@ -30,7 +30,7 @@ pub struct DaemonInfo {
 
 /// Build the full API router with all routes, middleware, and state.
 ///
-/// This is extracted from `run_daemon()` so that embedders (e.g. openfang-desktop)
+/// This is extracted from `run_daemon()` so that embedders
 /// can create the router without starting the full daemon lifecycle.
 ///
 /// Returns `(router, shared_state)`. The caller can use `state.bridge_manager`
@@ -39,7 +39,7 @@ pub async fn build_router(
     kernel: Arc<OpenFangKernel>,
     listen_addr: SocketAddr,
 ) -> (Router<()>, Arc<AppState>) {
-    // Start channel bridges (Telegram, etc.)
+    // Start channel bridges (Signal, Mattermost)
     let bridge = channel_bridge::start_channel_bridge(kernel.clone()).await;
 
     let channels_config = kernel.config.channels.clone();
@@ -285,15 +285,6 @@ pub async fn build_router(
         .route(
             "/api/channels/reload",
             axum::routing::post(routes::reload_channels),
-        )
-        // WhatsApp QR login flow
-        .route(
-            "/api/channels/whatsapp/qr/start",
-            axum::routing::post(routes::whatsapp_qr_start),
-        )
-        .route(
-            "/api/channels/whatsapp/qr/status",
-            axum::routing::get(routes::whatsapp_qr_status),
         )
         // Template endpoints
         .route("/api/templates", axum::routing::get(routes::list_templates))
@@ -705,16 +696,6 @@ pub async fn build_router(
             "/api/skills/create",
             axum::routing::post(routes::create_skill),
         )
-        // Migration endpoints
-        .route(
-            "/api/migrate/detect",
-            axum::routing::get(routes::migrate_detect),
-        )
-        .route(
-            "/api/migrate/scan",
-            axum::routing::post(routes::migrate_scan),
-        )
-        .route("/api/migrate", axum::routing::post(routes::run_migrate))
         // Cron job management endpoints
         .route(
             "/api/cron/jobs",

@@ -222,7 +222,7 @@ pub trait ChannelBridgeHandle: Send + Sync {
 
     /// Record a delivery result for tracking (optional — default no-op).
     ///
-    /// `thread_id` preserves Telegram forum-topic context so cron/workflow
+    /// `thread_id` preserves thread/topic context so cron/workflow
     /// delivery can target the same topic later.
     async fn record_delivery(
         &self,
@@ -470,19 +470,11 @@ impl BridgeManager {
 /// Resolve channel type to its config string key.
 fn channel_type_str(channel: &crate::types::ChannelType) -> &str {
     match channel {
-        crate::types::ChannelType::Telegram => "telegram",
-        crate::types::ChannelType::Discord => "discord",
-        crate::types::ChannelType::Slack => "slack",
-        crate::types::ChannelType::WhatsApp => "whatsapp",
         crate::types::ChannelType::Signal => "signal",
-        crate::types::ChannelType::Matrix => "matrix",
-        crate::types::ChannelType::Email => "email",
-        crate::types::ChannelType::Teams => "teams",
         crate::types::ChannelType::Mattermost => "mattermost",
         crate::types::ChannelType::WebChat => "webchat",
         crate::types::ChannelType::CLI => "cli",
         crate::types::ChannelType::Custom(s) => s.as_str(),
-        _ => "unknown",
     }
 }
 
@@ -494,11 +486,7 @@ async fn send_response(
     thread_id: Option<&str>,
     output_format: OutputFormat,
 ) {
-    let formatted = if adapter.name() == "wecom" {
-        formatter::format_for_wecom(&text, output_format)
-    } else {
-        formatter::format_for_channel(&text, output_format)
-    };
+    let formatted = formatter::format_for_channel(&text, output_format);
     let content = ChannelContent::Text(formatted);
 
     let result = if let Some(tid) = thread_id {
@@ -512,20 +500,14 @@ async fn send_response(
     }
 }
 
-fn default_output_format_for_channel(channel_type: &str) -> OutputFormat {
-    match channel_type {
-        "telegram" => OutputFormat::TelegramHtml,
-        "slack" => OutputFormat::SlackMrkdwn,
-        "wecom" => OutputFormat::PlainText,
-        _ => OutputFormat::Markdown,
-    }
+fn default_output_format_for_channel(_channel_type: &str) -> OutputFormat {
+    OutputFormat::Markdown
 }
 
 /// Send a lifecycle reaction (best-effort, non-blocking for supported adapters).
 ///
 /// Silently ignores errors — reactions are non-critical UX polish.
-/// For Telegram, the underlying HTTP call is already fire-and-forget (spawned internally),
-/// so this await returns almost immediately.
+/// Some adapters fire HTTP in the background; this await may return quickly.
 async fn send_lifecycle_reaction(
     adapter: &dyn ChannelAdapter,
     user: &ChannelUser,
@@ -543,7 +525,7 @@ async fn send_lifecycle_reaction(
 /// Spawn a background task that refreshes the typing indicator every 4 seconds.
 ///
 /// Returns a `JoinHandle` that should be aborted once the LLM call completes.
-/// Telegram (and similar platforms) expire typing indicators after ~5 seconds,
+/// Many chat platforms expire typing indicators after a few seconds,
 /// so refreshing at 4-second intervals keeps the indicator alive for the entire
 /// duration of long LLM calls.
 fn spawn_typing_loop(
@@ -560,7 +542,7 @@ fn spawn_typing_loop(
 
 /// Extract the sender's user identity from a message.
 ///
-/// Some adapters (e.g. Slack) set `platform_id` to the channel/conversation ID
+/// Some adapters set `platform_id` to the channel/conversation ID
 /// (needed for the send path) and store the actual user ID in metadata.
 /// This helper returns the user ID for RBAC and rate limiting.
 fn sender_user_id(message: &ChannelMessage) -> &str {
@@ -944,8 +926,7 @@ async fn dispatch_message(
         send_lifecycle_reaction(adapter, &message.sender, msg_id, AgentPhase::Thinking).await;
     }
 
-    // Continuous typing indicator — refreshes every 4s so platforms like Telegram
-    // (which expire typing after ~5s) keep showing it during long LLM calls.
+    // Continuous typing indicator — refreshes every 4s during long LLM calls.
     let typing_task = spawn_typing_loop(adapter_arc.clone(), message.sender.clone());
 
     // Prepend sender context so the agent knows who is speaking.
@@ -1213,7 +1194,7 @@ async fn download_image_to_blocks(url: &str, caption: Option<&str>) -> Vec<Conte
     };
 
     // Detect media type from Content-Type header — but only trust it if it's
-    // actually an image/* type. Many APIs (Telegram, S3 pre-signed URLs) return
+    // actually an image/* type. Many APIs (S3 pre-signed URLs, etc.) return
     // `application/octet-stream` for all files, which breaks vision.
     let header_type = resp
         .headers()
@@ -1826,7 +1807,7 @@ mod tests {
         assert!(result.contains("Now talking to agent: coder"));
 
         // Verify router was updated
-        let resolved = router.resolve(&ChannelType::Telegram, "user1", None);
+        let resolved = router.resolve(&ChannelType::Signal, "user1", None);
         assert_eq!(resolved, Some(agent_id));
     }
 
@@ -1859,19 +1840,19 @@ mod tests {
     #[test]
     fn test_rate_limiter_allows_within_limit() {
         let limiter = ChannelRateLimiter::default();
-        assert!(limiter.check("telegram", "user1", 5).is_ok());
-        assert!(limiter.check("telegram", "user1", 5).is_ok());
-        assert!(limiter.check("telegram", "user1", 5).is_ok());
+        assert!(limiter.check("signal", "user1", 5).is_ok());
+        assert!(limiter.check("signal", "user1", 5).is_ok());
+        assert!(limiter.check("signal", "user1", 5).is_ok());
     }
 
     #[test]
     fn test_rate_limiter_blocks_over_limit() {
         let limiter = ChannelRateLimiter::default();
         for _ in 0..3 {
-            limiter.check("telegram", "user1", 3).unwrap();
+            limiter.check("signal", "user1", 3).unwrap();
         }
         // 4th should be blocked
-        let result = limiter.check("telegram", "user1", 3);
+        let result = limiter.check("signal", "user1", 3);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Rate limit exceeded"));
     }
@@ -1880,7 +1861,7 @@ mod tests {
     fn test_rate_limiter_zero_means_unlimited() {
         let limiter = ChannelRateLimiter::default();
         for _ in 0..100 {
-            assert!(limiter.check("telegram", "user1", 0).is_ok());
+            assert!(limiter.check("signal", "user1", 0).is_ok());
         }
     }
 
@@ -1888,12 +1869,12 @@ mod tests {
     fn test_rate_limiter_separate_users() {
         let limiter = ChannelRateLimiter::default();
         for _ in 0..3 {
-            limiter.check("telegram", "user1", 3).unwrap();
+            limiter.check("signal", "user1", 3).unwrap();
         }
         // user1 is blocked
-        assert!(limiter.check("telegram", "user1", 3).is_err());
+        assert!(limiter.check("signal", "user1", 3).is_err());
         // user2 should still be ok
-        assert!(limiter.check("telegram", "user2", 3).is_ok());
+        assert!(limiter.check("signal", "user2", 3).is_ok());
     }
 
     #[test]
@@ -1905,9 +1886,9 @@ mod tests {
 
     #[test]
     fn test_channel_type_str() {
-        assert_eq!(channel_type_str(&ChannelType::Telegram), "telegram");
-        assert_eq!(channel_type_str(&ChannelType::Matrix), "matrix");
-        assert_eq!(channel_type_str(&ChannelType::Email), "email");
+        assert_eq!(channel_type_str(&ChannelType::Signal), "signal");
+        assert_eq!(channel_type_str(&ChannelType::Mattermost), "mattermost");
+        assert_eq!(channel_type_str(&ChannelType::WebChat), "webchat");
         assert_eq!(
             channel_type_str(&ChannelType::Custom("irc".to_string())),
             "irc"
@@ -1917,19 +1898,11 @@ mod tests {
     #[test]
     fn test_default_output_format_for_channel() {
         assert_eq!(
-            default_output_format_for_channel("telegram"),
-            OutputFormat::TelegramHtml
+            default_output_format_for_channel("signal"),
+            OutputFormat::Markdown
         );
         assert_eq!(
-            default_output_format_for_channel("slack"),
-            OutputFormat::SlackMrkdwn
-        );
-        assert_eq!(
-            default_output_format_for_channel("wecom"),
-            OutputFormat::PlainText
-        );
-        assert_eq!(
-            default_output_format_for_channel("discord"),
+            default_output_format_for_channel("mattermost"),
             OutputFormat::Markdown
         );
     }
@@ -2042,7 +2015,7 @@ mod tests {
         );
         // No extension — defaults to JPEG
         assert_eq!(
-            media_type_from_url("https://api.telegram.org/file/bot123/photos/file_42"),
+            media_type_from_url("https://cdn.example.com/files/photo-no-ext"),
             "image/jpeg"
         );
     }

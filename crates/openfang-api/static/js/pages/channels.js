@@ -1,4 +1,4 @@
-// OpenFang Channels Page — OpenClaw-style setup UX with QR code support
+// OpenFang Channels Page — setup UX for configured channel adapters
 'use strict';
 
 function channelsPage() {
@@ -11,28 +11,12 @@ function channelsPage() {
     testing: {},
     formValues: {},
     showAdvanced: false,
-    showBusinessApi: false,
     loading: true,
     loadError: '',
     pollTimer: null,
 
-    // Setup flow step tracking
-    setupStep: 1, // 1=Configure, 2=Verify, 3=Ready
+    setupStep: 1,
     testPassed: false,
-
-    // WhatsApp QR state
-    qr: {
-      loading: false,
-      available: false,
-      dataUrl: '',
-      sessionId: '',
-      message: '',
-      help: '',
-      connected: false,
-      expired: false,
-      error: ''
-    },
-    qrPollTimer: null,
 
     categories: [
       { key: 'all', label: 'All' },
@@ -79,10 +63,6 @@ function channelsPage() {
 
     hasAdvanced() {
       return this.advancedFields().length > 0;
-    },
-
-    isQrChannel() {
-      return this.setupModal && this.setupModal.setup_type === 'qr';
     },
 
     async loadChannels() {
@@ -141,7 +121,6 @@ function channelsPage() {
 
     openSetup(ch) {
       this.setupModal = ch;
-      // Pre-populate form values from saved config (non-secret fields).
       var vals = {};
       if (ch.fields) {
         ch.fields.forEach(function(f) {
@@ -152,78 +131,9 @@ function channelsPage() {
       }
       this.formValues = vals;
       this.showAdvanced = false;
-      this.showBusinessApi = false;
       this.setupStep = ch.configured ? 3 : 1;
       this.testPassed = !!ch.configured;
-      this.resetQR();
-      // Auto-start QR flow for QR-type channels
-      if (ch.setup_type === 'qr') {
-        this.startQR();
-      }
     },
-
-    // ── QR Code Flow (WhatsApp Web style) ──────────────────────────
-
-    resetQR() {
-      this.qr = {
-        loading: false, available: false, dataUrl: '', sessionId: '',
-        message: '', help: '', connected: false, expired: false, error: ''
-      };
-      if (this.qrPollTimer) { clearInterval(this.qrPollTimer); this.qrPollTimer = null; }
-    },
-
-    async startQR() {
-      this.qr.loading = true;
-      this.qr.error = '';
-      this.qr.connected = false;
-      this.qr.expired = false;
-      try {
-        var result = await OpenFangAPI.post('/api/channels/whatsapp/qr/start', {});
-        this.qr.available = result.available || false;
-        this.qr.dataUrl = result.qr_data_url || '';
-        this.qr.sessionId = result.session_id || '';
-        this.qr.message = result.message || '';
-        this.qr.help = result.help || '';
-        this.qr.connected = result.connected || false;
-        if (this.qr.available && this.qr.dataUrl && !this.qr.connected) {
-          this.pollQR();
-        }
-        if (this.qr.connected) {
-          OpenFangToast.success('WhatsApp connected!');
-          await this.refreshStatus();
-        }
-      } catch(e) {
-        this.qr.error = e.message || 'Could not start QR login';
-      }
-      this.qr.loading = false;
-    },
-
-    pollQR() {
-      var self = this;
-      if (this.qrPollTimer) clearInterval(this.qrPollTimer);
-      this.qrPollTimer = setInterval(async function() {
-        try {
-          var result = await OpenFangAPI.get('/api/channels/whatsapp/qr/status?session_id=' + encodeURIComponent(self.qr.sessionId));
-          if (result.connected) {
-            clearInterval(self.qrPollTimer);
-            self.qrPollTimer = null;
-            self.qr.connected = true;
-            self.qr.message = result.message || 'Connected!';
-            OpenFangToast.success('WhatsApp linked successfully!');
-            await self.refreshStatus();
-          } else if (result.expired) {
-            clearInterval(self.qrPollTimer);
-            self.qrPollTimer = null;
-            self.qr.expired = true;
-            self.qr.message = 'QR code expired. Click to generate a new one.';
-          } else {
-            self.qr.message = result.message || 'Waiting for scan...';
-          }
-        } catch(e) { /* silent retry */ }
-      }, 3000);
-    },
-
-    // ── Standard Form Flow ─────────────────────────────────────────
 
     async saveChannel() {
       if (!this.setupModal) return;
@@ -234,7 +144,6 @@ function channelsPage() {
           fields: this.formValues
         });
         this.setupStep = 2;
-        // Auto-test after save
         try {
           var testResult = await OpenFangAPI.post('/api/channels/' + name + '/test', {});
           if (testResult.status === 'ok') {
@@ -303,7 +212,6 @@ function channelsPage() {
 
     destroy() {
       if (this.pollTimer) { clearInterval(this.pollTimer); this.pollTimer = null; }
-      if (this.qrPollTimer) { clearInterval(this.qrPollTimer); this.qrPollTimer = null; }
     }
   };
 }

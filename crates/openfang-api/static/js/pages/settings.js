@@ -151,16 +151,6 @@ function settingsPage() {
     peersLoadError: '',
     _peerPollTimer: null,
 
-    // -- Migration state --
-    migStep: 'intro',
-    detecting: false,
-    scanning: false,
-    migrating: false,
-    sourcePath: '',
-    targetPath: '',
-    scanResult: null,
-    migResult: null,
-
     // -- Settings load --
     async loadSettings() {
       this.loading = true;
@@ -663,62 +653,6 @@ function settingsPage() {
 
     stopPeerPolling() {
       if (this._peerPollTimer) { clearInterval(this._peerPollTimer); this._peerPollTimer = null; }
-    },
-
-    // -- Migration methods --
-    async autoDetect() {
-      this.detecting = true;
-      try {
-        var data = await OpenFangAPI.get('/api/migrate/detect');
-        if (data.detected && data.scan) {
-          this.sourcePath = data.path;
-          this.scanResult = data.scan;
-          this.migStep = 'preview';
-        } else {
-          this.migStep = 'not_found';
-        }
-      } catch(e) {
-        this.migStep = 'not_found';
-      }
-      this.detecting = false;
-    },
-
-    async scanPath() {
-      if (!this.sourcePath) return;
-      this.scanning = true;
-      try {
-        var data = await OpenFangAPI.post('/api/migrate/scan', { path: this.sourcePath });
-        if (data.error) {
-          OpenFangToast.error('Scan error: ' + data.error);
-          this.scanning = false;
-          return;
-        }
-        this.scanResult = data;
-        this.migStep = 'preview';
-      } catch(e) {
-        OpenFangToast.error('Scan failed: ' + e.message);
-      }
-      this.scanning = false;
-    },
-
-    async runMigration(dryRun) {
-      this.migrating = true;
-      try {
-        var target = this.targetPath;
-        if (!target) target = '';
-        var data = await OpenFangAPI.post('/api/migrate', {
-          source: 'openclaw',
-          source_dir: this.sourcePath || (this.scanResult ? this.scanResult.path : ''),
-          target_dir: target,
-          dry_run: dryRun
-        });
-        this.migResult = data;
-        this.migStep = 'result';
-      } catch(e) {
-        this.migResult = { status: 'failed', error: e.message };
-        this.migStep = 'result';
-      }
-      this.migrating = false;
     },
 
     destroy() {

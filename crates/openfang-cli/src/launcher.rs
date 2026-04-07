@@ -10,7 +10,6 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use crate::tui::theme;
-use crate::ui;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -64,7 +63,6 @@ pub enum LauncherChoice {
     GetStarted,
     Chat,
     Dashboard,
-    DesktopApp,
     TerminalUI,
     ShowHelp,
     Quit,
@@ -80,7 +78,7 @@ struct MenuItem {
 const MENU_FIRST_RUN: &[MenuItem] = &[
     MenuItem {
         label: "Get started",
-        hint: "Providers, API keys, models, migration",
+        hint: "Providers, API keys, models, routing",
         choice: LauncherChoice::GetStarted,
     },
     MenuItem {
@@ -92,11 +90,6 @@ const MENU_FIRST_RUN: &[MenuItem] = &[
         label: "Open dashboard",
         hint: "Launch the web UI in your browser",
         choice: LauncherChoice::Dashboard,
-    },
-    MenuItem {
-        label: "Open desktop app",
-        hint: "Launch the native desktop app",
-        choice: LauncherChoice::DesktopApp,
     },
     MenuItem {
         label: "Launch terminal UI",
@@ -126,11 +119,6 @@ const MENU_RETURNING: &[MenuItem] = &[
         label: "Launch terminal UI",
         hint: "Full interactive TUI dashboard",
         choice: LauncherChoice::TerminalUI,
-    },
-    MenuItem {
-        label: "Open desktop app",
-        hint: "Launch the native desktop app",
-        choice: LauncherChoice::DesktopApp,
     },
     MenuItem {
         label: "Settings",
@@ -516,7 +504,7 @@ fn draw(frame: &mut ratatui::Frame, state: &mut LauncherState) {
                 Span::styled("\u{2192} ", Style::default().fg(theme::BLUE)),
                 Span::styled("Coming from OpenClaw? ", Style::default().fg(theme::BLUE)),
                 Span::styled(
-                    "'Get started' includes automatic migration.",
+                    "Use 'Get started' for setup; copy ~/.openclaw into ~/.openfang/ if migrating.",
                     theme::hint_style(),
                 ),
             ]),
@@ -541,64 +529,3 @@ fn render_separator(frame: &mut ratatui::Frame, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
 }
 
-// ── Desktop app launcher ────────────────────────────────────────────────────
-
-pub fn launch_desktop_app() {
-    let desktop_bin = {
-        let exe = std::env::current_exe().ok();
-        let dir = exe.as_ref().and_then(|e| e.parent());
-
-        #[cfg(windows)]
-        let name = "openfang-desktop.exe";
-        #[cfg(not(windows))]
-        let name = "openfang-desktop";
-
-        // Check sibling of current exe first
-        let sibling = dir.map(|d| d.join(name));
-
-        match sibling {
-            Some(ref path) if path.exists() => sibling,
-            _ => which_lookup(name),
-        }
-    };
-
-    match desktop_bin {
-        Some(ref path) if path.exists() => {
-            match std::process::Command::new(path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(_) => {
-                    ui::success("Desktop app launched.");
-                }
-                Err(e) => {
-                    ui::error_with_fix(
-                        &format!("Failed to launch desktop app: {e}"),
-                        "Build it: cargo build -p openfang-desktop",
-                    );
-                }
-            }
-        }
-        _ => {
-            ui::error_with_fix(
-                "Desktop app not found",
-                "Build it: cargo build -p openfang-desktop",
-            );
-        }
-    }
-}
-
-/// Simple PATH lookup for a binary name.
-fn which_lookup(name: &str) -> Option<PathBuf> {
-    let path_var = std::env::var("PATH").ok()?;
-    let separator = if cfg!(windows) { ';' } else { ':' };
-    for dir in path_var.split(separator) {
-        let candidate = PathBuf::from(dir).join(name);
-        if candidate.exists() {
-            return Some(candidate);
-        }
-    }
-    None
-}

@@ -92,7 +92,7 @@ const AFTER_HELP: &str = "\
     about = "\u{1F40D} OpenFang \u{2014} Open-source Agent Operating System",
     long_about = "\u{1F40D} OpenFang \u{2014} Open-source Agent Operating System\n\n\
                   Deploy, manage, and orchestrate AI agents from your terminal.\n\
-                  40 channels \u{00b7} 60 skills \u{00b7} 50+ models \u{00b7} infinite possibilities.",
+                  Signal & Mattermost \u{00b7} bundled skills \u{00b7} multi-provider models.",
     after_help = AFTER_HELP,
 )]
 struct Cli {
@@ -129,8 +129,6 @@ enum Commands {
     /// Manage event triggers (list, create, delete) [*].
     #[command(subcommand)]
     Trigger(TriggerCommands),
-    /// Migrate from another agent framework to OpenFang.
-    Migrate(MigrateArgs),
     /// Manage skills (install, list, search, create, remove) [*].
     #[command(subcommand)]
     Skill(SkillCommands),
@@ -175,7 +173,7 @@ enum Commands {
     Mcp,
     /// Add an integration (one-click MCP server setup).
     Add {
-        /// Integration name (e.g., "github", "slack", "notion").
+        /// Integration name (e.g., "github", "mattermost", "notion").
         name: String,
         /// API key or token to store in the vault.
         #[arg(long)]
@@ -322,26 +320,6 @@ enum ScaffoldKind {
     Integration,
 }
 
-#[derive(clap::Args)]
-struct MigrateArgs {
-    /// Source framework to migrate from.
-    #[arg(long, value_enum)]
-    from: MigrateSourceArg,
-    /// Path to the source workspace (auto-detected if not set).
-    #[arg(long)]
-    source_dir: Option<PathBuf>,
-    /// Dry run — show what would be imported without making changes.
-    #[arg(long)]
-    dry_run: bool,
-}
-
-#[derive(Clone, clap::ValueEnum)]
-enum MigrateSourceArg {
-    Openclaw,
-    Langchain,
-    Autogpt,
-}
-
 #[derive(Subcommand)]
 enum SkillCommands {
     /// Install a skill from FangHub or a local directory.
@@ -371,7 +349,7 @@ enum ChannelCommands {
     List,
     /// Interactive setup wizard for a channel.
     Setup {
-        /// Channel name (telegram, discord, slack, whatsapp, etc.). Shows picker if omitted.
+        /// Channel name (`signal` or `mattermost`). Shows picker if omitted.
         channel: Option<String>,
     },
     /// Test a channel by sending a test message.
@@ -935,7 +913,6 @@ fn main() {
                 launcher::LauncherChoice::GetStarted => cmd_init(false),
                 launcher::LauncherChoice::Chat => cmd_quick_chat(cli.config, None),
                 launcher::LauncherChoice::Dashboard => cmd_dashboard(),
-                launcher::LauncherChoice::DesktopApp => launcher::launch_desktop_app(),
                 launcher::LauncherChoice::TerminalUI => tui::run(cli.config),
                 launcher::LauncherChoice::ShowHelp => {
                     use clap::CommandFactory;
@@ -981,7 +958,6 @@ fn main() {
             } => cmd_trigger_create(&agent_id, &pattern_json, &prompt, max_fires),
             TriggerCommands::Delete { trigger_id } => cmd_trigger_delete(&trigger_id),
         },
-        Some(Commands::Migrate(args)) => cmd_migrate(args),
         Some(Commands::Skill(sub)) => match sub {
             SkillCommands::Install { source } => cmd_skill_install(&source),
             SkillCommands::List => cmd_skill_list(),
@@ -1264,7 +1240,7 @@ fn cmd_init(quick: bool) {
         ui::hint("For the interactive wizard, run: openfang init (in a terminal)");
         cmd_init_quick(&openfang_dir);
     } else {
-        cmd_init_interactive(&openfang_dir);
+        cmd_init_interactive();
     }
 }
 
@@ -1288,8 +1264,8 @@ fn cmd_init_quick(openfang_dir: &std::path::Path) {
     ]);
 }
 
-/// Interactive 5-step onboarding wizard (ratatui TUI).
-fn cmd_init_interactive(openfang_dir: &std::path::Path) {
+/// Interactive onboarding wizard (ratatui TUI).
+fn cmd_init_interactive() {
     use tui::screens::init_wizard::{self, InitResult, LaunchChoice};
 
     match init_wizard::run() {
@@ -1312,9 +1288,6 @@ fn cmd_init_interactive(openfang_dir: &std::path::Path) {
 
             // Execute the user's chosen launch action.
             match launch {
-                LaunchChoice::Desktop => {
-                    launch_desktop_app(openfang_dir);
-                }
                 LaunchChoice::Dashboard => {
                     if let Some(base) = find_daemon() {
                         let url = format!("{base}/");
@@ -1339,63 +1312,6 @@ fn cmd_init_interactive(openfang_dir: &std::path::Path) {
         }
         InitResult::Cancelled => {
             println!("  Setup cancelled.");
-        }
-    }
-}
-
-/// Launch the openfang-desktop Tauri app, connecting to the running daemon.
-fn launch_desktop_app(_openfang_dir: &std::path::Path) {
-    // Look for the desktop binary next to our own executable.
-    let desktop_bin = {
-        let exe = std::env::current_exe().ok();
-        let dir = exe.as_ref().and_then(|e| e.parent());
-
-        #[cfg(windows)]
-        let name = "openfang-desktop.exe";
-        #[cfg(not(windows))]
-        let name = "openfang-desktop";
-
-        dir.map(|d| d.join(name))
-    };
-
-    match desktop_bin {
-        Some(ref path) if path.exists() => {
-            ui::success("Launching OpenFang Desktop...");
-            match std::process::Command::new(path)
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(_) => {
-                    ui::success("Desktop app started.");
-                }
-                Err(e) => {
-                    ui::error(&format!("Failed to launch desktop app: {e}"));
-                    ui::hint("Try: openfang dashboard");
-                }
-            }
-        }
-        _ => {
-            ui::error("Desktop app not found.");
-            ui::hint("Install it with: cargo install openfang-desktop");
-            ui::hint("Falling back to web dashboard...");
-            ui::blank();
-            if let Some(base) = find_daemon() {
-                let url = format!("{base}/");
-                if !open_in_browser(&url) {
-                    // Browser launch failed entirely (e.g., sandbox EPERM,
-                    // no display server, container environment).
-                    ui::hint("Could not open a browser automatically.");
-                }
-                // Always print the URL so the user can open it manually,
-                // even when open_in_browser reported success — the spawned
-                // opener may still fail asynchronously.
-                ui::hint(&format!("Dashboard: {url}"));
-            } else {
-                ui::hint("Daemon is not running. Start it with: openfang start");
-                ui::hint("Then open: http://127.0.0.1:4200");
-            }
         }
     }
 }
@@ -2473,24 +2389,12 @@ decay_rate = 0.05
     if !json {
         println!("\n  Channel Integrations:");
     }
-    let channel_keys = [
-        ("TELEGRAM_BOT_TOKEN", "Telegram"),
-        ("DISCORD_BOT_TOKEN", "Discord"),
-        ("SLACK_APP_TOKEN", "Slack App"),
-        ("SLACK_BOT_TOKEN", "Slack Bot"),
-    ];
+    let channel_keys = [("MATTERMOST_TOKEN", "Mattermost")];
     for (env_var, name) in &channel_keys {
         let set = std::env::var(env_var).is_ok();
         if set {
-            // Format validation
             let val = std::env::var(env_var).unwrap_or_default();
-            let format_ok = match *env_var {
-                "TELEGRAM_BOT_TOKEN" => val.contains(':'), // Telegram tokens have format "123456:ABC-DEF..."
-                "DISCORD_BOT_TOKEN" => val.len() > 50,     // Discord tokens are typically 59+ chars
-                "SLACK_APP_TOKEN" => val.starts_with("xapp-"),
-                "SLACK_BOT_TOKEN" => val.starts_with("xoxb-"),
-                _ => true,
-            };
+            let format_ok = val.len() >= 20;
             if format_ok {
                 if !json {
                     ui::provider_status(name, env_var, true);
@@ -3433,64 +3337,6 @@ fn boot_kernel(config: Option<PathBuf>) -> OpenFangKernel {
 }
 
 // ---------------------------------------------------------------------------
-// Migrate command
-// ---------------------------------------------------------------------------
-
-fn cmd_migrate(args: MigrateArgs) {
-    let source = match args.from {
-        MigrateSourceArg::Openclaw => openfang_migrate::MigrateSource::OpenClaw,
-        MigrateSourceArg::Langchain => openfang_migrate::MigrateSource::LangChain,
-        MigrateSourceArg::Autogpt => openfang_migrate::MigrateSource::AutoGpt,
-    };
-
-    let source_dir = args.source_dir.unwrap_or_else(|| {
-        let home = dirs::home_dir().unwrap_or_else(|| {
-            eprintln!("Error: Could not determine home directory");
-            std::process::exit(1);
-        });
-        match source {
-            openfang_migrate::MigrateSource::OpenClaw => home.join(".openclaw"),
-            openfang_migrate::MigrateSource::LangChain => home.join(".langchain"),
-            openfang_migrate::MigrateSource::AutoGpt => home.join("Auto-GPT"),
-        }
-    });
-
-    let target_dir = cli_openfang_home();
-
-    println!("Migrating from {} ({})...", source, source_dir.display());
-    if args.dry_run {
-        println!("  (dry run — no changes will be made)\n");
-    }
-
-    let options = openfang_migrate::MigrateOptions {
-        source,
-        source_dir,
-        target_dir,
-        dry_run: args.dry_run,
-    };
-
-    match openfang_migrate::run_migration(&options) {
-        Ok(report) => {
-            report.print_summary();
-
-            // Save migration report
-            if !args.dry_run {
-                let report_path = options.target_dir.join("migration_report.md");
-                if let Err(e) = std::fs::write(&report_path, report.to_markdown()) {
-                    eprintln!("Warning: Could not save migration report: {e}");
-                } else {
-                    println!("\n  Report saved to: {}", report_path.display());
-                }
-            }
-        }
-        Err(e) => {
-            eprintln!("Migration failed: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // Skill commands
 // ---------------------------------------------------------------------------
 
@@ -3850,16 +3696,7 @@ fn cmd_channel_list() {
     println!("{:<12} {:<10} STATUS", "CHANNEL", "ENV VAR");
     println!("{}", "-".repeat(50));
 
-    let channels: Vec<(&str, &str)> = vec![
-        ("webchat", ""),
-        ("telegram", "TELEGRAM_BOT_TOKEN"),
-        ("discord", "DISCORD_BOT_TOKEN"),
-        ("slack", "SLACK_BOT_TOKEN"),
-        ("whatsapp", "WA_ACCESS_TOKEN"),
-        ("signal", ""),
-        ("matrix", "MATRIX_TOKEN"),
-        ("email", "EMAIL_PASSWORD"),
-    ];
+    let channels: Vec<(&str, &str)> = vec![("signal", ""), ("mattermost", "MATTERMOST_TOKEN")];
 
     for (name, env_var) in channels {
         let configured = config_str.contains(&format!("[channels.{name}]"));
@@ -3894,13 +3731,8 @@ fn cmd_channel_setup(channel: Option<&str>) {
             ui::section("Channel Setup");
             ui::blank();
             let channel_list = [
-                ("telegram", "Telegram bot (BotFather)"),
-                ("discord", "Discord bot"),
-                ("slack", "Slack app (Socket Mode)"),
-                ("whatsapp", "WhatsApp Cloud API"),
-                ("email", "Email (IMAP/SMTP)"),
-                ("signal", "Signal (signal-cli)"),
-                ("matrix", "Matrix homeserver"),
+                ("signal", "Signal (signal-cli REST API)"),
+                ("mattermost", "Mattermost bot"),
             ];
 
             for (i, (name, desc)) in channel_list.iter().enumerate() {
@@ -3923,237 +3755,71 @@ fn cmd_channel_setup(channel: Option<&str>) {
     };
 
     match channel.as_str() {
-        "telegram" => {
-            ui::section("Setting up Telegram");
-            ui::blank();
-            println!("  1. Open Telegram and message @BotFather");
-            println!("  2. Send /newbot and follow the prompts");
-            println!("  3. Copy the bot token");
-            ui::blank();
-
-            let token = prompt_input("  Paste your bot token: ");
-            if token.is_empty() {
-                ui::error("No token provided. Setup cancelled.");
-                return;
-            }
-
-            let config_block = "\n[channels.telegram]\nbot_token_env = \"TELEGRAM_BOT_TOKEN\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("telegram", config_block);
-
-            // Save token to .env
-            match dotenv::save_env_key("TELEGRAM_BOT_TOKEN", &token) {
-                Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
-                Err(_) => println!("    export TELEGRAM_BOT_TOKEN={token}"),
-            }
-
-            ui::blank();
-            ui::success("Telegram configured");
-            notify_daemon_restart();
-        }
-        "discord" => {
-            ui::section("Setting up Discord");
-            ui::blank();
-            println!("  1. Go to https://discord.com/developers/applications");
-            println!("  2. Create a New Application");
-            println!("  3. Go to Bot section and click 'Add Bot'");
-            println!("  4. Copy the bot token");
-            println!("  5. Under Privileged Gateway Intents, enable:");
-            println!("     - Message Content Intent");
-            println!("  6. Use OAuth2 URL Generator to invite bot to your server");
-            ui::blank();
-
-            let token = prompt_input("  Paste your bot token: ");
-            if token.is_empty() {
-                ui::error("No token provided. Setup cancelled.");
-                return;
-            }
-
-            let config_block = "\n[channels.discord]\nbot_token_env = \"DISCORD_BOT_TOKEN\"\ndefault_agent = \"coder\"\n";
-            maybe_write_channel_config("discord", config_block);
-
-            match dotenv::save_env_key("DISCORD_BOT_TOKEN", &token) {
-                Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
-                Err(_) => println!("    export DISCORD_BOT_TOKEN={token}"),
-            }
-
-            ui::blank();
-            ui::success("Discord configured");
-            notify_daemon_restart();
-        }
-        "slack" => {
-            ui::section("Setting up Slack");
-            ui::blank();
-            println!("  1. Go to https://api.slack.com/apps");
-            println!("  2. Create New App -> From Scratch");
-            println!("  3. Enable Socket Mode (Settings -> Socket Mode)");
-            println!("  4. Copy the App-Level Token (xapp-...)");
-            println!("  5. Go to OAuth & Permissions, add scopes:");
-            println!("     - chat:write, app_mentions:read, im:history");
-            println!("  6. Install to workspace and copy Bot Token (xoxb-...)");
-            ui::blank();
-
-            let app_token = prompt_input("  Paste your App Token (xapp-...): ");
-            let bot_token = prompt_input("  Paste your Bot Token (xoxb-...): ");
-
-            let config_block = "\n[channels.slack]\napp_token_env = \"SLACK_APP_TOKEN\"\nbot_token_env = \"SLACK_BOT_TOKEN\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("slack", config_block);
-
-            if !app_token.is_empty() {
-                match dotenv::save_env_key("SLACK_APP_TOKEN", &app_token) {
-                    Ok(()) => ui::success("App token saved to ~/.openfang/.env"),
-                    Err(_) => println!("    export SLACK_APP_TOKEN={app_token}"),
-                }
-            }
-            if !bot_token.is_empty() {
-                match dotenv::save_env_key("SLACK_BOT_TOKEN", &bot_token) {
-                    Ok(()) => ui::success("Bot token saved to ~/.openfang/.env"),
-                    Err(_) => println!("    export SLACK_BOT_TOKEN={bot_token}"),
-                }
-            }
-
-            ui::blank();
-            ui::success("Slack configured");
-            notify_daemon_restart();
-        }
-        "whatsapp" => {
-            ui::section("Setting up WhatsApp");
-            ui::blank();
-            println!("  WhatsApp Cloud API (recommended for production):");
-            println!("  1. Go to https://developers.facebook.com");
-            println!("  2. Create a Business App");
-            println!("  3. Add WhatsApp product");
-            println!("  4. Set up a test phone number");
-            println!("  5. Copy Phone Number ID and Access Token");
-            ui::blank();
-
-            let phone_id = prompt_input("  Phone Number ID: ");
-            let access_token = prompt_input("  Access Token: ");
-            let verify_token = prompt_input("  Verify Token: ");
-
-            let config_block = "\n[channels.whatsapp]\nmode = \"cloud_api\"\nphone_number_id_env = \"WA_PHONE_ID\"\naccess_token_env = \"WA_ACCESS_TOKEN\"\nverify_token_env = \"WA_VERIFY_TOKEN\"\nwebhook_port = 8443\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("whatsapp", config_block);
-
-            for (key, val) in [
-                ("WA_PHONE_ID", &phone_id),
-                ("WA_ACCESS_TOKEN", &access_token),
-                ("WA_VERIFY_TOKEN", &verify_token),
-            ] {
-                if !val.is_empty() {
-                    match dotenv::save_env_key(key, val) {
-                        Ok(()) => ui::success(&format!("{key} saved to ~/.openfang/.env")),
-                        Err(_) => println!("    export {key}={val}"),
-                    }
-                }
-            }
-
-            ui::blank();
-            ui::success("WhatsApp configured");
-            notify_daemon_restart();
-        }
-        "email" => {
-            ui::section("Setting up Email");
-            ui::blank();
-            println!("  For Gmail, use an App Password:");
-            println!("  https://myaccount.google.com/apppasswords");
-            ui::blank();
-
-            let username = prompt_input("  Email address: ");
-            if username.is_empty() {
-                ui::error("No email provided. Setup cancelled.");
-                return;
-            }
-
-            let password = prompt_input("  App password (or Enter to set later): ");
-
-            let config_block = format!(
-                "\n[channels.email]\nimap_host = \"imap.gmail.com\"\nimap_port = 993\nsmtp_host = \"smtp.gmail.com\"\nsmtp_port = 587\nusername = \"{username}\"\npassword_env = \"EMAIL_PASSWORD\"\npoll_interval = 30\ndefault_agent = \"assistant\"\n"
-            );
-            maybe_write_channel_config("email", &config_block);
-
-            if !password.is_empty() {
-                match dotenv::save_env_key("EMAIL_PASSWORD", &password) {
-                    Ok(()) => ui::success("Password saved to ~/.openfang/.env"),
-                    Err(_) => println!("    export EMAIL_PASSWORD=your_app_password"),
-                }
-            } else {
-                ui::hint("Set later: openfang config set-key email (or export EMAIL_PASSWORD=...)");
-            }
-
-            ui::blank();
-            ui::success("Email configured");
-            notify_daemon_restart();
-        }
         "signal" => {
             ui::section("Setting up Signal");
             ui::blank();
-            println!("  Signal requires signal-cli (https://github.com/AsamK/signal-cli).");
-            ui::blank();
-            println!("  1. Install signal-cli:");
-            println!("     - macOS: brew install signal-cli");
-            println!("     - Linux: download from GitHub releases");
-            println!("     - Or use the Docker image");
-            println!("  2. Register or link a phone number:");
-            println!("     signal-cli -u +1YOURPHONE register");
-            println!("     signal-cli -u +1YOURPHONE verify CODE");
-            println!("  3. Start signal-cli in JSON-RPC mode:");
-            println!("     signal-cli -u +1YOURPHONE jsonRpc --socket /tmp/signal-cli.sock");
+            println!("  Uses signal-cli REST API (e.g. bbernhard/signal-cli-rest-api).");
+            println!("  See: https://github.com/AsamK/signal-cli");
             ui::blank();
 
-            let phone = prompt_input("  Your phone number (+1XXXX, or Enter to skip): ");
-
-            let config_block = "\n[channels.signal]\nphone_env = \"SIGNAL_PHONE\"\nsocket_path = \"/tmp/signal-cli.sock\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("signal", config_block);
-
-            if !phone.is_empty() {
-                match dotenv::save_env_key("SIGNAL_PHONE", &phone) {
-                    Ok(()) => ui::success("Phone saved to ~/.openfang/.env"),
-                    Err(_) => println!("    export SIGNAL_PHONE={phone}"),
-                }
+            let api_url =
+                prompt_input("  signal-cli REST API URL [http://127.0.0.1:8080]: ");
+            let api_url = if api_url.is_empty() {
+                "http://127.0.0.1:8080".to_string()
+            } else {
+                api_url
+            };
+            let phone = prompt_input("  Registered phone number (+E.164): ");
+            if phone.is_empty() {
+                ui::error("phone_number is required. Setup cancelled.");
+                return;
             }
+
+            let config_block = format!(
+                "\n[channels.signal]\napi_url = \"{api_url}\"\nphone_number = \"{phone}\"\ndefault_agent = \"assistant\"\n"
+            );
+            maybe_write_channel_config("signal", &config_block);
 
             ui::blank();
             ui::success("Signal configured");
             notify_daemon_restart();
         }
-        "matrix" => {
-            ui::section("Setting up Matrix");
+        "mattermost" => {
+            ui::section("Setting up Mattermost");
             ui::blank();
-            println!("  1. Create a bot account on your Matrix homeserver");
-            println!("     (e.g., register @openfang-bot:matrix.org)");
-            println!("  2. Obtain an access token:");
-            println!("     curl -X POST https://matrix.org/_matrix/client/r0/login \\");
-            println!("       -d '{{\"type\":\"m.login.password\",\"user\":\"openfang-bot\",\"password\":\"...\"}}'");
-            println!("     Copy the access_token from the response.");
-            println!("  3. Invite the bot to rooms you want it to monitor.");
+            println!("  Create a bot account in Mattermost (Integrations → Bot Accounts).");
             ui::blank();
 
-            let homeserver = prompt_input("  Homeserver URL [https://matrix.org]: ");
-            let homeserver = if homeserver.is_empty() {
-                "https://matrix.org".to_string()
-            } else {
-                homeserver
-            };
-            let token = prompt_input("  Access token: ");
+            let server = prompt_input("  Server base URL (https://chat.example.com): ");
+            if server.is_empty() {
+                ui::error("server_url is required. Setup cancelled.");
+                return;
+            }
+            let token = prompt_input("  Bot access token: ");
+            if token.is_empty() {
+                ui::error("Token required. Setup cancelled.");
+                return;
+            }
 
-            let config_block = "\n[channels.matrix]\nhomeserver_env = \"MATRIX_HOMESERVER\"\naccess_token_env = \"MATRIX_ACCESS_TOKEN\"\ndefault_agent = \"assistant\"\n";
-            maybe_write_channel_config("matrix", config_block);
+            let config_block = format!(
+                "\n[channels.mattermost]\nserver_url = \"{}\"\ntoken_env = \"MATTERMOST_TOKEN\"\ndefault_agent = \"assistant\"\n",
+                server.trim_end_matches('/')
+            );
+            maybe_write_channel_config("mattermost", &config_block);
 
-            let _ = dotenv::save_env_key("MATRIX_HOMESERVER", &homeserver);
-            if !token.is_empty() {
-                match dotenv::save_env_key("MATRIX_ACCESS_TOKEN", &token) {
-                    Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
-                    Err(_) => println!("    export MATRIX_ACCESS_TOKEN={token}"),
-                }
+            match dotenv::save_env_key("MATTERMOST_TOKEN", &token) {
+                Ok(()) => ui::success("Token saved to ~/.openfang/.env"),
+                Err(_) => println!("    export MATTERMOST_TOKEN={token}"),
             }
 
             ui::blank();
-            ui::success("Matrix configured");
+            ui::success("Mattermost configured");
             notify_daemon_restart();
         }
         other => {
             ui::error_with_fix(
                 &format!("Unknown channel: {other}"),
-                "Available: telegram, discord, slack, whatsapp, email, signal, matrix",
+                "Available: signal, mattermost",
             );
             std::process::exit(1);
         }
@@ -6852,8 +6518,7 @@ mod tests {
         let skills_dir = std::env::temp_dir().join("openfang-doctor-test-skills");
         let mut skill_reg = openfang_skills::registry::SkillRegistry::new(skills_dir);
         let count = skill_reg.load_bundled();
-        assert!(count > 0, "Should load bundled skills");
-        assert_eq!(skill_reg.count(), count);
+        assert_eq!(count, 0, "Bundled skills were removed");
     }
 
     #[test]
@@ -6862,8 +6527,7 @@ mod tests {
         let _ = std::fs::create_dir_all(&tmp);
         let mut ext_reg = openfang_extensions::registry::IntegrationRegistry::new(&tmp);
         let count = ext_reg.load_bundled();
-        assert!(count > 0, "Should load bundled integration templates");
-        assert_eq!(ext_reg.template_count(), count);
+        assert_eq!(count, 0, "Bundled integrations were removed");
     }
 
     #[test]

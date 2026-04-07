@@ -295,56 +295,13 @@ mod tests {
     use crate::registry::IntegrationRegistry;
 
     #[test]
-    fn install_and_remove() {
+    fn empty_registry_after_load() {
         let dir = tempfile::tempdir().unwrap();
         let mut registry = IntegrationRegistry::new(dir.path());
         registry.load_bundled();
-
-        let mut resolver = CredentialResolver::new(None, None);
-
-        // Install github (will be Setup status since no token)
-        let result =
-            install_integration(&mut registry, &mut resolver, "github", &HashMap::new()).unwrap();
-        assert_eq!(result.id, "github");
-        // Status depends on whether GITHUB_PERSONAL_ACCESS_TOKEN is in env
-        assert!(
-            result.status == IntegrationStatus::Ready || result.status == IntegrationStatus::Setup
-        );
-
-        // Remove
-        let msg = remove_integration(&mut registry, "github").unwrap();
-        assert!(msg.contains("GitHub"));
-        assert!(!registry.is_installed("github"));
-    }
-
-    #[test]
-    fn install_with_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut registry = IntegrationRegistry::new(dir.path());
-        registry.load_bundled();
-
-        let mut resolver = CredentialResolver::new(None, None);
-
-        // Provide key directly
-        let mut keys = HashMap::new();
-        keys.insert("NOTION_TOKEN".to_string(), "ntn_test_key_123".to_string());
-
-        let result = install_integration(&mut registry, &mut resolver, "notion", &keys).unwrap();
-        assert_eq!(result.id, "notion");
-    }
-
-    #[test]
-    fn install_already_installed() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut registry = IntegrationRegistry::new(dir.path());
-        registry.load_bundled();
-
-        let mut resolver = CredentialResolver::new(None, None);
-
-        install_integration(&mut registry, &mut resolver, "github", &HashMap::new()).unwrap();
-        let err = install_integration(&mut registry, &mut resolver, "github", &HashMap::new())
-            .unwrap_err();
-        assert!(err.to_string().contains("already"));
+        let resolver = CredentialResolver::new(None, None);
+        let list = list_integrations(&registry, &resolver);
+        assert_eq!(list.len(), 0);
     }
 
     #[test]
@@ -354,31 +311,6 @@ mod tests {
         registry.load_bundled();
         let err = remove_integration(&mut registry, "github").unwrap_err();
         assert!(err.to_string().contains("not installed"));
-    }
-
-    #[test]
-    fn list_integrations_all() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut registry = IntegrationRegistry::new(dir.path());
-        registry.load_bundled();
-        let resolver = CredentialResolver::new(None, None);
-
-        let list = list_integrations(&registry, &resolver);
-        assert_eq!(list.len(), 25);
-        assert!(list
-            .iter()
-            .all(|e| e.status == IntegrationStatus::Available));
-    }
-
-    #[test]
-    fn search_integrations_query() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut registry = IntegrationRegistry::new(dir.path());
-        registry.load_bundled();
-
-        let results = search_integrations(&registry, "git");
-        assert!(results.iter().any(|e| e.id == "github"));
-        assert!(results.iter().any(|e| e.id == "gitlab"));
     }
 
     #[test]

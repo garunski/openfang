@@ -1,12 +1,12 @@
 <p align="center">
-  <img src="public/assets/openfang-logo.png" width="160" alt="OpenFang Logo" />
+  <!-- logo -->
 </p>
 
 <h1 align="center">OpenFang</h1>
 <h3 align="center">The Agent Operating System</h3>
 
 <p align="center">
-  Open-source Agent OS built in Rust. 137K LOC. 14 crates. 1,767+ tests. Zero clippy warnings.<br/>
+  Open-source Agent OS built in Rust. 11 crates. Zero clippy warnings.<br/>
   <strong>One binary. Battle-tested. Agents that actually work for you.</strong>
 </p>
 
@@ -65,7 +65,7 @@ openfang start
 
 <p align="center"><em>"Traditional agents wait for you to type. Hands work <strong>for</strong> you."</em></p>
 
-**Hands** are OpenFang's core innovation — pre-built autonomous capability packages that run independently, on schedules, without you having to prompt them. This is not a chatbot. This is an agent that wakes up at 6 AM, researches your competitors, builds a knowledge graph, scores the findings, and delivers a report to your Telegram before you've had coffee.
+**Hands** are OpenFang's core innovation — pre-built autonomous capability packages that run independently, on schedules, without you having to prompt them. This is not a chatbot. This is an agent that wakes up on a schedule, does the work, and can deliver results to your Mattermost team or Signal.
 
 Each Hand bundles:
 - **HAND.toml** — Manifest declaring tools, settings, requirements, and dashboard metrics
@@ -79,7 +79,7 @@ All compiled into the binary. No downloading, no pip install, no Docker pull.
 
 | Hand | What It Actually Does |
 |------|----------------------|
-| **Clip** | Takes a YouTube URL, downloads it, identifies the best moments, cuts them into vertical shorts with captions and thumbnails, optionally adds AI voice-over, and publishes to Telegram and WhatsApp. 8-phase pipeline. FFmpeg + yt-dlp + 5 STT backends. |
+| **Clip** | Takes a YouTube URL, downloads it, identifies the best moments, cuts them into vertical shorts with captions and thumbnails, optionally adds AI voice-over, and publishes to configured channels (e.g. Mattermost). 8-phase pipeline. FFmpeg + yt-dlp + 5 STT backends. |
 | **Lead** | Runs daily. Discovers prospects matching your ICP, enriches them with web research, scores 0-100, deduplicates against your existing database, and delivers qualified leads in CSV/JSON/Markdown. Builds ICP profiles over time. |
 | **Collector** | OSINT-grade intelligence. You give it a target (company, person, topic). It monitors continuously — change detection, sentiment tracking, knowledge graph construction, and critical alerts when something important shifts. |
 | **Predictor** | Superforecasting engine. Collects signals from multiple sources, builds calibrated reasoning chains, makes predictions with confidence intervals, and tracks its own accuracy using Brier scores. Has a contrarian mode that deliberately argues against consensus. |
@@ -192,10 +192,10 @@ AutoGen    ███████████░░░░░░░░░░░░
 | **Autonomous Hands** | **7 built-in** | None | None | None | None | None |
 | **Security Layers** | **16 discrete** | 3 basic | 6 layers | 1 basic | Docker | AES enc. |
 | **Agent Sandbox** | **WASM dual-metered** | None | Allowlists | None | Docker | None |
-| **Channel Adapters** | **40** | 13 | 15 | 0 | 0 | 0 |
+| **Channel Adapters** | **2 + web + CLI** | 13 | 15 | 0 | 0 | 0 |
 | **Built-in Tools** | **53 + MCP + A2A** | 50+ | 12 | Plugins | MCP | LC tools |
 | **Memory** | **SQLite + vector** | File-based | SQLite FTS5 | 4-layer | External | Checkpoints |
-| **Desktop App** | **Tauri 2.0** | None | None | None | Studio | None |
+| **Desktop App** | None | None | None | None | Studio | None |
 | **Audit Trail** | **Merkle hash-chain** | Logs | Logs | Tracing | Logs | Checkpoints |
 | **Cold Start** | **<200ms** | ~6s | ~10ms | ~3s | ~4s | ~2.5s |
 | **Install Size** | **~32 MB** | ~500 MB | ~8.8 MB | ~100 MB | ~200 MB | ~150 MB |
@@ -230,130 +230,27 @@ OpenFang doesn't bolt security on after the fact. Every layer is independently t
 
 ## Architecture
 
-14 Rust crates. 137,728 lines of code. Modular kernel design.
+11 Rust crates in this workspace. Modular kernel design.
 
 ```
 openfang-kernel      Orchestration, workflows, metering, RBAC, scheduler, budget tracking
-openfang-runtime     Agent loop, 3 LLM drivers, 53 tools, WASM sandbox, MCP, A2A
-openfang-api         140+ REST/WS/SSE endpoints, OpenAI-compatible API, dashboard
-openfang-channels    40 messaging adapters with rate limiting, DM/group policies
+openfang-runtime     Agent loop, LLM drivers, tools, WASM sandbox, MCP, A2A
+openfang-api         REST/WS/SSE endpoints, OpenAI-compatible API, dashboard
+openfang-channels    Signal + Mattermost adapters, webchat, CLI; rate limiting, policies
 openfang-memory      SQLite persistence, vector embeddings, canonical sessions, compaction
 openfang-types       Core types, taint tracking, Ed25519 manifest signing, model catalog
-openfang-skills      60 bundled skills, SKILL.md parser, FangHub marketplace
-openfang-hands       7 autonomous Hands, HAND.toml parser, lifecycle management
-openfang-extensions  25 MCP templates, AES-256-GCM credential vault, OAuth2 PKCE
+openfang-skills      Bundled skills, SKILL.md parser, FangHub marketplace
+openfang-hands       Autonomous Hands, HAND.toml parser, lifecycle management
+openfang-extensions  MCP templates, credential vault, OAuth2 PKCE
 openfang-wire        OFP P2P protocol with HMAC-SHA256 mutual authentication
 openfang-cli         CLI with daemon management, TUI dashboard, MCP server mode
-openfang-desktop     Tauri 2.0 native app (system tray, notifications, global shortcuts)
-openfang-migrate     OpenClaw, LangChain, AutoGPT migration engine
-xtask                Build automation
 ```
 
 ---
 
-## 40 Channel Adapters
+## Channels (this tree)
 
-Connect your agents to every platform your users are on.
-
-**Core:** Telegram, Discord, Slack, WhatsApp, Signal, Matrix, Email (IMAP/SMTP)
-**Enterprise:** Microsoft Teams, Mattermost, Google Chat, Webex, Feishu/Lark, Zulip
-**Social:** LINE, Viber, Facebook Messenger, Mastodon, Bluesky, Reddit, LinkedIn, Twitch
-**Community:** IRC, XMPP, Guilded, Revolt, Keybase, Discourse, Gitter
-**Privacy:** Threema, Nostr, Mumble, Nextcloud Talk, Rocket.Chat, Ntfy, Gotify
-**Workplace:** Pumble, Flock, Twist, DingTalk, Zalo, Webhooks
-
-Each adapter supports per-channel model overrides, DM/group policies, rate limiting, and output formatting.
-
----
-
-## WhatsApp Web Gateway (QR Code)
-
-Connect your personal WhatsApp account to OpenFang via QR code — just like WhatsApp Web. No Meta Business account required.
-
-### Prerequisites
-
-- **Node.js >= 18** installed ([download](https://nodejs.org/))
-- OpenFang installed and initialized
-
-### Setup
-
-**1. Install the gateway dependencies:**
-
-```bash
-cd packages/whatsapp-gateway
-npm install
-```
-
-**2. Configure `config.toml`:**
-
-```toml
-[channels.whatsapp]
-mode = "web"
-default_agent = "assistant"
-```
-
-**3. Set the gateway URL (choose one):**
-
-Add to your shell profile for persistence:
-
-```bash
-# macOS / Linux
-echo 'export WHATSAPP_WEB_GATEWAY_URL="http://127.0.0.1:3009"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-Or set it inline when starting the gateway:
-
-```bash
-export WHATSAPP_WEB_GATEWAY_URL="http://127.0.0.1:3009"
-```
-
-**4. Start the gateway:**
-
-```bash
-node packages/whatsapp-gateway/index.js
-```
-
-The gateway listens on port `3009` by default. Override with `WHATSAPP_GATEWAY_PORT`.
-
-**5. Start OpenFang:**
-
-```bash
-openfang start
-# Dashboard at http://localhost:4200
-```
-
-**6. Scan the QR code:**
-
-Open the dashboard → **Channels** → **WhatsApp**. A QR code will appear. Scan it with your phone:
-
-> **WhatsApp** → **Settings** → **Linked Devices** → **Link a Device**
-
-Once scanned, the status changes to `connected` and incoming messages are routed to your configured agent.
-
-### Gateway Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `WHATSAPP_WEB_GATEWAY_URL` | Gateway URL for OpenFang to connect to | _(empty = disabled)_ |
-| `WHATSAPP_GATEWAY_PORT` | Port the gateway listens on | `3009` |
-| `OPENFANG_URL` | OpenFang API URL the gateway reports to | `http://127.0.0.1:4200` |
-| `OPENFANG_DEFAULT_AGENT` | Agent that handles incoming messages | `assistant` |
-
-### Gateway API Endpoints
-
-| Method | Route | Description |
-|--------|-------|-------------|
-| `POST` | `/login/start` | Generate QR code (returns base64 PNG) |
-| `GET` | `/login/status` | Connection status (`disconnected`, `qr_ready`, `connected`) |
-| `POST` | `/message/send` | Send a message (`{ "to": "5511999999999", "text": "Hello" }`) |
-| `GET` | `/health` | Health check |
-
-### Alternative: WhatsApp Cloud API
-
-For production workloads, use the [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api) with a Meta Business account. See the [Cloud API configuration docs](https://openfang.sh/docs/channels/whatsapp).
-
-
+Server integrations ship as **Signal** and **Mattermost**. **Webchat** and the **CLI** provide local interaction. Configure adapters in `~/.openfang/config.toml` under `[channels.*]`.
 
 ---
 
@@ -367,22 +264,9 @@ Intelligent routing with task complexity scoring, automatic fallback, cost track
 
 ---
 
-## Migrate from OpenClaw
+## Migrating from another install
 
-Already running OpenClaw? One command:
-
-```bash
-# Migrate everything — agents, memory, skills, configs
-openfang migrate --from openclaw
-
-# Migrate from a specific path
-openfang migrate --from openclaw --path ~/.openclaw
-
-# Dry run first to see what would change
-openfang migrate --from openclaw --dry-run
-```
-
-The migration engine imports your agents, conversation history, skills, and configuration. OpenFang reads SKILL.md natively and is compatible with the ClawHub marketplace.
+The separate `openfang-migrate` crate is not in this workspace. Copy agents, `config.toml`, and data under `~/.openfang/` manually, or restore from backup.
 
 ---
 

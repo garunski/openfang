@@ -1,6 +1,6 @@
 //! RBAC authentication and authorization for multi-user access control.
 //!
-//! The AuthManager maps platform user identities (Telegram ID, Discord ID, etc.)
+//! The AuthManager maps platform user identities (e.g. Signal number, Mattermost user id)
 //! to OpenFang users with roles, then enforces permission checks on actions.
 
 use dashmap::DashMap;
@@ -200,8 +200,8 @@ mod tests {
                 role: "owner".to_string(),
                 channel_bindings: {
                     let mut m = HashMap::new();
-                    m.insert("telegram".to_string(), "123456".to_string());
-                    m.insert("discord".to_string(), "987654".to_string());
+                    m.insert("signal".to_string(), "123456".to_string());
+                    m.insert("mattermost".to_string(), "987654".to_string());
                     m
                 },
                 api_key_hash: None,
@@ -211,7 +211,7 @@ mod tests {
                 role: "user".to_string(),
                 channel_bindings: {
                     let mut m = HashMap::new();
-                    m.insert("telegram".to_string(), "999999".to_string());
+                    m.insert("signal".to_string(), "999999".to_string());
                     m
                 },
                 api_key_hash: None,
@@ -236,25 +236,25 @@ mod tests {
     fn test_identify_from_channel() {
         let manager = AuthManager::new(&test_configs());
 
-        // Alice on Telegram
-        let owner_tg = manager.identify("telegram", "123456");
-        assert!(owner_tg.is_some());
+        // Alice on Signal
+        let owner_signal = manager.identify("signal", "123456");
+        assert!(owner_signal.is_some());
 
-        // Alice on Discord
-        let owner_dc = manager.identify("discord", "987654");
-        assert!(owner_dc.is_some());
+        // Alice on Mattermost
+        let owner_mm = manager.identify("mattermost", "987654");
+        assert!(owner_mm.is_some());
 
         // Same user across channels
-        assert_eq!(owner_tg.unwrap(), owner_dc.unwrap());
+        assert_eq!(owner_signal.unwrap(), owner_mm.unwrap());
 
         // Unknown user
-        assert!(manager.identify("telegram", "unknown").is_none());
+        assert!(manager.identify("signal", "unknown").is_none());
     }
 
     #[test]
     fn test_owner_can_do_everything() {
         let manager = AuthManager::new(&test_configs());
-        let owner_id = manager.identify("telegram", "123456").unwrap();
+        let owner_id = manager.identify("signal", "123456").unwrap();
 
         assert!(manager.authorize(owner_id, &Action::ChatWithAgent).is_ok());
         assert!(manager.authorize(owner_id, &Action::SpawnAgent).is_ok());
@@ -266,7 +266,7 @@ mod tests {
     #[test]
     fn test_user_limited_access() {
         let manager = AuthManager::new(&test_configs());
-        let guest_id = manager.identify("telegram", "999999").unwrap();
+        let guest_id = manager.identify("signal", "999999").unwrap();
 
         // User can chat and view config
         assert!(manager.authorize(guest_id, &Action::ChatWithAgent).is_ok());
