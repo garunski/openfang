@@ -80,12 +80,15 @@ impl ProjectStore {
             ));
         }
 
+        project.normalize_admin_spoke_field();
+
         let mut map = self
             .projects
             .write()
             .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
 
         validate_new_project(&map, &project.name, &project.path, None)?;
+        validate_admin_spoke_references(&project)?;
 
         let now = chrono::Utc::now();
         project.id = ProjectId::new();
@@ -140,6 +143,11 @@ impl ProjectStore {
         if let Some(overrides) = patch.pipeline_overrides {
             updated.pipeline_overrides = overrides;
         }
+        if let Some(admin) = patch.admin_spoke {
+            updated.admin_spoke = admin.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        }
+        updated.normalize_admin_spoke_field();
+        validate_admin_spoke_references(&updated)?;
         updated.updated_at = chrono::Utc::now();
         map.insert(id, updated.clone());
         drop(map);
@@ -213,19 +221,16 @@ impl ProjectStore {
         Ok(removed)
     }
 
-    /// Discover spokes: sibling dirs of `backlog/` under the project root that contain `mise.toml`.
+    /// Discover spokes: immediate child dirs of the project root that are Git work trees
+    /// (`git rev-parse --is-inside-work-tree`), skipping a top-level `backlog/` folder.
     pub fn discover_spokes(&self, id: ProjectId) -> OpenFangResult<Vec<SpokeDescriptor>> {
         let project = self
             .get(id)
             .ok_or_else(|| OpenFangError::InvalidInput(format!("Unknown project id {id}")))?;
         let root = &project.path;
-        let backlog = project.backlog_root();
-        let parent = backlog
-            .parent()
-            .ok_or_else(|| OpenFangError::InvalidInput("Project path has no parent".into()))?;
 
         let mut out = Vec::new();
-        let read = std::fs::read_dir(parent).map_err(|e| {
+        let read = std::fs::read_dir(root).map_err(|e| {
             OpenFangError::Internal(format!("Failed to read project directory: {e}"))
         })?;
 
@@ -243,7 +248,7 @@ impl ProjectStore {
             if path.file_name().and_then(|n| n.to_str()) == Some("backlog") {
                 continue;
             }
-            if !path.join("mise.toml").is_file() {
+            if !crate::git_worktree::path_is_git_worktree(&path) {
                 continue;
             }
             let name = path
@@ -298,10 +303,28 @@ fn paths_overlap(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
 
+/// When set, `admin_spoke` must match a [`SpokeDescriptor::name`].
+fn validate_admin_spoke_references(project: &Project) -> OpenFangResult<()> {
+    let Some(ref raw) = project.admin_spoke else {
+        return Ok(());
+    };
+    let name = raw.trim();
+    if name.is_empty() {
+        return Ok(());
+    }
+    if project.spokes.iter().any(|s| s.name == name) {
+        return Ok(());
+    }
+    Err(OpenFangError::InvalidInput(format!(
+        "admin_spoke '{name}' must match a spoke name"
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use openfang_types::project::ProjectPipelineOverrides;
+    use std::process::Command;
     use tempfile::tempdir;
 
     fn sample_project(name: &str, path: PathBuf) -> Project {
@@ -390,6 +413,7 @@ mod tests {
                         max_retries: Some(3),
                         model_routing: None,
                     }),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -429,13 +453,21 @@ mod tests {
     }
 
     #[test]
-    fn discover_spokes_finds_mise() {
+    fn discover_spokes_finds_git_worktree() {
         let dir = tempdir().unwrap();
         let root = dir.path().join("proj");
         std::fs::create_dir_all(root.join("backlog")).unwrap();
         let spoke = root.join("spoke1");
         std::fs::create_dir_all(&spoke).unwrap();
-        std::fs::write(spoke.join("mise.toml"), "[tools]\n").unwrap();
+        assert!(
+            Command::new("git")
+                .arg("init")
+                .current_dir(&spoke)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false),
+            "git init required for discover_spokes test"
+        );
 
         let store = ProjectStore::new(dir.path());
         let id = store.register(sample_project("p", root.clone())).unwrap();
@@ -443,5 +475,58 @@ mod tests {
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].name, "spoke1");
         assert_eq!(found[0].path, PathBuf::from("spoke1"));
+    }
+
+    #[test]
+    fn register_rejects_unknown_admin_spoke() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("r");
+        std::fs::create_dir_all(&p).unwrap();
+        let store = ProjectStore::new(dir.path());
+        let err = store
+            .register(Project {
+                name: "x".into(),
+                path: p,
+                admin_spoke: Some("nope".into()),
+                ..Default::default()
+            })
+            .unwrap_err();
+        assert!(err.to_string().contains("admin_spoke"), "{err}");
+    }
+
+    #[test]
+    fn discover_rejected_when_admin_spoke_not_in_discovered_list() {
+        let dir = tempdir().unwrap();
+        let root = dir.path().join("proj");
+        let disk_a = root.join("legacy");
+        std::fs::create_dir_all(&disk_a).unwrap();
+        assert!(Command::new("git").arg("init").current_dir(&disk_a).status().unwrap().success());
+        let disk_b = root.join("only");
+        std::fs::create_dir_all(&disk_b).unwrap();
+        assert!(Command::new("git").arg("init").current_dir(&disk_b).status().unwrap().success());
+
+        let store = ProjectStore::new(dir.path());
+        let id = store
+            .register(Project {
+                name: "p".into(),
+                path: root.clone(),
+                spokes: vec![SpokeDescriptor {
+                    name: "keep".into(),
+                    path: PathBuf::from("keep"),
+                    labels: vec![],
+                }],
+                admin_spoke: Some("keep".into()),
+                ..Default::default()
+            })
+            .unwrap();
+
+        let discovered = store.discover_spokes(id).unwrap();
+        assert_eq!(discovered.len(), 2);
+        let patch = ProjectPatch {
+            spokes: Some(discovered),
+            ..Default::default()
+        };
+        let err = store.update(id, patch).unwrap_err();
+        assert!(err.to_string().contains("admin_spoke"), "{err}");
     }
 }

@@ -11,7 +11,7 @@ use openfang_types::backlog::{
     AcceptanceCriterion, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSearchResult,
     BacklogSnapshot, BacklogTask, DecisionStatus, DocTreeNode, TaskPriority,
 };
-use openfang_types::project::ProjectId;
+use openfang_types::project::{ProjectId, ADMIN_SPOKE_REQUIRED_MSG};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::BTreeMap;
@@ -148,6 +148,10 @@ fn map_backlog_err(e: BacklogStoreError) -> (StatusCode, Json<serde_json::Value>
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({"error": "Project not found"})),
         ),
+        BacklogStoreError::AdminSpokeRequired => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ADMIN_SPOKE_REQUIRED_MSG})),
+        ),
         BacklogStoreError::Msg(m) => (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": m})),
@@ -177,11 +181,9 @@ fn ensure_project(
         .ensure_loaded(&pid, &state.kernel.project_store)
         .map_err(map_backlog_err)?;
     if let Some(p) = state.kernel.project_store.get(pid) {
-        state.backlog_watcher.ensure_watching(
-            pid,
-            p.backlog_root(),
-            state.backlog_store.clone(),
-        );
+        if let Some(root) = p.admin_backlog_root() {
+            state.backlog_watcher.ensure_watching(pid, root, state.backlog_store.clone());
+        }
     }
     Ok(())
 }

@@ -15,6 +15,7 @@ pub mod config_reload;
 pub mod cron;
 pub mod error;
 pub mod event_bus;
+pub mod git_worktree;
 pub mod heartbeat;
 pub mod kernel;
 pub mod metering;

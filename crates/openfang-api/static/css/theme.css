@@ -193,7 +193,12 @@ body {
 
 /* Tighter letter spacing for headings */
 h1, h2, h3, .of-card-header, .stat-value, .page-header h2 { letter-spacing: -0.02em; }
-.nav-section-title, .badge, th { letter-spacing: 0.04em; }
+.nav-section-title, .badge,
+.table-wrap th,
+table.trader-heatmap-table th,
+table.trader-trades-table th {
+  letter-spacing: 0.04em;
+}
 
 /* Focus styles — accessible double-ring with glow */
 :focus-visible {

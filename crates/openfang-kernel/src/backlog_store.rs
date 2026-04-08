@@ -51,6 +51,8 @@ pub enum BacklogStoreError {
     Read(#[from] BacklogReadError),
     #[error("project not found")]
     ProjectNotFound,
+    #[error("admin spoke required")]
+    AdminSpokeRequired,
     #[error("backlog not loaded for project")]
     NotLoaded,
     #[error("entity not found: {0}")]
@@ -152,7 +154,9 @@ impl BacklogStore {
         let p = projects
             .get(*project_id)
             .ok_or(BacklogStoreError::ProjectNotFound)?;
-        let root = p.backlog_root();
+        let root = p
+            .admin_backlog_root()
+            .ok_or(BacklogStoreError::AdminSpokeRequired)?;
         let snapshot = read_all(&root)?;
         w.insert(
             *project_id,
@@ -1093,7 +1097,7 @@ fn slug_title(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openfang_types::project::Project;
+    use openfang_types::project::{Project, SpokeDescriptor};
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -1103,10 +1107,21 @@ mod tests {
         fs::File::create(p).unwrap().write_all(s.as_bytes()).unwrap();
     }
 
+    fn admin_backlog_root(repo: &Path) -> PathBuf {
+        repo.join("admin").join("backlog")
+    }
+
     fn sample_project(repo: &Path, store: &ProjectStore) -> ProjectId {
+        fs::create_dir_all(repo).unwrap();
         let p = Project {
             path: repo.to_path_buf(),
             name: "p".into(),
+            spokes: vec![SpokeDescriptor {
+                name: "admin".into(),
+                path: PathBuf::from("admin"),
+                labels: vec![],
+            }],
+            admin_spoke: Some("admin".into()),
             ..Default::default()
         };
         store.register(p).unwrap()
@@ -1119,7 +1134,7 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         let store = ProjectStore::new(&home);
         let repo = tmp.path().join("repo");
-        let root = repo.join("backlog");
+        let root = admin_backlog_root(&repo);
         write(
             &root.join("tasks/task-1 - t.md"),
             "---\nid: TASK-1\ntitle: T\nstatus: Open\ncreated_date: 2026-01-01\n---\n\n",
@@ -1143,7 +1158,7 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         let pstore = ProjectStore::new(&home);
         let repo = tmp.path().join("repo");
-        let root = repo.join("backlog");
+        let root = admin_backlog_root(&repo);
         write(
             &root.join("tasks/task-1 - t.md"),
             "---\nid: TASK-1\ntitle: T\nstatus: Open\ncreated_date: 2026-01-01\n---\n\n",
@@ -1172,7 +1187,7 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         let pstore = ProjectStore::new(&home);
         let repo = tmp.path().join("repo");
-        let root = repo.join("backlog");
+        let root = admin_backlog_root(&repo);
         write(
             &root.join("drafts/draft-1.md"),
             "---\nid: DRAFT-1\ntitle: Dr\nstatus: Draft\ncreated_date: 2026-01-01\n---\n\n",
@@ -1203,7 +1218,7 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         let pstore = ProjectStore::new(&home);
         let repo = tmp.path().join("repo");
-        let root = repo.join("backlog");
+        let root = admin_backlog_root(&repo);
         fs::create_dir_all(&root).unwrap();
         let pid = sample_project(&repo, &pstore);
         let bs = BacklogStore::new();
@@ -1235,7 +1250,7 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         let pstore = ProjectStore::new(&home);
         let repo = tmp.path().join("repo");
-        let root = repo.join("backlog");
+        let root = admin_backlog_root(&repo);
         fs::create_dir_all(&root).unwrap();
         let pid = sample_project(&repo, &pstore);
         let bs = BacklogStore::new();
@@ -1249,5 +1264,25 @@ mod tests {
             .unwrap();
         assert_eq!(m.id, "MS-1");
         assert!(root.join("milestones").read_dir().unwrap().count() >= 1);
+    }
+
+    #[test]
+    fn ensure_loaded_requires_admin_spoke() {
+        let tmp = tempdir().unwrap();
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).unwrap();
+        let store = ProjectStore::new(&home);
+        let repo = tmp.path().join("repo");
+        fs::create_dir_all(&repo).unwrap();
+        let pid = store
+            .register(Project {
+                path: repo,
+                name: "p".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        let bs = BacklogStore::new();
+        let err = bs.ensure_loaded(&pid, &store).unwrap_err();
+        assert!(matches!(err, BacklogStoreError::AdminSpokeRequired));
     }
 }

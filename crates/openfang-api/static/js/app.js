@@ -219,7 +219,6 @@ document.addEventListener('alpine:init', function() {
       } catch(e) {
         this.connected = false;
         this.lastError = e.message || 'Unknown error';
-        console.warn('[OpenFang] Status check failed:', e.message);
       }
     },
 

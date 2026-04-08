@@ -6,6 +6,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
+/// Returned by backlog APIs when a project has no admin spoke configured.
+pub const ADMIN_SPOKE_REQUIRED_MSG: &str =
+    "Admin spoke is required. Set an admin spoke for this project first.";
+
 /// Unique identifier for a registered project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProjectId(pub Uuid);
@@ -67,12 +71,13 @@ impl Default for SpokeDescriptor {
 }
 
 /// Partial update for [`Project`].
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(Debug, Clone, Default)]
 pub struct ProjectPatch {
     pub name: Option<String>,
     pub spokes: Option<Vec<SpokeDescriptor>>,
     pub pipeline_overrides: Option<ProjectPipelineOverrides>,
+    /// `None` = no change; `Some(None)` = clear; `Some(Some(name))` = set.
+    pub admin_spoke: Option<Option<String>>,
 }
 
 /// Registered OpenFang project (backlog root + spokes).
@@ -87,6 +92,9 @@ pub struct Project {
     /// Explicitly bound agent UUID strings (dashboard / API); persisted in `projects.json`.
     #[serde(default)]
     pub bound_agents: Vec<String>,
+    /// Spoke name whose `<spoke>/backlog` holds tasks, docs, and knowledge.
+    #[serde(default)]
+    pub admin_spoke: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -101,6 +109,7 @@ impl Default for Project {
             spokes: Vec::new(),
             pipeline_overrides: ProjectPipelineOverrides::default(),
             bound_agents: Vec::new(),
+            admin_spoke: None,
             created_at: now,
             updated_at: now,
         }
@@ -108,9 +117,25 @@ impl Default for Project {
 }
 
 impl Project {
-    /// `path/backlog`
-    pub fn backlog_root(&self) -> PathBuf {
-        self.path.join("backlog")
+    /// Trim and clear empty `admin_spoke` values.
+    pub fn normalize_admin_spoke_field(&mut self) {
+        self.admin_spoke = self.admin_spoke.as_ref().and_then(|s| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        });
+    }
+
+    /// `<admin_spoke_root>/backlog` when [`Self::admin_spoke`] is set and names a known spoke.
+    pub fn admin_backlog_root(&self) -> Option<PathBuf> {
+        let name = self.admin_spoke.as_ref()?.trim();
+        if name.is_empty() {
+            return None;
+        }
+        Some(self.resolve_spoke(name)?.join("backlog"))
     }
 
     /// Resolve a spoke by name to an absolute path.
@@ -150,12 +175,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backlog_root_joins_backlog() {
+    fn admin_backlog_root_requires_spoke() {
         let p = Project {
             path: PathBuf::from("/repo/root"),
+            admin_spoke: Some("admin".into()),
             ..Default::default()
         };
-        assert_eq!(p.backlog_root(), PathBuf::from("/repo/root/backlog"));
+        assert!(p.admin_backlog_root().is_none());
+
+        let p2 = Project {
+            path: PathBuf::from("/proj"),
+            admin_spoke: Some("admin".into()),
+            spokes: vec![SpokeDescriptor {
+                name: "admin".into(),
+                path: PathBuf::from("spokes/admin"),
+                labels: vec![],
+            }],
+            ..Default::default()
+        };
+        assert_eq!(
+            p2.admin_backlog_root(),
+            Some(PathBuf::from("/proj/spokes/admin/backlog"))
+        );
     }
 
     #[test]
@@ -201,6 +242,7 @@ mod tests {
         let j = r#"{"id":"550e8400-e29b-41d4-a716-446655440000","name":"n","path":"/p","spokes":[],"pipeline_overrides":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
         let p: Project = serde_json::from_str(j).unwrap();
         assert!(p.bound_agents.is_empty());
+        assert!(p.admin_spoke.is_none());
     }
 
     #[test]

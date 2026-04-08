@@ -2324,7 +2324,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             <div class="page-body">
               <div class="info-card">
                 <h4>Multi-repo backlog</h4>
-                <p>Register on-disk project roots with a <code style="color:var(--accent)">backlog/</code> tree (tasks, docs). Spokes are optional sub-workspaces. Open a project for backlog tasks, spokes, agents, and pipeline history.</p>
+                <p>Register a project root; pick one folder as the <strong>Hub</strong> — its <code style="color:var(--accent)">backlog/</code> holds tasks, docs, and knowledge. <strong>Discover</strong> finds immediate child folders that are <strong>Git work trees</strong> (same check as <code>git rev-parse --is-inside-work-tree</code>). Optional <code>mise.toml</code> is shown as a badge when present. Open a spoke and use <strong>Set as Hub</strong> on its detail view.</p>
               </div>
               <div x-show="projectsLoading" class="loading-state"><div class="spinner"></div><span>Loading projects...</span></div>
               <div x-show="!projectsLoading && projectsError" class="error-state">
@@ -2455,7 +2455,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small is-fullwidth" x-show="detailTab === 'pert'" @click="loadPertTab(true)">
                     <i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh chart</span>
                   </button>
-                  <button type="button" class="button is-primary is-small is-fullwidth" x-show="detailTab === 'spokes'" @click="discoverSpokes()">
+                  <button type="button" class="button is-primary is-small is-fullwidth" x-show="detailTab === 'spokes' && !spokesDetailSpoke" @click="discoverSpokes()">
                     <i class="fa fa-search" aria-hidden="true"></i><span>Discover spokes</span>
                   </button>
                 </div>
@@ -2504,7 +2504,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <button type="button" class="button is-ghost is-small" x-show="detailTab === 'pert'" @click="loadPertTab(true)">
                       <i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh</span>
                     </button>
-                    <button type="button" class="button is-primary is-small" x-show="detailTab === 'spokes'" @click="discoverSpokes()">
+                    <button type="button" class="button is-primary is-small" x-show="detailTab === 'spokes' && !spokesDetailSpoke" @click="discoverSpokes()">
                       <i class="fa fa-search" aria-hidden="true"></i><span>Discover spokes</span>
                     </button>
                   </div>
@@ -2512,7 +2512,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
             </div>
             <div class="page-body page-body--project">
-              <div x-show="detailTab === 'overview'" class="mt-4">
+              <template x-if="detailTab === 'overview'">
+              <div class="mt-4">
                 <div x-show="detailLoading.overview" class="loading-state"><div class="spinner"></div><span>Loading overview…</span></div>
                 <div x-show="detailErrors.overview && !detailLoading.overview" class="error-state">
                   <span class="error-icon">!</span>
@@ -2648,6 +2649,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </div>
                 </div>
               </div>
+              </template>
 
               <!-- task list table (TASK-33) -->
               <div x-show="detailTab === 'backlog'" class="mt-4">
@@ -3126,36 +3128,394 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
               </div>
 
-              <div x-show="detailTab === 'spokes'" class="mt-4">
+              <div x-show="detailTab === 'spokes'" class="project-spokes-tab">
                 <div x-show="detailLoading.spokes" class="loading-state"><div class="spinner"></div><span>Loading spokes...</span></div>
                 <div x-show="detailErrors.spokes && !detailLoading.spokes" class="error-state">
                   <span class="error-icon">!</span>
                   <p x-text="detailErrors.spokes"></p>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('spokes')">Retry</button>
                 </div>
-                <div x-show="!detailLoading.spokes && !detailErrors.spokes">
-                  <div class="of-card-grid" x-show="detailSpokes.length">
-                    <template x-for="s in detailSpokes" :key="s.name + s.path">
-                      <div class="of-card">
-                        <div class="of-card-header" style="margin:0" x-text="s.name"></div>
-                        <div class="of-card-meta text-xs mt-2" :title="s.path" x-text="truncatePath(s.path, 72)"></div>
-                        <div class="mt-2">
-                          <span class="badge" :class="s.mise_toml_exists ? 'badge-success' : 'badge-dim'" x-text="s.mise_toml_exists ? 'mise.toml' : 'no mise.toml'"></span>
+                <div x-show="!detailLoading.spokes && !detailErrors.spokes && !spokesDetailSpoke" class="project-spokes-tab__fill">
+                  <div class="of-hub-spoke-map" x-show="detailSpokes.length">
+                    <div class="of-hub-spoke-map__header is-flex is-flex-wrap is-justify-content-space-between is-align-items-flex-end mb-3" style="gap:0.75rem">
+                      <div>
+                        <h3 class="of-hub-spoke-map__heading mb-1">Spokes topology</h3>
+                        <p class="is-size-7 mb-0" style="color:var(--text-dim)">Hub at center, spokes on the ring. Drag empty space to pan.</p>
+                      </div>
+                      <span class="is-size-7" style="color:var(--text-dim)"><i class="fa fa-arrows-alt" aria-hidden="true"></i> Pan</span>
+                    </div>
+                    <div
+                      class="of-topology-viewport"
+                      role="application"
+                      aria-label="Spokes topology map, drag background to pan"
+                      :class="{ 'of-topology-viewport--grabbing': topologyPanning }"
+                      @pointerdown="topologyViewportPointerDown($event)"
+                    >
+                      <div class="of-topology-surface" :style="topologySurfaceStyle()">
+                        <div class="of-topology-edges" aria-hidden="true">
+                          <template x-for="(edge, edgeIdx) in spokeTopologyEdges()" :key="edge.key || ('edge-fallback-' + edgeIdx)">
+                            <div
+                              class="of-topology-edge-bar"
+                              :class="{ 'of-topology-edge-bar--muted': edge.muted }"
+                              :style="edge.style"
+                            ></div>
+                          </template>
                         </div>
-                        <template x-if="s.last_quality_gate">
-                          <div class="text-xs mt-2">
-                            <span class="text-dim">Last quality gate:</span>
-                            <span class="badge ml-1" :class="(s.last_quality_gate.exit_code === 0) ? 'badge-success' : 'badge-warn'" x-text="'exit ' + (s.last_quality_gate.exit_code != null ? s.last_quality_gate.exit_code : '?')"></span>
-                            <span class="text-dim ml-1" x-text="s.last_quality_gate.timestamp || ''"></span>
+                        <template x-if="hubSpokeFromList()">
+                          <button
+                            type="button"
+                            class="of-topology-node of-topology-hub of-topology-hub--set"
+                            :style="'left:' + spokeTopologyModel().cx + 'px;top:' + spokeTopologyModel().cy + 'px'"
+                            :aria-label="'Open Hub spoke ' + (hubSpokeFromList().name || '')"
+                            @click="openSpokeDetail(hubSpokeFromList())"
+                          >
+                            <span class="of-topology-hub__shell" aria-hidden="true">
+                              <span class="of-topology-hub__glyph"><i class="fa fa-server"></i></span>
+                            </span>
+                            <span class="of-topology-hub__content">
+                              <span class="of-topology-hub__role">Hub</span>
+                              <span class="of-topology-hub__name" x-text="hubSpokeFromList().name"></span>
+                              <span class="of-topology-hub__path font-mono" :title="hubSpokeFromList().path || ''" x-text="truncatePath(hubSpokeFromList().path || '', 40)"></span>
+                            </span>
+                          </button>
+                        </template>
+                        <template x-if="!hubSpokeFromList()">
+                          <div
+                            class="of-topology-node of-topology-hub of-topology-hub--empty"
+                            :style="'left:' + spokeTopologyModel().cx + 'px;top:' + spokeTopologyModel().cy + 'px'"
+                            role="note"
+                          >
+                            <span class="of-topology-hub__shell of-topology-hub__shell--empty" aria-hidden="true">
+                              <span class="of-topology-hub__glyph"><i class="fa fa-circle-o"></i></span>
+                            </span>
+                            <span class="of-topology-hub__content">
+                              <span class="of-topology-hub__role">Hub</span>
+                              <span class="of-topology-hub__name">Not set</span>
+                              <span class="of-topology-hub__path">Open a spoke → <strong>Set as Hub</strong></span>
+                            </span>
                           </div>
                         </template>
+                        <template x-for="(slot, slotIdx) in spokeTopologyModel().slots" :key="slot.discover ? ('node-discover-' + slotIdx) : ('node-' + slotIdx + '-' + String(slot.spoke && slot.spoke.name || '') + '-' + String(slot.spoke && slot.spoke.path || ''))">
+                          <button
+                            type="button"
+                            class="of-topology-node of-topology-rim"
+                            :class="{ 'of-topology-rim--discover': slot.discover }"
+                            :style="'left:' + slot.x + 'px;top:' + slot.y + 'px'"
+                            :aria-label="slot.discover ? 'Discover spokes' : ('Open spoke ' + ((slot.spoke && slot.spoke.name) || ''))"
+                            :title="!slot.discover && slot.spoke ? (slot.spoke.path || '') : ''"
+                            @click="slot.discover ? discoverSpokes() : openSpokeDetail(slot.spoke)"
+                          >
+                            <span class="of-topology-rim__inner" x-show="slot.discover === true">
+                              <span class="of-topology-rim__body of-topology-rim__body--discover">
+                                <span class="of-topology-rim__mark of-topology-rim__mark--discover" aria-hidden="true"><i class="fa fa-plus"></i></span>
+                                <span class="of-topology-rim__copy">
+                                  <span class="of-topology-rim__title">Discover</span>
+                                  <span class="of-topology-rim__sub">Find git work trees</span>
+                                </span>
+                              </span>
+                            </span>
+                            <span class="of-topology-rim__inner" x-show="slot.discover !== true">
+                              <span class="of-topology-rim__body">
+                                <span class="of-topology-rim__mark" x-text="(slot.spoke && slot.spoke.name && String(slot.spoke.name).trim()) ? String(slot.spoke.name).trim().charAt(0).toUpperCase() : '?'"></span>
+                                <span class="of-topology-rim__copy">
+                                  <span class="of-topology-rim__title" x-text="slot.spoke ? slot.spoke.name : ''"></span>
+                                  <span class="of-topology-rim__path font-mono" x-text="slot.spoke ? truncatePath(slot.spoke.path || '', 30) : ''"></span>
+                                  <span class="of-topology-rim__meta" x-show="slot.spoke && (slot.spoke.is_git_repo || slot.spoke.mise_toml_exists)">
+                                    <span class="of-topology-rim__chip of-topology-rim__chip--git" x-show="slot.spoke && slot.spoke.is_git_repo">git</span>
+                                    <span class="of-topology-rim__chip" x-show="slot.spoke && slot.spoke.mise_toml_exists">mise</span>
+                                  </span>
+                                </span>
+                              </span>
+                            </span>
+                          </button>
+                        </template>
                       </div>
-                    </template>
+                    </div>
                   </div>
-                  <div class="empty-state py-8" x-show="!detailSpokes.length">
+                  <div class="empty-state py-8 project-spokes-tab__empty" x-show="!detailSpokes.length">
                     <p class="text-dim text-sm">No spokes configured. Use Discover after adding spokes to the project.</p>
                   </div>
                 </div>
+                <template x-if="!detailLoading.spokes && !detailErrors.spokes && spokesDetailSpoke">
+                <div class="project-spokes-tab__fill project-spokes-tab__detail of-spoke-detail-page of-spoke-git-panel">
+                  <nav class="level is-mobile of-spoke-git__toolbar mb-5" aria-label="Spoke navigation">
+                    <div class="level-left">
+                      <div class="level-item">
+                        <button type="button" class="button is-ghost is-small" @click="closeSpokeDetail()">
+                          <i class="fa fa-arrow-left" aria-hidden="true"></i>
+                          <span>Back</span>
+                        </button>
+                      </div>
+                      <div class="level-item is-flex is-align-items-center is-flex-wrap" style="gap:0.35rem 0.5rem">
+                        <span class="of-spoke-git__crumb">Spokes</span>
+                        <span class="of-spoke-git__crumb">/</span>
+                        <span class="is-size-6 has-text-weight-semibold" x-text="spokesDetailSpoke"></span>
+                      </div>
+                    </div>
+                    <div class="level-right">
+                      <div class="level-item">
+                        <div class="buttons are-small">
+                          <button
+                            type="button"
+                            class="button is-light is-small"
+                            x-show="spokeDetailSubview === 'workspace'"
+                            :disabled="spokeDetailLoading || spokeGitLoading || spokeGitMutating || spokeGitDiffLoading || spokeHistoryLoading || spokeHistoryDiffLoading"
+                            @click="openSpokeHistory()"
+                          >
+                            <i class="fa fa-history" aria-hidden="true"></i>
+                            <span>History</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="button is-ghost is-small"
+                            x-show="spokeDetailSubview === 'history'"
+                            :disabled="spokeDetailLoading || spokeGitLoading || spokeGitMutating || spokeGitDiffLoading || spokeHistoryLoading || spokeHistoryDiffLoading"
+                            @click="backSpokeWorkspaceFromHistory()"
+                          >
+                            <span>Workspace</span>
+                          </button>
+                          <button
+                            type="button"
+                            class="button is-light is-small"
+                            :disabled="spokeDetailLoading || spokeGitLoading || spokeGitMutating || spokeGitDiffLoading || spokeHistoryLoading || spokeHistoryDiffLoading"
+                            @click="refreshSpokeGitPanel()"
+                          >
+                            <i class="fa fa-refresh" aria-hidden="true"></i>
+                            <span>Refresh git</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </nav>
+                  <div x-show="spokeDetailLoading" class="loading-state py-4"><div class="spinner"></div><span>Loading spoke…</span></div>
+                  <div x-show="spokeDetailError && !spokeDetailLoading" class="error-state mb-4">
+                    <span class="error-icon">!</span>
+                    <p x-text="spokeDetailError"></p>
+                  </div>
+                  <template x-if="spokeDetailRow && !spokeDetailLoading">
+                  <div class="of-card of-spoke-git__meta mb-5">
+                    <div class="of-card-header mb-2" x-text="spokeDetailRow.name || spokesDetailSpoke"></div>
+                    <p class="text-xs font-mono break-all mb-3" style="line-height:1.5" x-text="spokeDetailRow.resolved_path || ''"></p>
+                    <div class="is-flex is-flex-wrap is-align-items-center" style="gap:0.5rem">
+                      <span class="badge" :class="spokeDetailRow.is_git_repo ? 'badge-success' : 'badge-dim'" x-text="spokeDetailRow.is_git_repo ? 'git worktree' : 'no git'"></span>
+                      <span class="badge" :class="spokeDetailRow.mise_toml_exists ? 'badge-info' : 'badge-dim'" x-text="spokeDetailRow.mise_toml_exists ? 'mise.toml' : 'no mise.toml'"></span>
+                      <span class="badge badge-info" x-show="spokeDetailRow.is_admin">Hub</span>
+                      <button
+                        type="button"
+                        class="button is-light is-small"
+                        x-show="!spokeDetailRow.is_admin"
+                        @click.stop="setAdminSpoke(spokesDetailSpoke)"
+                      >Set as Hub</button>
+                    </div>
+                  </div>
+                  </template>
+                  <div x-show="spokeGitLoading && !spokeDetailLoading" class="loading-state py-4"><div class="spinner"></div><span>Loading git…</span></div>
+                  <div x-show="spokeGitError && !spokeGitLoading" class="error-state mb-4">
+                    <span class="error-icon">!</span>
+                    <p x-text="spokeGitError"></p>
+                  </div>
+                  <template x-if="spokeGitStatusPayload && !spokeGitStatusPayload.is_git_repo">
+                    <p class="text-dim text-sm">Not a git repository.</p>
+                  </template>
+                  <template x-if="spokeGitStatusPayload && spokeGitStatusPayload.is_git_repo && spokeDetailSubview === 'workspace'">
+                  <div class="box of-spoke-git__workspace">
+                    <div class="is-flex is-flex-wrap is-align-items-center mb-5" style="gap:0.5rem">
+                      <span class="badge badge-info" x-text="(spokeGitStatusPayload.status && spokeGitStatusPayload.status.branch && spokeGitStatusPayload.status.branch.detached) ? 'detached' : 'branch'"></span>
+                      <span class="badge badge-dim" x-text="(spokeGitStatusPayload.status && spokeGitStatusPayload.status.branch && spokeGitStatusPayload.status.branch.branch) ? spokeGitStatusPayload.status.branch.branch : '—'"></span>
+                      <span class="badge" :class="spokeGitDirty() ? 'badge-warn' : 'badge-success'" x-text="spokeGitDirty() ? 'dirty' : 'clean'"></span>
+                      <span class="is-size-7" style="color:var(--text-dim)" x-show="spokeGitStatusPayload.status && spokeGitStatusPayload.status.branch">
+                        ↑<span x-text="spokeGitStatusPayload.status.branch.ahead || 0"></span>
+                        <span class="mx-1">·</span>
+                        ↓<span x-text="spokeGitStatusPayload.status.branch.behind || 0"></span>
+                      </span>
+                    </div>
+
+                    <div class="columns is-multiline is-mobile is-variable is-2 mb-5">
+                      <div class="column is-12-mobile is-6-tablet">
+                        <div class="field mb-0">
+                          <label class="label">Switch to branch</label>
+                          <div class="field has-addons mb-0">
+                            <div class="control is-expanded">
+                              <div class="select is-small is-fullwidth">
+                                <select x-model="gitBranchSwitchName" :disabled="spokeGitMutating">
+                                  <option value="">Choose branch…</option>
+                                  <template x-for="b in spokeGitBranchesList()" :key="b.name">
+                                    <option :value="b.name" x-text="b.name + (b.current ? ' (current)' : '')" :disabled="b.current"></option>
+                                  </template>
+                                </select>
+                              </div>
+                            </div>
+                            <div class="control">
+                              <button type="button" class="button is-light is-small" :disabled="spokeGitMutating || !gitBranchSwitchName" @click="gitCheckoutSpoke(false)">Switch</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="column is-12-mobile is-6-tablet">
+                        <div class="field mb-0">
+                          <label class="label">New branch</label>
+                          <div class="field has-addons mb-0">
+                            <div class="control is-expanded">
+                              <input type="text" class="input is-small" x-model="gitNewBranchName" placeholder="Branch name" :disabled="spokeGitMutating" autocomplete="off">
+                            </div>
+                            <div class="control">
+                              <button type="button" class="button is-primary is-small" :disabled="spokeGitMutating || !gitNewBranchName" @click="gitCheckoutSpoke(true)">Create</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div class="column is-12-mobile is-12-tablet is-narrow-desktop is-flex is-align-items-flex-end">
+                        <div class="buttons are-small mb-0">
+                          <button type="button" class="button is-light is-small" :disabled="spokeGitMutating" @click="gitStageAllSpoke()">Stage all</button>
+                          <button type="button" class="button is-light is-small" :disabled="spokeGitMutating" @click="gitPushSpoke()">Push</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="field mb-5">
+                      <label class="label">Commit message</label>
+                      <div class="field has-addons is-fullwidth mb-0">
+                        <div class="control is-expanded">
+                          <input type="text" class="input is-small" x-model="gitCommitMessage" placeholder="Describe your commit" :disabled="spokeGitMutating" autocomplete="off">
+                        </div>
+                        <div class="control">
+                          <button type="button" class="button is-primary is-small" :disabled="spokeGitMutating || !(gitCommitMessage && String(gitCommitMessage).trim())" @click="gitCommitSpoke()">Commit</button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div class="table-container mb-5" x-show="spokeGitFilesList().length">
+                      <table class="table is-fullwidth is-narrow is-hoverable mb-0">
+                        <thead>
+                          <tr>
+                            <th>File</th>
+                            <th style="width:4rem">XY</th>
+                            <th class="has-text-right" style="width:11rem">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <template x-for="f in spokeGitFilesList()" :key="f.path">
+                            <tr>
+                              <td class="font-mono break-all" x-text="f.path"></td>
+                              <td class="has-text-grey" x-text="f.xy || ''"></td>
+                              <td class="has-text-right">
+                                <div class="buttons are-small is-justify-content-flex-end">
+                                  <button type="button" class="button is-primary is-light is-small" :disabled="spokeGitMutating || !f.unstaged" @click="gitStageFile(f.path)" x-show="f.untracked || f.unstaged">Stage</button>
+                                  <button type="button" class="button is-ghost is-small" :disabled="spokeGitMutating || !f.staged" @click="gitUnstageFile(f.path)" x-show="f.staged">Unstage</button>
+                                </div>
+                              </td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <div class="of-spoke-git__diff-section pt-5">
+                      <div class="level is-mobile mb-4">
+                        <div class="level-left">
+                          <div class="level-item">
+                            <span class="is-size-6 has-text-weight-semibold">Diff (vs HEAD)</span>
+                          </div>
+                        </div>
+                        <div class="level-right">
+                          <div class="level-item">
+                            <div class="buttons are-small">
+                              <button type="button" class="button is-primary is-small" @click="loadSpokeGitDiff()" :disabled="spokeGitLoading || spokeGitMutating || spokeGitDiffLoading">
+                                <span x-text="spokeGitDiffLoaded ? 'Reload diff' : 'Load diff'"></span>
+                              </button>
+                              <button type="button" class="button is-ghost is-small" @click="toggleSpokeDiffLayout()" :disabled="!spokeGitDiffLoaded || spokeGitDiffLoading || !String(spokeGitDiffText || '').trim()">Toggle side-by-side</button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <p class="is-size-7 mb-3" style="color:var(--text-dim)" x-show="!spokeGitDiffLoaded && !spokeGitDiffLoading">
+                        Not loaded by default. The server returns at most ~512 KiB; use <code class="font-mono">git diff</code> locally for full output.
+                      </p>
+                      <div x-show="spokeGitDiffLoading" class="loading-state py-3 mb-3"><div class="spinner"></div><span>Loading diff…</span></div>
+                      <p class="is-size-7 mb-3" style="color:var(--warning)" x-show="spokeGitDiffTruncated && spokeGitDiffLoaded && String(spokeGitDiffText || '').trim()">
+                        Diff truncated for display (server cap <span x-text="spokeGitDiffMaxBytes || '—'"></span> bytes). Use <code class="font-mono">git diff</code> locally for the full change set.
+                      </p>
+                      <div id="spokeDiffContainer" x-ref="spokeDiffContainer" class="of-diff2html-wrap mt-2" x-show="spokeGitDiffLoaded || spokeGitDiffLoading"></div>
+                    </div>
+                  </div>
+                  </template>
+                  <div x-show="spokeDetailSubview === 'history'" class="box of-spoke-git__history">
+                    <div x-show="spokeGitLoading && !spokeGitStatusPayload" class="loading-state py-3 mb-3"><div class="spinner"></div><span>Loading git…</span></div>
+                    <p class="text-dim text-sm mb-0" x-show="spokeGitStatusPayload && !spokeGitStatusPayload.is_git_repo">Not a git repository.</p>
+                    <template x-if="spokeGitStatusPayload && spokeGitStatusPayload.is_git_repo">
+                    <div>
+                    <div class="level is-mobile mb-4">
+                      <div class="level-left">
+                        <div class="level-item">
+                          <span class="is-size-6 has-text-weight-semibold" x-show="!spokeHistoryCommitSha">Commit history</span>
+                          <button
+                            type="button"
+                            class="button is-ghost is-small mb-0"
+                            x-show="spokeHistoryCommitSha"
+                            @click="backSpokeHistoryList()"
+                          >
+                            <i class="fa fa-arrow-left" aria-hidden="true"></i>
+                            <span>Commits</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <p class="is-size-7 mb-3" style="color:var(--text-dim)">Log follows the current checked-out branch (<code class="font-mono">HEAD</code>).</p>
+                    <div x-show="spokeHistoryLoading" class="loading-state py-3 mb-3"><div class="spinner"></div><span>Loading log…</span></div>
+                    <p class="is-size-7 mb-3" style="color:var(--danger)" x-show="spokeHistoryError && !spokeHistoryLoading" x-text="spokeHistoryError"></p>
+                    <div class="table-container mb-4" x-show="!spokeHistoryCommitSha && spokeHistoryEntries.length">
+                      <table class="table is-fullwidth is-narrow is-hoverable mb-0">
+                        <thead>
+                          <tr>
+                            <th style="width:7rem">SHA</th>
+                            <th>Subject</th>
+                            <th style="width:10rem">Author</th>
+                            <th style="width:12rem">Date</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <template x-for="c in spokeHistoryEntries" :key="c.oid">
+                            <tr style="cursor:pointer" role="button" tabindex="0" @click="selectSpokeHistoryCommit(c)" @keydown.enter.prevent="selectSpokeHistoryCommit(c)">
+                              <td class="font-mono is-size-7" x-text="c.short_oid || ''"></td>
+                              <td x-text="c.subject || ''"></td>
+                              <td class="is-size-7" x-text="c.author || ''"></td>
+                              <td class="is-size-7 has-text-grey" x-text="c.date || ''"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                    <p class="text-dim text-sm mb-4" x-show="!spokeHistoryCommitSha && !spokeHistoryLoading && !spokeHistoryError && !spokeHistoryEntries.length">No commits found.</p>
+                    <div class="of-spoke-git__diff-section pt-2" x-show="spokeHistoryCommitSha">
+                      <div class="level is-mobile mb-4">
+                        <div class="level-left">
+                          <div class="level-item">
+                            <span class="is-size-6 has-text-weight-semibold">Diff</span>
+                            <span class="is-size-7 font-mono ml-2 has-text-grey" x-text="spokeHistoryCommitSha || ''"></span>
+                          </div>
+                        </div>
+                        <div class="level-right">
+                          <div class="level-item">
+                            <button
+                              type="button"
+                              class="button is-ghost is-small"
+                              @click="toggleSpokeHistoryDiffLayout()"
+                              :disabled="!spokeHistoryDiffLoaded || spokeHistoryDiffLoading || !String(spokeHistoryDiffText || '').trim()"
+                            >Toggle side-by-side</button>
+                          </div>
+                        </div>
+                      </div>
+                      <div x-show="spokeHistoryDiffLoading" class="loading-state py-3 mb-3"><div class="spinner"></div><span>Loading diff…</span></div>
+                      <p class="is-size-7 mb-3" style="color:var(--warning)" x-show="spokeHistoryDiffTruncated && spokeHistoryDiffLoaded && String(spokeHistoryDiffText || '').trim()">
+                        Diff truncated for display (server cap <span x-text="spokeHistoryDiffMaxBytes || '—'"></span> bytes).
+                      </p>
+                      <div id="spokeHistoryDiffContainer" class="of-diff2html-wrap mt-2" x-show="spokeHistoryDiffLoaded || spokeHistoryDiffLoading"></div>
+                    </div>
+                    </div>
+                    </template>
+                  </div>
+                </div>
+                </template>
               </div>
 
               <div x-show="detailTab === 'agents'" class="mt-4">
@@ -3301,6 +3661,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
               <div class="form-group"><label>Name</label><input class="form-input" x-model="registerForm.name" placeholder="my-monorepo"></div>
               <div class="form-group"><label>Path</label><input class="form-input" x-model="registerForm.path" placeholder="/path/to/repo"></div>
+              <div class="form-group"><label>Hub spoke (optional)</label><input class="form-input" x-model="registerForm.adminSpoke" placeholder="name of the spoke folder that holds backlog/"></div>
               <p class="text-xs text-dim mb-2">Absolute path to the project root (expects <code style="color:var(--accent)">backlog/</code> for tasks and docs).</p>
               <p class="text-xs text-danger mb-2" x-show="registerError" x-text="registerError"></p>
             </div>
@@ -6350,4 +6711,4 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
 <!-- Toast notification container -->
 <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
-<script>if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}</script>
+<script nonce="__NONCE__">if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){});}</script>

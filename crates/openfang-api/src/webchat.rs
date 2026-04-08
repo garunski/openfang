@@ -35,6 +35,20 @@ const FAVICON_ICO: &[u8] = include_bytes!("../static/favicon.ico");
 const FA4_WOFF2: &[u8] = include_bytes!("../static/vendor/fa4/fontawesome-webfont.woff2");
 const FA4_WOFF: &[u8] = include_bytes!("../static/vendor/fa4/fontawesome-webfont.woff");
 
+/// Diff2Html stylesheet — loaded inside a shadow root so dashboard CSS cannot break layout.
+const DIFF2HTML_CSS: &[u8] = include_bytes!("../static/vendor/diff2html/diff2html.min.css");
+
+/// GET /vendor/diff2html/diff2html.min.css — for spoke git diff (shadow DOM; not bundled in main HTML).
+pub async fn diff2html_css() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+            (header::CACHE_CONTROL, "public, max-age=86400, immutable"),
+        ],
+        DIFF2HTML_CSS,
+    )
+}
+
 /// GET /vendor/fa4/{name} — Font Awesome 4 webfonts for the dashboard (public; no auth header on @font-face fetches).
 pub async fn fa4_font(axum::extract::Path(name): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
     let (bytes, ct): (&[u8], &'static str) = match name.as_str() {
@@ -177,6 +191,9 @@ const WEBCHAT_HTML: &str = concat!(
     "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/vendor/mermaid.min.js"),
     "\n</script>\n",
+    "<script nonce=\"__NONCE__\">\n",
+    include_str!("../static/vendor/diff2html/diff2html-ui.min.js"),
+    "\n</script>\n",
     // App code
     "<script nonce=\"__NONCE__\">\n",
     include_str!("../static/js/api.js"),
@@ -265,6 +282,19 @@ mod dashboard_embed_tests {
             "expected spokes discover action"
         );
         assert!(
+            super::WEBCHAT_HTML.contains("refreshSpokeGitPanel")
+                && super::WEBCHAT_HTML.contains("spokeDiffContainer")
+                && super::WEBCHAT_HTML.contains("openSpokeHistory")
+                && super::WEBCHAT_HTML.contains("spokeHistoryDiffContainer")
+                && super::WEBCHAT_HTML.contains("hubSpokeFromList")
+                && super::WEBCHAT_HTML.contains("of-hub-spoke-map")
+                && super::WEBCHAT_HTML.contains("of-topology-viewport")
+                && super::WEBCHAT_HTML.contains("topologySurfaceStyle")
+                && super::WEBCHAT_HTML.contains("spokeTopologyEdges")
+                && super::WEBCHAT_HTML.contains("project-spokes-tab"),
+            "expected spoke git + diff + history + hub topology wiring"
+        );
+        assert!(
             super::WEBCHAT_HTML.contains("openBacklogTaskDetail"),
             "expected backlog task drill-down"
         );
@@ -314,6 +344,10 @@ mod dashboard_embed_tests {
             super::WEBCHAT_HTML.contains("of-mermaid-pending")
                 && super::WEBCHAT_HTML.contains("renderMermaidIn"),
             "expected Mermaid markdown wiring"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("nonce=\"__NONCE__\">if('serviceWorker'"),
+            "expected PWA service worker bootstrap script to carry CSP nonce"
         );
     }
 }

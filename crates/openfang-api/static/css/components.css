@@ -209,13 +209,14 @@ a.button:active {
   background: transparent;
 }
 
-table {
+/* Scoped dashboard tables only — global `td`/`th` rules break third-party widgets (e.g. Diff2Html). */
+.table-wrap table {
   width: 100%;
   border-collapse: collapse;
   font-size: 12px;
 }
 
-th {
+.table-wrap th {
   text-align: left;
   padding: 10px 14px;
   background: var(--surface3);
@@ -228,14 +229,56 @@ th {
   white-space: nowrap;
 }
 
-td {
+.table-wrap td {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   vertical-align: top;
 }
 
-tr:last-child td { border-bottom: none; }
-tr:hover td { background: var(--surface2); }
+.table-wrap tr:last-child td {
+  border-bottom: none;
+}
+.table-wrap tr:hover td {
+  background: var(--surface2);
+}
+
+/* Analytics trader grids (no .table-wrap wrapper) */
+table.trader-heatmap-table,
+table.trader-trades-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+table.trader-heatmap-table th,
+table.trader-heatmap-table td,
+table.trader-trades-table th,
+table.trader-trades-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: top;
+}
+
+table.trader-heatmap-table th,
+table.trader-trades-table th {
+  text-align: left;
+  background: var(--surface3);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-dim);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+table.trader-heatmap-table tr:last-child td,
+table.trader-trades-table tr:last-child td {
+  border-bottom: none;
+}
+table.trader-heatmap-table tr:hover td,
+table.trader-trades-table tr:hover td {
+  background: var(--surface2);
+}
 
 /* Forms */
 .form-group {
@@ -5490,6 +5533,473 @@ mark.search-highlight {
   border-radius: 3px;
   flex-shrink: 0;
   border: 1px solid var(--border-subtle);
+}
+
+/* Spoke detail: allow flex column to shrink; diff uses Diff2Html’s own layout (do not nest overflow). */
+.of-spoke-detail-page {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Spokes list — whole card opens detail */
+.of-spoke-list-card {
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.of-spoke-list-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Spokes topology (radial hub + rim, pan viewport) — fills tab via .project-spokes-tab flex chain */
+.of-hub-spoke-map {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.of-hub-spoke-map__header {
+  flex-shrink: 0;
+}
+.of-hub-spoke-map__heading {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+}
+.of-topology-viewport {
+  position: relative;
+  width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background-color: var(--surface);
+  background-image:
+    radial-gradient(ellipse 85% 70% at 50% 42%, var(--accent-subtle) 0%, transparent 55%),
+    radial-gradient(circle at 20% 80%, var(--info-subtle) 0%, transparent 35%),
+    radial-gradient(var(--border-subtle) 1px, transparent 1px);
+  background-size: 100% 100%, 100% 100%, 20px 20px;
+  touch-action: none;
+  cursor: grab;
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.of-topology-viewport .of-topology-node {
+  user-select: text;
+  -webkit-user-select: text;
+}
+.of-topology-viewport--grabbing {
+  cursor: grabbing;
+}
+/* Fixed graph size — must match spokeTopologyModel() W/H in projects.js */
+.of-topology-surface {
+  --of-topology-w: 1100px;
+  --of-topology-h: 800px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--of-topology-w);
+  height: var(--of-topology-h);
+  margin-left: calc(var(--of-topology-w) / -2);
+  margin-top: calc(var(--of-topology-h) / -2);
+  transform-origin: center center;
+  will-change: transform;
+}
+.of-topology-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+.of-topology-edge-bar {
+  position: absolute;
+  height: 0;
+  box-sizing: border-box;
+  border-top: 2px dashed var(--accent);
+  opacity: 0.35;
+  pointer-events: none;
+  filter: drop-shadow(0 0 6px var(--accent-glow));
+}
+.of-topology-edge-bar--muted {
+  border-top-color: var(--border-light);
+  opacity: 0.4;
+  filter: none;
+}
+.of-topology-node {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+}
+/* Hub — horizontal “command module” with gradient ring */
+.of-topology-hub {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.85rem;
+  width: 15rem;
+  max-width: min(15rem, 88vw);
+  min-width: 0;
+  padding: 0.7rem 1rem 0.7rem 0.75rem;
+  border-radius: var(--radius-xl);
+  text-align: left;
+  line-height: 1.3;
+  z-index: 3;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast);
+}
+.of-topology-hub__shell {
+  flex-shrink: 0;
+  padding: 3px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--accent-light) 0%, var(--accent-dim) 55%, var(--accent) 100%);
+  box-shadow: 0 0 20px -6px var(--accent-glow);
+}
+.of-topology-hub__shell--empty {
+  background: linear-gradient(145deg, var(--border-light), var(--border));
+  box-shadow: none;
+}
+.of-topology-hub__glyph {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 3.1rem;
+  height: 3.1rem;
+  border-radius: 50%;
+  margin: 0;
+  background: linear-gradient(160deg, var(--surface2) 0%, var(--surface3) 100%);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  font-size: 1.2rem;
+}
+.of-topology-hub--set .of-topology-hub__glyph {
+  background: linear-gradient(165deg, var(--surface) 0%, var(--bg-elevated) 100%);
+  border-color: rgba(255, 92, 0, 0.35);
+  color: var(--accent-light);
+}
+.of-topology-hub--empty .of-topology-hub__glyph {
+  color: var(--text-dim);
+}
+.of-topology-hub__content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  min-width: 0;
+  flex: 1;
+}
+.of-topology-hub--set {
+  border: 1px solid var(--border);
+  background: linear-gradient(155deg, var(--surface) 0%, var(--surface2) 55%, var(--bg-elevated) 100%);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--accent-subtle), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+[data-theme="light"] .of-topology-hub--set {
+  box-shadow: var(--shadow-md), 0 0 0 1px var(--accent-subtle), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+.of-topology-hub--set:hover {
+  transform: translate(-50%, calc(-50% - 3px));
+  box-shadow: var(--shadow-lg), 0 0 0 1px var(--accent), 0 12px 40px -12px var(--accent-glow);
+}
+.of-topology-hub--set:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.of-topology-hub--empty {
+  border: 1px dashed var(--border-light);
+  background: linear-gradient(145deg, var(--bg) 0%, var(--surface) 100%);
+  color: var(--text);
+  cursor: default;
+  font: inherit;
+  box-shadow: var(--shadow-xs), inset 0 0 0 1px var(--border-subtle);
+}
+.of-topology-hub__role {
+  font-size: 0.58rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--accent);
+}
+.of-topology-hub__name {
+  font-size: 0.98rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.of-topology-hub__path {
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.of-topology-hub__path strong {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+/* Rim spokes — compact row cards with initial “signal” mark */
+.of-topology-rim {
+  display: block;
+  width: auto;
+  min-width: 10.5rem;
+  max-width: min(12.5rem, 46vw);
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  line-height: 1.25;
+  transition: transform var(--transition-fast);
+  filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.06));
+}
+[data-theme="dark"] .of-topology-rim {
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.35));
+}
+.of-topology-rim:hover {
+  transform: translate(-50%, calc(-50% - 4px));
+}
+.of-topology-rim:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.of-topology-rim:hover .of-topology-rim__body,
+.of-topology-rim:focus-visible .of-topology-rim__body {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-md), 0 0 28px -10px var(--accent-glow), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.of-topology-rim__inner {
+  display: block;
+  width: 100%;
+  min-width: 0;
+}
+.of-topology-rim__body {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.5rem 0.65rem 0.5rem 0.5rem;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: linear-gradient(168deg, var(--surface) 0%, var(--bg-elevated) 100%);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+[data-theme="light"] .of-topology-rim__body {
+  box-shadow: var(--shadow-sm), inset 0 1px 0 rgba(255, 255, 255, 0.75);
+}
+.of-topology-rim__body--discover {
+  border-style: dashed;
+  border-color: var(--border-light);
+  background: linear-gradient(168deg, var(--bg-elevated) 0%, var(--surface) 100%);
+}
+.of-topology-rim--discover:hover .of-topology-rim__body--discover {
+  border-style: solid;
+}
+.of-topology-rim__mark {
+  flex-shrink: 0;
+  width: 2.4rem;
+  height: 2.4rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--info);
+  background: linear-gradient(145deg, var(--info-subtle) 0%, var(--surface2) 90%);
+  border: 1px solid var(--info-muted);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.of-topology-rim__mark--discover {
+  color: var(--accent);
+  background: linear-gradient(145deg, var(--accent-subtle) 0%, var(--surface2) 100%);
+  border-color: rgba(255, 92, 0, 0.35);
+  font-size: 1rem;
+}
+.of-topology-rim__copy {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 0.12rem;
+  min-width: 0;
+  flex: 1;
+  text-align: left;
+}
+.of-topology-rim__title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.of-topology-rim__path,
+.of-topology-rim__sub {
+  font-size: 0.62rem;
+  color: var(--text-dim);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+.of-topology-rim__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.28rem;
+  margin-top: 0.12rem;
+}
+.of-topology-rim__chip {
+  display: inline-block;
+  padding: 0.08rem 0.35rem;
+  border-radius: 999px;
+  font-size: 0.55rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--success-dim);
+  background: var(--success-subtle);
+  border: 1px solid var(--success-muted);
+}
+.of-topology-rim__chip--git {
+  color: var(--info-dim);
+  background: var(--info-subtle);
+  border-color: var(--info-muted);
+}
+
+/* Spoke git workspace — Bulma layout + OpenFang surfaces (see index_body spoke detail) */
+.of-spoke-git-panel .of-spoke-git__toolbar {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 1rem;
+  flex-wrap: wrap;
+  row-gap: 0.75rem;
+}
+.of-spoke-git-panel .of-spoke-git__toolbar .level-left,
+.of-spoke-git-panel .of-spoke-git__toolbar .level-right {
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+}
+.of-spoke-git-panel .of-spoke-git__meta.of-card {
+  padding: 1.25rem 1.35rem;
+  margin-bottom: 0;
+}
+.of-spoke-git-panel .of-spoke-git__meta.of-card:hover {
+  transform: none;
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+}
+.of-spoke-git-panel .box.of-spoke-git__workspace {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.35rem 1.35rem 1.5rem;
+  box-shadow: var(--shadow-xs), var(--shadow-inset);
+  margin-bottom: 0;
+}
+.of-spoke-git-panel .box.of-spoke-git__workspace:not(:last-child) {
+  margin-bottom: 1rem;
+}
+.of-spoke-git-panel .label {
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+.of-spoke-git-panel .input,
+.of-spoke-git-panel .select select {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.of-spoke-git-panel .input:focus,
+.of-spoke-git-panel .select select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.of-spoke-git-panel .select.is-fullwidth,
+.of-spoke-git-panel .select.is-fullwidth select {
+  width: 100%;
+}
+.of-spoke-git-panel .field.has-addons .control.is-expanded {
+  min-width: 0;
+}
+.of-spoke-git-panel .of-spoke-git__diff-section {
+  border-top: 1px solid var(--border);
+  margin-top: 0.25rem;
+}
+.of-spoke-git-panel .table-container {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  overflow: auto;
+}
+.of-spoke-git-panel .table {
+  background: var(--surface);
+}
+.of-spoke-git-panel .table thead th {
+  background: var(--surface2);
+  color: var(--text-dim);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-weight: 600;
+  border-color: var(--border);
+  padding: 0.7rem 0.9rem;
+  vertical-align: middle;
+}
+.of-spoke-git-panel .table td {
+  border-color: var(--border);
+  padding: 0.65rem 0.9rem;
+  vertical-align: middle;
+  font-size: 0.8125rem;
+}
+.of-spoke-git-panel .table td.has-text-grey {
+  color: var(--text-dim) !important;
+}
+.of-spoke-git-panel .table tbody tr:hover {
+  background: var(--surface2);
+}
+.of-spoke-git-panel .of-spoke-git__crumb {
+  color: var(--text-dim);
+  font-size: 0.75rem;
+}
+.of-spoke-git-panel .buttons.are-small {
+  gap: 0.35rem;
+}
+
+/* Chrome only — Diff2Html CSS is unchanged; vertical scroll stays on .page-body--project */
+.of-diff2html-wrap {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  background: var(--surface);
+  overflow-x: auto;
+  overflow-y: visible;
 }
 
 /* Task list (project detail) */

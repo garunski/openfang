@@ -16,6 +16,7 @@ use openfang_types::project::ProjectId;
 use openfang_runtime::pipeline_audit;
 use openfang_types::agent::AgentId;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
+use std::process::Command;
 use std::sync::Arc;
 use uuid::Uuid;
 use std::time::Instant;
@@ -30,6 +31,20 @@ struct TestServer {
     base_url: String,
     state: Arc<AppState>,
     _tmp: tempfile::TempDir,
+}
+
+/// `<project_root>/admin/backlog` — layout for integration tests with admin spoke.
+fn test_admin_backlog(project_root: &std::path::Path) -> std::path::PathBuf {
+    project_root.join("admin").join("backlog")
+}
+
+fn project_json_with_admin_spoke(name: &str, path_str: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "path": path_str,
+        "spokes": [{"name": "admin", "path": "admin", "labels": []}],
+        "admin_spoke": "admin",
+    })
 }
 
 fn test_backlog_ws_deps() -> (
@@ -191,6 +206,58 @@ async fn start_test_server_with_provider(
         .route(
             "/api/projects/{id}/spokes",
             axum::routing::get(routes::list_project_spokes),
+        )
+        .route(
+            "/api/projects/{id}/spokes/admin",
+            axum::routing::put(routes::set_project_admin_spoke),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/status",
+            axum::routing::get(routes::get_project_spoke_git_status),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/diff",
+            axum::routing::get(routes::get_project_spoke_git_diff),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/branches",
+            axum::routing::get(routes::get_project_spoke_git_branches),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/log",
+            axum::routing::get(routes::get_project_spoke_git_log),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/commit/{sha}/diff",
+            axum::routing::get(routes::get_project_spoke_git_commit_diff),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/stage",
+            axum::routing::post(routes::post_project_spoke_git_stage),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/unstage",
+            axum::routing::post(routes::post_project_spoke_git_unstage),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/stage-all",
+            axum::routing::post(routes::post_project_spoke_git_stage_all),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/commit",
+            axum::routing::post(routes::post_project_spoke_git_commit),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/checkout",
+            axum::routing::post(routes::post_project_spoke_git_checkout),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/push",
+            axum::routing::post(routes::post_project_spoke_git_push),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}",
+            axum::routing::get(routes::get_project_spoke_detail),
         )
         .route(
             "/api/projects/{id}/pipelines",
@@ -374,17 +441,26 @@ async fn test_projects_crud_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj_root = home.join("myproject");
-    std::fs::create_dir_all(proj_root.join("backlog")).unwrap();
+    std::fs::create_dir_all(test_admin_backlog(&proj_root)).unwrap();
     let spoke_dir = proj_root.join("svc-a");
     std::fs::create_dir_all(&spoke_dir).unwrap();
-    std::fs::write(spoke_dir.join("mise.toml"), "[tools]\n").unwrap();
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .current_dir(&spoke_dir)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        "git init required for project discover test"
+    );
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
         .json(&serde_json::json!({
             "name": "demo",
             "path": proj_root.to_str().unwrap(),
-            "spokes": [{"name": "manual", "path": "rel", "labels": ["l1"]}],
+            "spokes": [{"name": "manual", "path": "rel", "labels": ["l1"]}, {"name": "admin", "path": "admin", "labels": []}],
+            "admin_spoke": "admin",
         }))
         .send()
         .await
@@ -393,7 +469,7 @@ async fn test_projects_crud_api() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let pid = body["project_id"].as_str().unwrap().to_string();
     assert_eq!(body["name"], "demo");
-    assert_eq!(body["spokes"].as_array().unwrap().len(), 1);
+    assert_eq!(body["spokes"].as_array().unwrap().len(), 2);
 
     let resp = client
         .get(format!("{}/api/projects", server.base_url))
@@ -403,7 +479,7 @@ async fn test_projects_crud_api() {
     assert_eq!(resp.status(), 200);
     let list: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(list.len(), 1);
-    assert_eq!(list[0]["spoke_count"], 1);
+    assert_eq!(list[0]["spoke_count"], 2);
 
     let resp = client
         .get(format!("{}/api/projects/{}", server.base_url, pid))
@@ -412,9 +488,37 @@ async fn test_projects_crud_api() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let detail: serde_json::Value = resp.json().await.unwrap();
-    assert!(detail["backlog_root"].as_str().unwrap().contains("backlog"));
+    assert!(detail["admin_backlog_root"].as_str().unwrap().contains("backlog"));
+    assert_eq!(detail["admin_spoke"], "admin");
     let spokes = detail["spokes"].as_array().unwrap();
+    assert_eq!(spokes.len(), 2);
     assert!(!spokes[0]["path_resolved"].as_str().unwrap().is_empty());
+
+    let resp = client
+        .post(format!("{}/api/projects/{}/discover", server.base_url, pid))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let resp = client
+        .put(format!(
+            "{}/api/projects/{}/spokes/admin",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "name": "svc-a" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+
+    let resp = client
+        .put(format!("{}/api/projects/{}", server.base_url, pid))
+        .json(&serde_json::json!({ "admin_spoke": null }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 
     let resp = client
         .post(format!("{}/api/projects/{}/discover", server.base_url, pid))
@@ -426,6 +530,19 @@ async fn test_projects_crud_api() {
     let discovered = disc["spokes"].as_array().unwrap();
     assert_eq!(discovered.len(), 1);
     assert_eq!(discovered[0]["name"], "svc-a");
+
+    let resp = client
+        .put(format!(
+            "{}/api/projects/{}/spokes/admin",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "name": "svc-a" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let adm: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(adm["admin_spoke"], "svc-a");
 
     let resp = client
         .put(format!("{}/api/projects/{}", server.base_url, pid))
@@ -460,12 +577,262 @@ async fn test_projects_crud_api() {
 }
 
 #[tokio::test]
+async fn test_project_spoke_detail_and_git_workspace() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj_root = home.join("spoke-git-proj");
+    let admin_bl = test_admin_backlog(&proj_root);
+    std::fs::create_dir_all(&admin_bl).unwrap();
+    let plain = proj_root.join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let gitted = proj_root.join("gitted");
+    std::fs::create_dir_all(&gitted).unwrap();
+
+    assert!(
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&gitted)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        "git init required for spoke git integration test"
+    );
+
+    std::fs::write(gitted.join("tracked.txt"), "a\n").unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "t@t"])
+        .current_dir(&gitted)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "t"])
+        .current_dir(&gitted)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["add", "tracked.txt"])
+        .current_dir(&gitted)
+        .status()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-m", "init"])
+        .current_dir(&gitted)
+        .status()
+        .unwrap();
+    std::fs::write(gitted.join("wip.txt"), "wip\n").unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "spoke-git",
+            "path": proj_root.to_str().unwrap(),
+            "spokes": [
+                {"name": "admin", "path": "admin", "labels": []},
+                {"name": "plain", "path": "plain", "labels": []},
+                {"name": "gitted", "path": "gitted", "labels": []},
+            ],
+            "admin_spoke": "admin",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap();
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/nope",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/plain",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let d: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(d["name"], "plain");
+    assert!(d["resolved_path"].as_str().unwrap().contains("plain"));
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/plain/git/status",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let st: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(st["is_git_repo"], false);
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/gitted/git/status",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let st: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(st["is_git_repo"], true);
+    let files = st["status"]["files"].as_array().unwrap();
+    assert!(!files.is_empty());
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/gitted/git/diff",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let diff: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(diff["is_git_repo"], true);
+    assert_eq!(diff["diff_truncated"], false);
+    let u = diff["unified_diff"].as_str().unwrap();
+    assert!(u.contains("wip.txt") || u.contains("wip"));
+
+    let r = client
+        .post(format!(
+            "{}/api/projects/{}/spokes/gitted/git/stage",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "path": "wip.txt" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let r = client
+        .post(format!(
+            "{}/api/projects/{}/spokes/gitted/git/unstage",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "path": "wip.txt" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/gitted/git/status",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let st2: serde_json::Value = r.json().await.unwrap();
+    let files2 = st2["status"]["files"].as_array().unwrap();
+    let wip = files2
+        .iter()
+        .find(|f| f["path"].as_str() == Some("wip.txt"))
+        .expect("wip.txt in status");
+    assert_eq!(wip["staged"], false);
+    assert_eq!(wip["untracked"], true);
+
+    let r = client
+        .post(format!(
+            "{}/api/projects/{}/spokes/gitted/git/stage",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "path": "wip.txt" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let r = client
+        .post(format!(
+            "{}/api/projects/{}/spokes/gitted/git/commit",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "message": "add wip" }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let r = client
+        .post(format!(
+            "{}/api/projects/{}/spokes/gitted/git/checkout",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({ "branch": "feat", "create": true }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/gitted/git/branches",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let br: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(br["is_git_repo"], true);
+    let names: Vec<String> = br["branches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["name"].as_str().map(String::from))
+        .collect();
+    assert!(names.iter().any(|n| n.contains("feat")));
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/gitted/git/log",
+            server.base_url, pid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let log: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(log["is_git_repo"], true);
+    let commits = log["commits"].as_array().unwrap();
+    assert!(!commits.is_empty());
+    let oid = commits[0]["oid"].as_str().unwrap();
+    assert!(oid.len() >= 4);
+
+    let r = client
+        .get(format!(
+            "{}/api/projects/{}/spokes/gitted/git/commit/{}/diff",
+            server.base_url, pid, oid
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let cdiff: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(cdiff["is_git_repo"], true);
+    assert!(cdiff["unified_diff"].as_str().is_some());
+}
+
+#[tokio::test]
 async fn test_project_backlog_endpoints() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-proj");
-    let backlog = proj.join("backlog");
+    let backlog = test_admin_backlog(&proj);
     let tasks_dir = backlog.join("tasks");
     let docs_dir = backlog.join("docs").join("guides");
     std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -483,10 +850,7 @@ async fn test_project_backlog_endpoints() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "bp",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("bp", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -587,8 +951,15 @@ async fn test_project_backlog_endpoints() {
         .send()
         .await
         .unwrap();
-    assert_eq!(resp.status(), 404);
-    assert_eq!(resp.json::<serde_json::Value>().await.unwrap()["error"], "Backlog directory not found");
+    assert_eq!(resp.status(), 400);
+    let err = resp.json::<serde_json::Value>().await.unwrap();
+    assert!(
+        err["error"]
+            .as_str()
+            .unwrap()
+            .contains("Admin spoke is required"),
+        "{err:?}"
+    );
 }
 
 #[tokio::test]
@@ -597,7 +968,7 @@ async fn test_backlog_store_task_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-api-proj");
-    let backlog = proj.join("backlog");
+    let backlog = test_admin_backlog(&proj);
     let tasks_dir = backlog.join("tasks");
     let milestones_dir = backlog.join("milestones");
     std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -615,10 +986,7 @@ async fn test_backlog_store_task_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "bapi",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("bapi", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -788,7 +1156,7 @@ async fn test_backlog_cleanup_done_tasks_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-cleanup-proj");
-    let backlog = proj.join("backlog");
+    let backlog = test_admin_backlog(&proj);
     let tasks_dir = backlog.join("tasks");
     let completed_dir = backlog.join("completed");
     std::fs::create_dir_all(&tasks_dir).unwrap();
@@ -806,10 +1174,7 @@ async fn test_backlog_cleanup_done_tasks_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "bcln",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("bcln", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -865,7 +1230,7 @@ async fn test_backlog_toggle_ac_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-toggle-ac-proj");
-    let backlog = proj.join("backlog");
+    let backlog = test_admin_backlog(&proj);
     let tasks_dir = backlog.join("tasks");
     std::fs::create_dir_all(&tasks_dir).unwrap();
     std::fs::write(
@@ -876,10 +1241,7 @@ async fn test_backlog_toggle_ac_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "tac",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("tac", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -908,8 +1270,7 @@ async fn test_backlog_docs_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-docs-proj");
-    let docs = proj
-        .join("backlog")
+    let docs = test_admin_backlog(&proj)
         .join("docs")
         .join("overview")
         .join("architecture");
@@ -922,10 +1283,7 @@ async fn test_backlog_docs_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "docsproj",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("docsproj", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -1021,7 +1379,7 @@ async fn test_backlog_decisions_milestones_completed_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-ddmc-proj");
-    let backlog = proj.join("backlog");
+    let backlog = test_admin_backlog(&proj);
     let decisions = backlog.join("decisions");
     let milestones = backlog.join("milestones");
     let tasks = backlog.join("tasks");
@@ -1076,10 +1434,7 @@ e
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "ddmc",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("ddmc", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -1286,7 +1641,7 @@ async fn test_backlog_search_and_statistics_api() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj = home.join("backlog-search-stat-proj");
-    let backlog = proj.join("backlog");
+    let backlog = test_admin_backlog(&proj);
     let tasks = backlog.join("tasks");
     let docs = backlog.join("docs").join("guides");
     let decisions = backlog.join("decisions");
@@ -1316,10 +1671,7 @@ async fn test_backlog_search_and_statistics_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&serde_json::json!({
-            "name": "searchstat",
-            "path": proj.to_str().unwrap(),
-        }))
+        .json(&project_json_with_admin_spoke("searchstat", proj.to_str().unwrap()))
         .send()
         .await
         .unwrap();
@@ -1422,10 +1774,20 @@ async fn test_project_scoped_agents_spokes_pipelines() {
     let proj_root = home.join("projscoped");
     let spoke = proj_root.join("spoke-int");
     std::fs::create_dir_all(&spoke).unwrap();
+    assert!(
+        Command::new("git")
+            .arg("init")
+            .current_dir(&spoke)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false),
+        "git init required for scoped spokes test"
+    );
     std::fs::write(spoke.join("mise.toml"), "[tools]\n").unwrap();
-    std::fs::create_dir_all(proj_root.join("backlog").join("tasks")).unwrap();
+    let ab = test_admin_backlog(&proj_root);
+    std::fs::create_dir_all(ab.join("tasks")).unwrap();
     std::fs::write(
-        proj_root.join("backlog/tasks/task-77 - T.md"),
+        ab.join("tasks/task-77 - T.md"),
         "---\nid: TASK-INT-SCOPED-77\ntitle: T\nstatus: Open\n---\n",
     )
     .unwrap();
@@ -1435,7 +1797,11 @@ async fn test_project_scoped_agents_spokes_pipelines() {
         .json(&serde_json::json!({
             "name": "scoped",
             "path": proj_root.to_str().unwrap(),
-            "spokes": [{"name": "mainspoke", "path": "spoke-int", "labels": []}],
+            "spokes": [
+                {"name": "mainspoke", "path": "spoke-int", "labels": []},
+                {"name": "admin", "path": "admin", "labels": []},
+            ],
+            "admin_spoke": "admin",
         }))
         .send()
         .await
@@ -1568,8 +1934,13 @@ async fn test_project_scoped_agents_spokes_pipelines() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let sp: Vec<serde_json::Value> = resp.json().await.unwrap();
-    assert_eq!(sp.len(), 1);
-    assert_eq!(sp[0]["mise_toml_exists"], true);
+    assert_eq!(sp.len(), 2);
+    let mainspoke = sp
+        .iter()
+        .find(|r| r["name"] == "mainspoke")
+        .expect("mainspoke row");
+    assert_eq!(mainspoke["mise_toml_exists"], true);
+    assert_eq!(mainspoke["is_git_repo"], true);
 
     pipeline_audit::clear_pipeline_audit_ring();
     pipeline_audit::emit(pipeline_audit::PipelineAuditEvent::QualityGate {
@@ -1823,7 +2194,7 @@ async fn test_project_workflow_requires_assigned_agents() {
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
     let proj_root = home.join("wfproj");
-    std::fs::create_dir_all(proj_root.join("backlog")).unwrap();
+    std::fs::create_dir_all(test_admin_backlog(&proj_root)).unwrap();
     let spoke = proj_root.join("spoke1");
     std::fs::create_dir_all(&spoke).unwrap();
 
@@ -1832,7 +2203,11 @@ async fn test_project_workflow_requires_assigned_agents() {
         .json(&serde_json::json!({
             "name": "wfproj",
             "path": proj_root.to_str().unwrap(),
-            "spokes": [{"name": "s1", "path": "spoke1", "labels": []}],
+            "spokes": [
+                {"name": "s1", "path": "spoke1", "labels": []},
+                {"name": "admin", "path": "admin", "labels": []},
+            ],
+            "admin_spoke": "admin",
         }))
         .send()
         .await

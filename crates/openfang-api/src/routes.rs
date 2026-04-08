@@ -18,7 +18,9 @@ use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
 use openfang_types::error::OpenFangError;
 use serde::Deserialize;
-use openfang_types::project::{Project, ProjectId, ProjectPatch, SpokeDescriptor};
+use openfang_types::project::{
+    Project, ProjectId, ProjectPatch, SpokeDescriptor, ADMIN_SPOKE_REQUIRED_MSG,
+};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
@@ -1389,6 +1391,7 @@ fn project_agent_row_json(
 }
 
 fn project_detail_json(p: &Project) -> serde_json::Value {
+    let admin_br = p.admin_backlog_root();
     let spokes: Vec<serde_json::Value> = p
         .spokes
         .iter()
@@ -1398,11 +1401,18 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
             } else {
                 p.path.join(&s.path)
             };
+            let is_admin = p
+                .admin_spoke
+                .as_deref()
+                .map(|a| a.trim())
+                .filter(|a| !a.is_empty())
+                == Some(s.name.as_str());
             serde_json::json!({
                 "name": s.name,
                 "path": s.path,
                 "path_resolved": path_resolved,
                 "labels": s.labels,
+                "is_admin": is_admin,
             })
         })
         .collect();
@@ -1410,7 +1420,9 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "id": p.id.to_string(),
         "name": p.name,
         "path": p.path,
-        "backlog_root": p.backlog_root(),
+        "admin_spoke": p.admin_spoke,
+        "admin_backlog_root": admin_br,
+        "backlog_root": admin_br,
         "spokes": spokes,
         "bound_agents": p.bound_agents,
         "pipeline_overrides": p.pipeline_overrides,
@@ -1494,11 +1506,33 @@ pub async fn create_project(
         },
     };
 
+    let admin_spoke: Option<String> = match req.get("admin_spoke") {
+        None => None,
+        Some(v) if v.is_null() => None,
+        Some(v) => match v.as_str() {
+            Some(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Invalid 'admin_spoke': expected string or null"})),
+                );
+            }
+        },
+    };
+
     let project = Project {
         name,
         path: PathBuf::from(path_str),
         spokes,
         pipeline_overrides,
+        admin_spoke,
         ..Default::default()
     };
 
@@ -1586,6 +1620,23 @@ pub async fn update_project(
             }
         }
     }
+    if let Some(v) = req.get("admin_spoke") {
+        if v.is_null() {
+            patch.admin_spoke = Some(None);
+        } else if let Some(s) = v.as_str() {
+            let t = s.trim();
+            patch.admin_spoke = Some(if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            });
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid 'admin_spoke': expected string or null"})),
+            );
+        }
+    }
 
     match state.kernel.project_store.update(pid, patch) {
         Ok(p) => (StatusCode::OK, Json(project_detail_json(&p))),
@@ -1649,6 +1700,36 @@ pub async fn discover_project_spokes(
     }
 }
 
+/// PUT /api/projects/:id/spokes/admin — set which spoke hosts `<spoke>/backlog`.
+pub async fn set_project_admin_spoke(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup,
+    };
+    let name = match req.get("name").and_then(|v| v.as_str()) {
+        Some(n) if !n.trim().is_empty() => n.trim().to_string(),
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Missing or empty 'name' (spoke name)"})),
+            );
+        }
+    };
+
+    let patch = ProjectPatch {
+        admin_spoke: Some(Some(name)),
+        ..Default::default()
+    };
+    match state.kernel.project_store.update(pid, patch) {
+        Ok(p) => (StatusCode::OK, Json(project_detail_json(&p))),
+        Err(e) => project_store_error_response(e),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ListProjectTasksQuery {
     #[serde(default)]
@@ -1672,7 +1753,13 @@ pub async fn list_project_tasks(
         )
             .into_response();
     };
-    let backlog_root = project.backlog_root();
+    let Some(backlog_root) = project.admin_backlog_root() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ADMIN_SPOKE_REQUIRED_MSG})),
+        )
+            .into_response();
+    };
     if !backlog_root.is_dir() {
         return (
             StatusCode::NOT_FOUND,
@@ -1706,7 +1793,13 @@ pub async fn get_project_task(
         )
             .into_response();
     };
-    let backlog_root = project.backlog_root();
+    let Some(backlog_root) = project.admin_backlog_root() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ADMIN_SPOKE_REQUIRED_MSG})),
+        )
+            .into_response();
+    };
     if !backlog_root.is_dir() {
         return (
             StatusCode::NOT_FOUND,
@@ -1745,7 +1838,13 @@ pub async fn list_project_docs(
         )
             .into_response();
     };
-    let backlog_root = project.backlog_root();
+    let Some(backlog_root) = project.admin_backlog_root() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": ADMIN_SPOKE_REQUIRED_MSG})),
+        )
+            .into_response();
+    };
     if !backlog_root.is_dir() {
         return (
             StatusCode::NOT_FOUND,
@@ -1910,7 +2009,7 @@ pub async fn unbind_project_agent(
     }
 }
 
-/// GET /api/projects/:id/spokes — spoke paths, mise.toml, latest quality gate from pipeline audit ring.
+/// GET /api/projects/:id/spokes — spoke paths, git/mise flags, latest quality gate from pipeline audit ring.
 pub async fn list_project_spokes(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -1931,12 +2030,21 @@ pub async fn list_project_spokes(
     let mut rows = Vec::new();
     for (name, abs) in pairs {
         let mise = abs.join("mise.toml").is_file();
+        let git_repo = crate::git_workspace::is_git_repo(&abs).unwrap_or(false);
         let last = crate::project_scoped::last_quality_gate_for_spoke(&abs, &events);
+        let is_admin = project
+            .admin_spoke
+            .as_deref()
+            .map(|a| a.trim())
+            .filter(|a| !a.is_empty())
+            == Some(name.as_str());
         rows.push(serde_json::json!({
             "name": name,
             "path": abs.to_string_lossy(),
+            "is_git_repo": git_repo,
             "mise_toml_exists": mise,
             "last_quality_gate": last,
+            "is_admin": is_admin,
         }));
     }
     Json(rows).into_response()
@@ -1965,15 +2073,436 @@ pub async fn list_project_pipelines(
             .into_iter()
             .map(|(_, p)| p)
             .collect();
-    let backlog_root = project.backlog_root();
-    let task_ids = if backlog_root.is_dir() {
-        crate::project_scoped::backlog_task_id_set(&backlog_root)
-    } else {
-        std::collections::HashSet::new()
+    let task_ids = match project.admin_backlog_root() {
+        Some(ref br) if br.is_dir() => crate::project_scoped::backlog_task_id_set(br),
+        _ => std::collections::HashSet::new(),
     };
     let raw = openfang_runtime::pipeline_audit::recent_pipeline_audit_records(8000);
     let rows = crate::project_scoped::scoped_pipeline_rows(&raw, &spoke_paths, &task_ids, lim);
     Json(rows).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Project spoke detail + git workspace
+// ---------------------------------------------------------------------------
+
+fn git_workspace_error_response(
+    e: crate::git_workspace::GitWorkspaceError,
+) -> (StatusCode, Json<serde_json::Value>) {
+    use crate::git_workspace::GitWorkspaceError::*;
+    match e {
+        SpokeNotFound => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "unknown spoke"})),
+        ),
+        NotADirectory => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "spoke path is not a directory"})),
+        ),
+        NotAGitRepo => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "not a git repository"})),
+        ),
+        InvalidPathArg => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid path argument"})),
+        ),
+        GitSpawn(msg) => {
+            tracing::error!("git spawn error: {msg}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "git execution failed"})),
+            )
+        }
+        GitFailed {
+            code,
+            stderr,
+            stdout,
+        } => {
+            let stderr_l = stderr.trim();
+            let status =
+                if stderr_l.contains("Authentication failed")
+                    || stderr_l.contains("could not read Username")
+                    || stderr_l.contains("Permission denied (publickey)")
+                {
+                    StatusCode::UNAUTHORIZED
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+            (
+                status,
+                Json(serde_json::json!({
+                    "error": "git command failed",
+                    "exit_code": code,
+                    "stderr": stderr_l,
+                    "stdout": stdout.trim(),
+                })),
+            )
+        }
+    }
+}
+
+fn project_and_spoke_root(
+    state: &Arc<AppState>,
+    id: &str,
+    spoke: &str,
+) -> Result<(Project, PathBuf), (StatusCode, Json<serde_json::Value>)> {
+    let pid = parse_project_id_param(id)?;
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        ));
+    };
+    let root = match crate::git_workspace::resolve_spoke_root(&project, spoke) {
+        Ok(p) => p,
+        Err(crate::git_workspace::GitWorkspaceError::SpokeNotFound) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "unknown spoke"})),
+            ));
+        }
+        Err(crate::git_workspace::GitWorkspaceError::NotADirectory) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "spoke path is not a directory"})),
+            ));
+        }
+        Err(e) => return Err(git_workspace_error_response(e)),
+    };
+    Ok((project, root))
+}
+
+/// GET /api/projects/:id/spokes/:spoke — resolved path, metadata, admin flag.
+pub async fn get_project_spoke_detail(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((project, root)) => {
+            let mise = root.join("mise.toml").is_file();
+            let git_repo = crate::git_workspace::is_git_repo(&root).unwrap_or(false);
+            let is_admin = project
+                .admin_spoke
+                .as_deref()
+                .map(|a| a.trim())
+                .filter(|a| !a.is_empty())
+                == Some(spoke.trim());
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "name": spoke.trim(),
+                    "resolved_path": root.to_string_lossy(),
+                    "is_git_repo": git_repo,
+                    "mise_toml_exists": mise,
+                    "is_admin": is_admin,
+                })),
+            )
+                .into_response()
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// GET /api/projects/:id/spokes/:spoke/git/status
+pub async fn get_project_spoke_git_status(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::is_git_repo(&root) {
+                Ok(false) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "is_git_repo": false,
+                        "status": serde_json::Value::Null,
+                    })),
+                )
+                    .into_response(),
+                Ok(true) => match crate::git_workspace::git_status(&root) {
+                    Ok(status) => (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "is_git_repo": true,
+                            "status": status,
+                        })),
+                    )
+                        .into_response(),
+                    Err(e) => git_workspace_error_response(e).into_response(),
+                },
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// GET /api/projects/:id/spokes/:spoke/git/diff — unified diff vs HEAD.
+pub async fn get_project_spoke_git_diff(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::is_git_repo(&root) {
+                Ok(false) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "is_git_repo": false,
+                        "unified_diff": "",
+                    })),
+                )
+                    .into_response(),
+                Ok(true) => match crate::git_workspace::git_diff_head(&root) {
+                    Ok(spoke_diff) => (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "is_git_repo": true,
+                            "unified_diff": spoke_diff.unified_diff,
+                            "diff_truncated": spoke_diff.truncated,
+                            "diff_max_bytes": spoke_diff.max_bytes,
+                        })),
+                    )
+                        .into_response(),
+                    Err(e) => git_workspace_error_response(e).into_response(),
+                },
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// GET /api/projects/:id/spokes/:spoke/git/branches
+pub async fn get_project_spoke_git_branches(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::is_git_repo(&root) {
+                Ok(false) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "is_git_repo": false,
+                        "branches": serde_json::json!([]),
+                    })),
+                )
+                    .into_response(),
+                Ok(true) => match crate::git_workspace::git_branches(&root) {
+                    Ok(branches) => (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "is_git_repo": true,
+                            "branches": branches,
+                        })),
+                    )
+                        .into_response(),
+                    Err(e) => git_workspace_error_response(e).into_response(),
+                },
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitLogQuery {
+    pub limit: Option<u32>,
+}
+
+/// GET /api/projects/:id/spokes/:spoke/git/log — commits on current `HEAD` (checked-out branch).
+pub async fn get_project_spoke_git_log(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+    Query(q): Query<GitLogQuery>,
+) -> impl IntoResponse {
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::is_git_repo(&root) {
+                Ok(false) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "is_git_repo": false,
+                        "commits": serde_json::json!([]),
+                    })),
+                )
+                    .into_response(),
+                Ok(true) => match crate::git_workspace::git_log_head(&root, limit as usize) {
+                    Ok(commits) => (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "is_git_repo": true,
+                            "commits": commits,
+                        })),
+                    )
+                        .into_response(),
+                    Err(e) => git_workspace_error_response(e).into_response(),
+                },
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// GET /api/projects/:id/spokes/:spoke/git/commit/:sha/diff — unified patch for one commit (capped).
+pub async fn get_project_spoke_git_commit_diff(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke, sha)): Path<(String, String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::is_git_repo(&root) {
+                Ok(false) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({
+                        "is_git_repo": false,
+                        "unified_diff": "",
+                        "diff_truncated": false,
+                        "diff_max_bytes": 0,
+                    })),
+                )
+                    .into_response(),
+                Ok(true) => {
+                    match crate::git_workspace::git_commit_patch(
+                        &root,
+                        &sha,
+                        crate::git_workspace::GIT_DIFF_MAX_RESPONSE_BYTES,
+                    ) {
+                        Ok(d) => (
+                            StatusCode::OK,
+                            Json(serde_json::json!({
+                                "is_git_repo": true,
+                                "commit": sha,
+                                "unified_diff": d.unified_diff,
+                                "diff_truncated": d.truncated,
+                                "diff_max_bytes": d.max_bytes,
+                            })),
+                        )
+                            .into_response(),
+                        Err(e) => git_workspace_error_response(e).into_response(),
+                    }
+                }
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitStagePathRequest {
+    pub path: String,
+}
+
+/// POST /api/projects/:id/spokes/:spoke/git/stage
+pub async fn post_project_spoke_git_stage(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+    Json(req): Json<GitStagePathRequest>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::git_add_path(&root, &req.path) {
+                Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// POST /api/projects/:id/spokes/:spoke/git/unstage
+pub async fn post_project_spoke_git_unstage(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+    Json(req): Json<GitStagePathRequest>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::git_reset_path(&root, &req.path) {
+                Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// POST /api/projects/:id/spokes/:spoke/git/stage-all
+pub async fn post_project_spoke_git_stage_all(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => match crate::git_workspace::git_add_all(&root) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
+        Err(tup) => tup.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitCommitRequest {
+    pub message: String,
+}
+
+/// POST /api/projects/:id/spokes/:spoke/git/commit
+pub async fn post_project_spoke_git_commit(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+    Json(req): Json<GitCommitRequest>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => match crate::git_workspace::git_commit(&root, &req.message) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
+        Err(tup) => tup.into_response(),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitCheckoutRequest {
+    pub branch: String,
+    #[serde(default)]
+    pub create: bool,
+}
+
+/// POST /api/projects/:id/spokes/:spoke/git/checkout — switch or create branch.
+pub async fn post_project_spoke_git_checkout(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+    Json(req): Json<GitCheckoutRequest>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => {
+            match crate::git_workspace::git_checkout(&root, &req.branch, req.create) {
+                Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+                Err(e) => git_workspace_error_response(e).into_response(),
+            }
+        }
+        Err(tup) => tup.into_response(),
+    }
+}
+
+/// POST /api/projects/:id/spokes/:spoke/git/push
+pub async fn post_project_spoke_git_push(
+    State(state): State<Arc<AppState>>,
+    Path((id, spoke)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match project_and_spoke_root(&state, &id, &spoke) {
+        Ok((_project, root)) => match crate::git_workspace::git_push(&root) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
+        Err(tup) => tup.into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

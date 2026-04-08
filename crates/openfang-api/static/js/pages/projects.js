@@ -55,6 +55,42 @@ function projectsPage() {
     projectOverview: null,
     detailTasks: [],
     detailSpokes: [],
+    /** When set, URL is #projects/<id>/spokes/<name> and detail panel is open. */
+    spokesDetailSpoke: null,
+    spokeDetailLoading: false,
+    spokeDetailError: '',
+    spokeDetailRow: null,
+    spokeGitLoading: false,
+    spokeGitMutating: false,
+    spokeGitError: '',
+    spokeGitStatusPayload: null,
+    spokeGitDiffText: '',
+    spokeGitDiffTruncated: false,
+    spokeGitDiffMaxBytes: 0,
+    /** True after user (or refresh-after-mutation) fetched `/git/diff`. */
+    spokeGitDiffLoaded: false,
+    spokeGitDiffLoading: false,
+    spokeGitBranchesPayload: null,
+    /** `workspace` | `history` — hash #projects/.../spokes/<name>[/history[/sha]] */
+    spokeDetailSubview: 'workspace',
+    spokeHistoryCommitSha: null,
+    spokeHistoryEntries: [],
+    spokeHistoryLoading: false,
+    spokeHistoryError: '',
+    spokeHistoryDiffText: '',
+    spokeHistoryDiffTruncated: false,
+    spokeHistoryDiffMaxBytes: 0,
+    spokeHistoryDiffLoaded: false,
+    spokeHistoryDiffLoading: false,
+    spokeHistoryDiffSideBySide: false,
+    spokeDiffSideBySide: false,
+    gitCommitMessage: '',
+    gitBranchSwitchName: '',
+    gitNewBranchName: '',
+    /** Spokes topology map: drag background to pan (pixels). */
+    topologyPanX: 0,
+    topologyPanY: 0,
+    topologyPanning: false,
     detailAgents: [],
     detailPipelines: [],
     projectWorkflows: [],
@@ -99,7 +135,7 @@ function projectsPage() {
       milestones: false,
     },
     registerModalOpen: false,
-    registerForm: { name: '', path: '' },
+    registerForm: { name: '', path: '', adminSpoke: '' },
     registerSubmitting: false,
     registerError: '',
     bindAgentForm: { agent_id: '' },
@@ -141,7 +177,7 @@ function projectsPage() {
       if (seg[0] !== 'projects') return;
       var pid = seg[1];
       var tab = seg[2];
-      var subId = seg[3] != null && seg[3] !== '' ? decodeURIComponent(seg[3]) : null;
+      var extraSeg = seg[3] != null && seg[3] !== '' ? decodeURIComponent(seg[3]) : null;
       var self = this;
       if (!pid) {
         if (this.selectedProject) {
@@ -178,18 +214,53 @@ function projectsPage() {
         this.detailTab === tab
       ) {
         this.detailCategory = projectDetailCategoryForTab(tab);
-        if (tab === 'docs' && subId) {
-          if (!this.docsSelectedDoc || String(this.docsSelectedDoc.id) !== String(subId)) {
-            if (typeof this.docsSelectDoc === 'function') void this.docsSelectDoc(subId);
+        if (tab === 'docs' && extraSeg) {
+          if (!this.docsSelectedDoc || String(this.docsSelectedDoc.id) !== String(extraSeg)) {
+            if (typeof this.docsSelectDoc === 'function') void this.docsSelectDoc(extraSeg);
           }
           return;
         }
-        if (tab === 'decisions' && subId) {
-          if (!this.decisionsSelected || String(this.decisionsSelected.id) !== String(subId)) {
+        if (tab === 'decisions' && extraSeg) {
+          if (!this.decisionsSelected || String(this.decisionsSelected.id) !== String(extraSeg)) {
             if (typeof this.decisionsSelectRow === 'function') {
-              void this.decisionsSelectRow({ id: subId }, false, { openModal: true });
+              void this.decisionsSelectRow({ id: extraSeg }, false, { openModal: true });
             }
           }
+          return;
+        }
+        if (tab === 'spokes') {
+          var sn =
+            seg[3] != null && seg[3] !== '' ? decodeURIComponent(seg[3]) : null;
+          var hist = seg[4] === 'history';
+          var rawSha =
+            hist && seg[5] != null && seg[5] !== ''
+              ? decodeURIComponent(seg[5])
+              : null;
+          var wantHistSha =
+            rawSha && /^[0-9a-fA-F]{4,64}$/.test(rawSha) ? rawSha : null;
+          var wantSubview = hist ? 'history' : 'workspace';
+          if (
+            String(this.spokesDetailSpoke || '') === String(sn || '') &&
+            String(this.spokeDetailSubview || 'workspace') === wantSubview &&
+            String(this.spokeHistoryCommitSha || '') === String(wantHistSha || '')
+          ) {
+            return;
+          }
+          var spokeChanged = String(this.spokesDetailSpoke || '') !== String(sn || '');
+          if (spokeChanged) {
+            this.resetSpokeGitDiffOnly();
+            this.resetSpokeHistoryUi();
+          } else if (String(this.spokeDetailSubview || 'workspace') === 'history' && wantSubview === 'workspace') {
+            this.resetSpokeHistoryUi();
+          }
+          this.spokesDetailSpoke = sn;
+          this.spokeDetailSubview = wantSubview;
+          this.spokeHistoryCommitSha = wantHistSha;
+          if (!sn) {
+            this.clearSpokeGitPanel();
+            return;
+          }
+          void this.refreshSpokeDetail();
           return;
         }
         return;
@@ -202,12 +273,27 @@ function projectsPage() {
       this.taskDetailHtml = '';
       this.backlogDetailTask = null;
       this.resetDetailCache();
+      this.spokesDetailSpoke = tab === 'spokes' ? extraSeg || null : null;
+      if (tab === 'spokes') {
+        var hist0 = seg[4] === 'history';
+        var rawSha0 =
+          hist0 && seg[5] != null && seg[5] !== '' ? decodeURIComponent(seg[5]) : null;
+        this.spokeDetailSubview = hist0 ? 'history' : 'workspace';
+        this.spokeHistoryCommitSha =
+          rawSha0 && /^[0-9a-fA-F]{4,64}$/.test(rawSha0) ? rawSha0 : null;
+      } else {
+        this.spokeDetailSubview = 'workspace';
+        this.spokeHistoryCommitSha = null;
+      }
       void Promise.resolve(this.loadDetailTab(tab)).then(function () {
-        if (tab === 'docs' && subId && typeof self.docsSelectDoc === 'function') {
-          return self.docsSelectDoc(subId);
+        if (tab === 'docs' && extraSeg && typeof self.docsSelectDoc === 'function') {
+          return self.docsSelectDoc(extraSeg);
         }
-        if (tab === 'decisions' && subId && typeof self.decisionsSelectRow === 'function') {
-          return self.decisionsSelectRow({ id: subId }, false, { openModal: true });
+        if (tab === 'decisions' && extraSeg && typeof self.decisionsSelectRow === 'function') {
+          return self.decisionsSelectRow({ id: extraSeg }, false, { openModal: true });
+        }
+        if (tab === 'spokes' && self.spokesDetailSpoke) {
+          return self.refreshSpokeDetail();
         }
       });
     },
@@ -236,6 +322,16 @@ function projectsPage() {
       }
       if (t === 'decisions' && this.decisionsSelected && this.decisionsSelected.id) {
         want += '/' + encodeURIComponent(String(this.decisionsSelected.id));
+      }
+      if (t === 'spokes' && this.spokesDetailSpoke) {
+        want += '/' + encodeURIComponent(String(this.spokesDetailSpoke));
+        if (this.spokeDetailSubview === 'history') {
+          want += '/history';
+          var hsha = this.spokeHistoryCommitSha;
+          if (hsha && /^[0-9a-fA-F]{4,64}$/.test(String(hsha))) {
+            want += '/' + encodeURIComponent(String(hsha));
+          }
+        }
       }
       var cur = window.location.hash.replace(/^#\/?/, '');
       if (cur !== want) window.location.hash = want;
@@ -339,6 +435,8 @@ function projectsPage() {
       if (typeof this.resetBacklogSearch === 'function') this.resetBacklogSearch();
       this.backlogDetailTask = null;
       this.taskDetailEditMode = false;
+      this.spokesDetailSpoke = null;
+      this.clearSpokeGitPanel();
     },
 
     setDetailLoading(tab, v) {
@@ -478,6 +576,7 @@ function projectsPage() {
           if (typeof this.rebuildListFilterOptions === 'function') this.rebuildListFilterOptions();
         } else if (tab === 'spokes') {
           this.detailSpokes = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/spokes');
+          this.resetTopologyPan();
         } else if (tab === 'agents') {
           this.detailAgents = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/agents');
         } else if (tab === 'pipelines') {
@@ -501,6 +600,14 @@ function projectsPage() {
     async onDetailTabChange(tab) {
       if (typeof this.closeDecisionViewModal === 'function' && tab !== 'decisions') {
         this.closeDecisionViewModal();
+      }
+      if (tab === 'spokes') {
+        this.resetTopologyPan();
+      }
+      if (tab !== 'spokes') {
+        this.spokesDetailSpoke = null;
+        this.clearSpokeGitPanel();
+        this.resetTopologyPan();
       }
       this.detailTab = tab;
       this.detailCategory = projectDetailCategoryForTab(tab);
@@ -564,10 +671,690 @@ function projectsPage() {
       }
     },
 
+    async setAdminSpoke(spokeName) {
+      if (!this.selectedProject || !spokeName) return;
+      try {
+        await OpenFangAPI.put(
+          '/api/projects/' + encodeURIComponent(this.selectedProject.id) + '/spokes/admin',
+          { name: spokeName }
+        );
+        OpenFangToast.success('Hub updated');
+        this.setDetailLoaded('spokes', false);
+        this.setDetailLoaded('overview', false);
+        await this.loadProjects();
+        var pid = this.selectedProject.id;
+        var proj = null;
+        var i;
+        for (i = 0; i < this.projects.length; i++) {
+          if (String(this.projects[i].id) === String(pid)) {
+            proj = this.projects[i];
+            break;
+          }
+        }
+        if (proj) this.selectedProject = proj;
+        await this.loadDetailTab('spokes', true);
+        if (this.detailTab === 'overview') await this.loadDetailTab('overview', true);
+        if (this.spokesDetailSpoke) await this.refreshSpokeDetail();
+      } catch (e) {
+        this.setDetailError('spokes', e.message || 'Set Hub failed');
+      }
+    },
+
+    resetSpokeGitDiffOnly() {
+      this.spokeGitDiffLoaded = false;
+      this.spokeGitDiffLoading = false;
+      this.spokeGitDiffText = '';
+      this.spokeGitDiffTruncated = false;
+      this.spokeGitDiffMaxBytes = 0;
+      var el = document.getElementById('spokeDiffContainer');
+      if (el && el.shadowRoot) {
+        var m = el.shadowRoot.querySelector('.d2h-mount');
+        if (m) m.innerHTML = '';
+      }
+    },
+
+    clearSpokeGitPanel() {
+      this.spokeDetailLoading = false;
+      this.spokeDetailError = '';
+      this.spokeDetailRow = null;
+      this.spokeGitLoading = false;
+      this.spokeGitError = '';
+      this.spokeGitStatusPayload = null;
+      this.resetSpokeGitDiffOnly();
+      this.spokeGitBranchesPayload = null;
+      this.gitCommitMessage = '';
+      this.gitBranchSwitchName = '';
+      this.gitNewBranchName = '';
+      this.resetSpokeHistoryState();
+    },
+
+    resetSpokeHistoryUi() {
+      this.spokeHistoryCommitSha = null;
+      this.spokeHistoryEntries = [];
+      this.spokeHistoryLoading = false;
+      this.spokeHistoryError = '';
+      this.spokeHistoryDiffText = '';
+      this.spokeHistoryDiffTruncated = false;
+      this.spokeHistoryDiffMaxBytes = 0;
+      this.spokeHistoryDiffLoaded = false;
+      this.spokeHistoryDiffLoading = false;
+      this.spokeHistoryDiffSideBySide = false;
+      var hel = document.getElementById('spokeHistoryDiffContainer');
+      if (hel && hel.shadowRoot) {
+        var hm = hel.shadowRoot.querySelector('.d2h-mount');
+        if (hm) hm.innerHTML = '';
+      }
+    },
+
+    resetSpokeHistoryState() {
+      this.spokeDetailSubview = 'workspace';
+      this.resetSpokeHistoryUi();
+    },
+
+    spokeGitDirty() {
+      var st = this.spokeGitStatusPayload && this.spokeGitStatusPayload.status;
+      return !!(st && st.dirty);
+    },
+
+    /** Safe for Alpine x-for — avoids throws when API omits `files`. */
+    spokeGitFilesList() {
+      var s = this.spokeGitStatusPayload && this.spokeGitStatusPayload.status;
+      var f = s && s.files;
+      return Array.isArray(f) ? f : [];
+    },
+
+    spokeGitBranchesList() {
+      var p = this.spokeGitBranchesPayload;
+      var b = p && p.branches;
+      return Array.isArray(b) ? b : [];
+    },
+
+    /** Spoke designated as Hub (`is_admin`); holds project `backlog/`. */
+    hubSpokeFromList() {
+      var list = this.detailSpokes || [];
+      var i;
+      for (i = 0; i < list.length; i++) {
+        if (list[i].is_admin) return list[i];
+      }
+      return null;
+    },
+
+    nonHubSpokesFromList() {
+      var list = this.detailSpokes || [];
+      return list.filter(function (s) {
+        return !s.is_admin;
+      });
+    },
+
+    resetTopologyPan() {
+      this.topologyPanX = 0;
+      this.topologyPanY = 0;
+      this.topologyPanning = false;
+    },
+
+    /**
+     * Radial layout for topology SVG and nodes (fixed canvas size).
+     * Rim = non-hub spokes (or all spokes if no Hub) plus one Discover slot.
+     */
+    spokeTopologyModel() {
+      var W = 1100;
+      var H = 800;
+      var cx = W * 0.5;
+      var cy = H * 0.5;
+      var hub = this.hubSpokeFromList();
+      var baseList = hub ? this.nonHubSpokesFromList() : (this.detailSpokes || []).slice();
+      var rim = baseList.slice();
+      rim.push({ __discover: true });
+      var n = rim.length;
+      var r =
+        baseList.length === 0
+          ? 220
+          : Math.min(300, 155 + n * 34);
+      var slots = [];
+      var i;
+      for (i = 0; i < n; i++) {
+        var ang = (2 * Math.PI * i) / n - Math.PI / 2;
+        var x = cx + r * Math.cos(ang);
+        var y = cy + r * Math.sin(ang);
+        if (rim[i].__discover) {
+          slots.push({ discover: true, x: x, y: y });
+        } else {
+          slots.push({ spoke: rim[i], x: x, y: y });
+        }
+      }
+      return { w: W, h: H, cx: cx, cy: cy, hub: hub, slots: slots };
+    },
+
+    /** Pan only; width/height/margins are fixed in CSS to match spokeTopologyModel(). */
+    topologySurfaceStyle() {
+      return (
+        'transform:translate(' + this.topologyPanX + 'px,' + this.topologyPanY + 'px)'
+      );
+    },
+
+    /**
+     * Hub→rim segments as HTML (Alpine x-for inside &lt;svg&gt; is unreliable).
+     * Each item: { key, style, muted }.
+     */
+    spokeTopologyEdges() {
+      var m = this.spokeTopologyModel();
+      var out = [];
+      var i;
+      for (i = 0; i < m.slots.length; i++) {
+        var s = m.slots[i];
+        var dx = s.x - m.cx;
+        var dy = s.y - m.cy;
+        var len = Math.sqrt(dx * dx + dy * dy);
+        var angRad = Math.atan2(dy, dx);
+        var angDeg = (angRad * 180) / Math.PI;
+        var key = s.discover
+          ? 'edge-discover-' + i
+          : 'edge-' + i + '-' + String((s.spoke && s.spoke.name) || '') + '-' + String((s.spoke && s.spoke.path) || '');
+        var style =
+          'left:' +
+          m.cx +
+          'px;top:' +
+          m.cy +
+          'px;width:' +
+          len +
+          'px;height:0;transform-origin:0 0;transform:rotate(' +
+          angDeg +
+          'deg)';
+        out.push({ key: key, style: style, muted: !!s.discover });
+      }
+      return out;
+    },
+
+    topologyViewportPointerDown(e) {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      var t = e.target;
+      if (t && t.nodeType !== 1) t = t.parentElement;
+      if (!t || typeof t.closest !== 'function') return;
+      if (t.closest('.of-topology-node')) return;
+      this.topologyPanning = true;
+      var startX = e.clientX;
+      var startY = e.clientY;
+      var origX = this.topologyPanX;
+      var origY = this.topologyPanY;
+      var self = this;
+      function onMove(ev) {
+        if (!self.topologyPanning) return;
+        self.topologyPanX = origX + (ev.clientX - startX);
+        self.topologyPanY = origY + (ev.clientY - startY);
+      }
+      function onUp() {
+        self.topologyPanning = false;
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        window.removeEventListener('pointercancel', onUp);
+      }
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
+    },
+
+    openSpokeDetail(s) {
+      if (!s || !s.name) return;
+      this.detailTab = 'spokes';
+      this.detailCategory = 'automation';
+      this.spokeDetailSubview = 'workspace';
+      this.resetSpokeHistoryUi();
+      this.resetSpokeGitDiffOnly();
+      this.spokesDetailSpoke = s.name;
+      this.pushProjectsHash();
+      void this.refreshSpokeDetail();
+    },
+
+    /** Prefer browser history so Back matches this control; fallback if there is no prior entry. */
+    closeSpokeDetail() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      var listHash =
+        'projects/' +
+        encodeURIComponent(this.selectedProject.id) +
+        '/spokes';
+      var cur = (window.location.hash || '').replace(/^#\/?/, '');
+      if (cur === listHash) {
+        this.spokesDetailSpoke = null;
+        this.clearSpokeGitPanel();
+        return;
+      }
+      var self = this;
+      window.history.back();
+      setTimeout(function () {
+        var h = (window.location.hash || '').replace(/^#\/?/, '');
+        if (h !== listHash && self.spokesDetailSpoke) {
+          self.spokesDetailSpoke = null;
+          self.clearSpokeGitPanel();
+          window.location.hash = listHash;
+        }
+      }, 120);
+    },
+
+    async refreshSpokeDetail() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeDetailLoading = true;
+      this.spokeDetailError = '';
+      var pid = this.selectedProject.id;
+      var base =
+        '/api/projects/' + encodeURIComponent(pid) + '/spokes/' + encodeURIComponent(this.spokesDetailSpoke);
+      try {
+        this.spokeDetailRow = await OpenFangAPI.get(base);
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        this.spokeDetailError = e.message || 'Failed to load spoke';
+      }
+      this.spokeDetailLoading = false;
+    },
+
+    async reloadSpokeGitReads() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeGitLoading = true;
+      this.spokeGitError = '';
+      var pid = this.selectedProject.id;
+      var sn = encodeURIComponent(this.spokesDetailSpoke);
+      var base = '/api/projects/' + encodeURIComponent(pid) + '/spokes/' + sn + '/git';
+      try {
+        this.spokeGitStatusPayload = await OpenFangAPI.get(base + '/status');
+        this.spokeGitBranchesPayload = await OpenFangAPI.get(base + '/branches');
+      } catch (e) {
+        this.spokeGitError = e.message || 'Git load failed';
+      }
+      this.spokeGitLoading = false;
+      if (this.spokeGitError) return;
+      if (this.spokeDetailSubview === 'history') {
+        if (this.spokeHistoryCommitSha) {
+          await this.loadSpokeHistoryCommitDiff(this.spokeHistoryCommitSha);
+        } else {
+          await this.loadSpokeGitLog();
+        }
+        return;
+      }
+      if (this.spokeGitDiffLoaded) {
+        await this.fetchSpokeGitDiffContent();
+      } else {
+        this.resetSpokeGitDiffOnly();
+        await this.renderSpokeDiff();
+      }
+    },
+
+    /** Fetches `/git/diff` and renders. Caller sets `spokeGitDiffLoaded` for first load. */
+    async fetchSpokeGitDiffContent() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeGitDiffLoading = true;
+      var pid = this.selectedProject.id;
+      var sn = encodeURIComponent(this.spokesDetailSpoke);
+      var base = '/api/projects/' + encodeURIComponent(pid) + '/spokes/' + sn + '/git';
+      try {
+        var df = await OpenFangAPI.get(base + '/diff');
+        this.spokeGitDiffText = (df && df.unified_diff) || '';
+        this.spokeGitDiffTruncated = !!(df && df.diff_truncated);
+        this.spokeGitDiffMaxBytes = df && df.diff_max_bytes != null ? Number(df.diff_max_bytes) : 0;
+        await this.renderSpokeDiff();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Diff load failed');
+        this.spokeGitDiffLoaded = false;
+        this.spokeGitDiffText = '';
+        this.spokeGitDiffTruncated = false;
+        this.spokeGitDiffMaxBytes = 0;
+        await this.renderSpokeDiff();
+      }
+      this.spokeGitDiffLoading = false;
+    },
+
+    async loadSpokeGitDiff() {
+      if (!this.selectedProject || !this.spokesDetailSpoke || this.spokeGitDiffLoading || this.spokeGitLoading) {
+        return;
+      }
+      this.spokeGitDiffLoaded = true;
+      await this.fetchSpokeGitDiffContent();
+    },
+
+    refreshSpokeGitPanel() {
+      void this.reloadSpokeGitReads();
+    },
+
+    openSpokeHistory() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeDetailSubview = 'history';
+      this.resetSpokeHistoryUi();
+      this.pushProjectsHash();
+      void this.reloadSpokeGitReads();
+    },
+
+    backSpokeHistoryList() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeHistoryCommitSha = null;
+      this.spokeHistoryDiffText = '';
+      this.spokeHistoryDiffTruncated = false;
+      this.spokeHistoryDiffMaxBytes = 0;
+      this.spokeHistoryDiffLoaded = false;
+      this.spokeHistoryDiffLoading = false;
+      void this.renderUnifiedDiffIntoHost(
+        'spokeHistoryDiffContainer',
+        '',
+        this.spokeHistoryDiffSideBySide
+      );
+      this.pushProjectsHash();
+    },
+
+    backSpokeWorkspaceFromHistory() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeDetailSubview = 'workspace';
+      this.resetSpokeHistoryUi();
+      this.pushProjectsHash();
+      void this.reloadSpokeGitReads();
+    },
+
+    selectSpokeHistoryCommit(entry) {
+      if (!entry || !entry.oid) return;
+      this.spokeHistoryCommitSha = entry.oid;
+      this.pushProjectsHash();
+      void this.loadSpokeHistoryCommitDiff(entry.oid);
+    },
+
+    async loadSpokeGitLog() {
+      if (!this.selectedProject || !this.spokesDetailSpoke) return;
+      this.spokeHistoryLoading = true;
+      this.spokeHistoryError = '';
+      var pid = this.selectedProject.id;
+      var sn = encodeURIComponent(this.spokesDetailSpoke);
+      var url =
+        '/api/projects/' + encodeURIComponent(pid) + '/spokes/' + sn + '/git/log?limit=50';
+      try {
+        var data = await OpenFangAPI.get(url);
+        if (data && data.is_git_repo) {
+          this.spokeHistoryEntries = Array.isArray(data.commits) ? data.commits : [];
+        } else {
+          this.spokeHistoryEntries = [];
+        }
+      } catch (e) {
+        this.spokeHistoryError = e.message || 'Log failed';
+        this.spokeHistoryEntries = [];
+      }
+      this.spokeHistoryLoading = false;
+    },
+
+    async loadSpokeHistoryCommitDiff(sha) {
+      if (!this.selectedProject || !this.spokesDetailSpoke || !sha) return;
+      if (!/^[0-9a-fA-F]{4,64}$/.test(String(sha))) {
+        this.spokeHistoryError = 'Invalid revision';
+        return;
+      }
+      this.spokeHistoryDiffLoading = true;
+      this.spokeHistoryError = '';
+      var pid = this.selectedProject.id;
+      var sn = encodeURIComponent(this.spokesDetailSpoke);
+      var base = '/api/projects/' + encodeURIComponent(pid) + '/spokes/' + sn + '/git';
+      try {
+        var df = await OpenFangAPI.get(base + '/commit/' + encodeURIComponent(sha) + '/diff');
+        this.spokeHistoryDiffText = (df && df.unified_diff) || '';
+        this.spokeHistoryDiffTruncated = !!(df && df.diff_truncated);
+        this.spokeHistoryDiffMaxBytes =
+          df && df.diff_max_bytes != null ? Number(df.diff_max_bytes) : 0;
+        this.spokeHistoryDiffLoaded = true;
+        await this.renderUnifiedDiffIntoHost(
+          'spokeHistoryDiffContainer',
+          this.spokeHistoryDiffText || '',
+          this.spokeHistoryDiffSideBySide
+        );
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Commit diff failed');
+        this.spokeHistoryDiffLoaded = false;
+        this.spokeHistoryDiffText = '';
+        this.spokeHistoryDiffTruncated = false;
+        this.spokeHistoryDiffMaxBytes = 0;
+        await this.renderUnifiedDiffIntoHost('spokeHistoryDiffContainer', '', this.spokeHistoryDiffSideBySide);
+      }
+      this.spokeHistoryDiffLoading = false;
+    },
+
+    async renderUnifiedDiffIntoHost(hostId, text, sideBySide) {
+      var self = this;
+      await new Promise(function (resolve) {
+        if (typeof self.$nextTick === 'function') self.$nextTick(resolve);
+        else queueMicrotask(resolve);
+      });
+      var el = document.getElementById(hostId);
+      if (!el) return;
+      el.classList.add('of-diff2html-wrap');
+      var UI = typeof Diff2HtmlUI !== 'undefined' ? Diff2HtmlUI : window.Diff2HtmlUI;
+      var D2H_LAYOUT_FIX =
+        '.d2h-code-wrapper{position:relative;overflow-x:auto;max-width:100%;}' +
+        '.d2h-files-diff .d2h-file-side-diff{vertical-align:top;}' +
+        '.d2h-diff-table td{vertical-align:top;}';
+      function clearMount() {
+        if (el.shadowRoot) {
+          var m = el.shadowRoot.querySelector('.d2h-mount');
+          if (m) m.innerHTML = '';
+        }
+      }
+      if (!String(text).trim()) {
+        clearMount();
+        return;
+      }
+      try {
+        var sr = el.shadowRoot;
+        if (!sr) {
+          sr = el.attachShadow({ mode: 'open' });
+          var link = document.createElement('link');
+          link.rel = 'stylesheet';
+          link.href = '/vendor/diff2html/diff2html.min.css';
+          sr.appendChild(link);
+          await new Promise(function (resolve, reject) {
+            link.onload = function () {
+              resolve();
+            };
+            link.onerror = function () {
+              reject(new Error('diff2html css'));
+            };
+          });
+        }
+        if (!sr.querySelector('style[data-of-d2h-fix]')) {
+          var fixStyle = document.createElement('style');
+          fixStyle.setAttribute('data-of-d2h-fix', '1');
+          fixStyle.textContent = D2H_LAYOUT_FIX;
+          var mountRef = sr.querySelector('.d2h-mount');
+          if (mountRef) sr.insertBefore(fixStyle, mountRef);
+          else sr.appendChild(fixStyle);
+        }
+        var mount = sr.querySelector('.d2h-mount');
+        if (!mount) {
+          mount = document.createElement('div');
+          mount.className = 'd2h-mount';
+          sr.appendChild(mount);
+        }
+        mount.innerHTML = '';
+        if (!UI) {
+          mount.textContent = text;
+          return;
+        }
+        var fmt = sideBySide ? 'side-by-side' : 'line-by-line';
+        var ui = new UI(mount, text, {
+          drawFileList: true,
+          matching: 'lines',
+          outputFormat: fmt,
+        });
+        ui.draw();
+        if (typeof ui.highlightCode === 'function') ui.highlightCode();
+      } catch (e) {
+        clearMount();
+        if (!el.shadowRoot) {
+          el.textContent = text;
+          return;
+        }
+        var m = el.shadowRoot.querySelector('.d2h-mount');
+        if (!m) {
+          m = document.createElement('div');
+          m.className = 'd2h-mount';
+          el.shadowRoot.appendChild(m);
+        }
+        m.textContent = text;
+      }
+    },
+
+    async renderSpokeDiff() {
+      await this.renderUnifiedDiffIntoHost(
+        'spokeDiffContainer',
+        this.spokeGitDiffText || '',
+        this.spokeDiffSideBySide
+      );
+    },
+
+    async toggleSpokeDiffLayout() {
+      if (!this.spokeGitDiffLoaded || !String(this.spokeGitDiffText || '').trim()) return;
+      this.spokeDiffSideBySide = !this.spokeDiffSideBySide;
+      await this.renderSpokeDiff();
+    },
+
+    async toggleSpokeHistoryDiffLayout() {
+      if (!this.spokeHistoryDiffLoaded || !String(this.spokeHistoryDiffText || '').trim()) return;
+      this.spokeHistoryDiffSideBySide = !this.spokeHistoryDiffSideBySide;
+      await this.renderUnifiedDiffIntoHost(
+        'spokeHistoryDiffContainer',
+        this.spokeHistoryDiffText || '',
+        this.spokeHistoryDiffSideBySide
+      );
+    },
+
+    async gitStageFile(path) {
+      if (!this.selectedProject || !this.spokesDetailSpoke || !path || this.spokeGitMutating) return;
+      this.spokeGitMutating = true;
+      try {
+        var pid = this.selectedProject.id;
+        var base =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/spokes/' +
+          encodeURIComponent(this.spokesDetailSpoke) +
+          '/git/stage';
+        await OpenFangAPI.post(base, { path: path });
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Stage failed');
+      }
+      this.spokeGitMutating = false;
+    },
+
+    async gitUnstageFile(path) {
+      if (!this.selectedProject || !this.spokesDetailSpoke || !path || this.spokeGitMutating) return;
+      this.spokeGitMutating = true;
+      try {
+        var pid = this.selectedProject.id;
+        var base =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/spokes/' +
+          encodeURIComponent(this.spokesDetailSpoke) +
+          '/git/unstage';
+        await OpenFangAPI.post(base, { path: path });
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Unstage failed');
+      }
+      this.spokeGitMutating = false;
+    },
+
+    async gitStageAllSpoke() {
+      if (!this.selectedProject || !this.spokesDetailSpoke || this.spokeGitMutating) return;
+      this.spokeGitMutating = true;
+      try {
+        var pid = this.selectedProject.id;
+        var base =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/spokes/' +
+          encodeURIComponent(this.spokesDetailSpoke) +
+          '/git/stage-all';
+        await OpenFangAPI.post(base, {});
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Stage all failed');
+      }
+      this.spokeGitMutating = false;
+    },
+
+    async gitCommitSpoke() {
+      if (!this.selectedProject || !this.spokesDetailSpoke || this.spokeGitMutating) return;
+      var msg = (this.gitCommitMessage || '').trim();
+      if (!msg) {
+        OpenFangToast.error('Commit message required');
+        return;
+      }
+      this.spokeGitMutating = true;
+      try {
+        var pid = this.selectedProject.id;
+        var base =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/spokes/' +
+          encodeURIComponent(this.spokesDetailSpoke) +
+          '/git/commit';
+        await OpenFangAPI.post(base, { message: msg });
+        this.gitCommitMessage = '';
+        OpenFangToast.success('Committed');
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Commit failed');
+      }
+      this.spokeGitMutating = false;
+    },
+
+    async gitCheckoutSpoke(create) {
+      if (!this.selectedProject || !this.spokesDetailSpoke || this.spokeGitMutating) return;
+      var name = create
+        ? (this.gitNewBranchName || '').trim()
+        : (this.gitBranchSwitchName || '').trim();
+      if (!name) {
+        OpenFangToast.error('Branch name required');
+        return;
+      }
+      if (this.spokeGitDirty() && !create) {
+        if (!window.confirm('Working tree has local changes. Switch branch anyway?')) return;
+      }
+      this.spokeGitMutating = true;
+      try {
+        var pid = this.selectedProject.id;
+        var base =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/spokes/' +
+          encodeURIComponent(this.spokesDetailSpoke) +
+          '/git/checkout';
+        await OpenFangAPI.post(base, { branch: name, create: !!create });
+        if (create) this.gitNewBranchName = '';
+        OpenFangToast.success(create ? 'Branch created' : 'Switched branch');
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Checkout failed');
+      }
+      this.spokeGitMutating = false;
+    },
+
+    async gitPushSpoke() {
+      if (!this.selectedProject || !this.spokesDetailSpoke || this.spokeGitMutating) return;
+      if (!window.confirm('Push to configured remote?')) return;
+      this.spokeGitMutating = true;
+      try {
+        var pid = this.selectedProject.id;
+        var base =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/spokes/' +
+          encodeURIComponent(this.spokesDetailSpoke) +
+          '/git/push';
+        await OpenFangAPI.post(base, {});
+        OpenFangToast.success('Push finished');
+        await this.reloadSpokeGitReads();
+      } catch (e) {
+        OpenFangToast.error(e.message || 'Push failed');
+      }
+      this.spokeGitMutating = false;
+    },
+
     openRegisterModal() {
       this.registerModalOpen = true;
       this.registerError = '';
-      this.registerForm = { name: '', path: '' };
+      this.registerForm = { name: '', path: '', adminSpoke: '' };
     },
 
     closeRegisterModal() {
@@ -583,10 +1370,13 @@ function projectsPage() {
       this.registerSubmitting = true;
       this.registerError = '';
       try {
-        await OpenFangAPI.post('/api/projects', {
+        var body = {
           name: this.registerForm.name.trim(),
           path: this.registerForm.path.trim(),
-        });
+        };
+        var as = (this.registerForm.adminSpoke || '').trim();
+        if (as) body.admin_spoke = as;
+        await OpenFangAPI.post('/api/projects', body);
         this.closeRegisterModal();
         await this.loadProjects();
       } catch (e) {

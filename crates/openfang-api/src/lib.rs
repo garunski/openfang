@@ -4,6 +4,7 @@
 //! The kernel runs in-process; the CLI connects over HTTP.
 
 pub mod channel_bridge;
+pub mod git_workspace;
 pub mod middleware;
 pub mod openai_compat;
 pub mod project_backlog;

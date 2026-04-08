@@ -156,6 +156,10 @@ pub async fn build_router(
             axum::routing::get(webchat::fa4_font),
         )
         .route(
+            "/vendor/diff2html/diff2html.min.css",
+            axum::routing::get(webchat::diff2html_css),
+        )
+        .route(
             "/api/metrics",
             axum::routing::get(routes::prometheus_metrics),
         )
@@ -386,6 +390,58 @@ pub async fn build_router(
         .route(
             "/api/projects/{id}/spokes",
             axum::routing::get(routes::list_project_spokes),
+        )
+        .route(
+            "/api/projects/{id}/spokes/admin",
+            axum::routing::put(routes::set_project_admin_spoke),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/status",
+            axum::routing::get(routes::get_project_spoke_git_status),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/diff",
+            axum::routing::get(routes::get_project_spoke_git_diff),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/branches",
+            axum::routing::get(routes::get_project_spoke_git_branches),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/log",
+            axum::routing::get(routes::get_project_spoke_git_log),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/commit/{sha}/diff",
+            axum::routing::get(routes::get_project_spoke_git_commit_diff),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/stage",
+            axum::routing::post(routes::post_project_spoke_git_stage),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/unstage",
+            axum::routing::post(routes::post_project_spoke_git_unstage),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/stage-all",
+            axum::routing::post(routes::post_project_spoke_git_stage_all),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/commit",
+            axum::routing::post(routes::post_project_spoke_git_commit),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/checkout",
+            axum::routing::post(routes::post_project_spoke_git_checkout),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}/git/push",
+            axum::routing::post(routes::post_project_spoke_git_push),
+        )
+        .route(
+            "/api/projects/{id}/spokes/{spoke}",
+            axum::routing::get(routes::get_project_spoke_detail),
         )
         .route(
             "/api/projects/{id}/pipelines",
