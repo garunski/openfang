@@ -116,9 +116,8 @@ pub enum PipelineAuditEvent {
 }
 
 pub fn emit(event: PipelineAuditEvent) {
-    let v = serde_json::to_value(&event).unwrap_or_else(|_| {
-        serde_json::json!({ "event": "pipeline_audit_serialize_error" })
-    });
+    let v = serde_json::to_value(&event)
+        .unwrap_or_else(|_| serde_json::json!({ "event": "pipeline_audit_serialize_error" }));
     ring_push(&v);
     #[cfg(test)]
     {
@@ -226,11 +225,7 @@ pub fn parse_backlog_plain_status(text: &str) -> Option<String> {
         }
         if in_fm {
             if let Some(rest) = t.strip_prefix("status:") {
-                let s = rest
-                    .trim()
-                    .trim_matches('\'')
-                    .trim_matches('"')
-                    .to_string();
+                let s = rest.trim().trim_matches('\'').trim_matches('"').to_string();
                 if !s.is_empty() {
                     return Some(s);
                 }

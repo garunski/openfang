@@ -285,4 +285,59 @@ pub trait KernelHandle: Send + Sync {
     fn automation_model_for_phase(&self, phase: &str) -> String {
         openfang_types::config::default_automation_model_for_phase(phase).to_string()
     }
+
+    /// Validate backlog task is `Ready for Dev`, then run a registered workflow for this project.
+    /// When `post_mattermost_confirmation` is true, posts to the project's `mattermost_channel_id` before starting.
+    async fn start_project_workflow(
+        &self,
+        _project_id: &str,
+        _task_id: &str,
+        _workflow_id: Option<&str>,
+        _workflow_name: Option<&str>,
+        _post_mattermost_confirmation: bool,
+    ) -> Result<String, String> {
+        Err("start_project_workflow not available".to_string())
+    }
+
+    /// Read-only backlog snapshot for a registered project (`task list` or single `task view`).
+    async fn query_project_status(
+        &self,
+        _project_id: &str,
+        _task_id: Option<&str>,
+    ) -> Result<String, String> {
+        Err("query_project_status not available".to_string())
+    }
+
+    /// Load persisted per-project pipeline context (`<home>/projects/<id>/context.json`) as JSON.
+    async fn read_project_context(&self, _project_id: &str) -> Result<String, String> {
+        Err("read_project_context not available".to_string())
+    }
+
+    /// Patch per-project context (append failures/decisions, set summaries); returns updated JSON.
+    async fn update_project_context(
+        &self,
+        _project_id: &str,
+        _patch: serde_json::Value,
+    ) -> Result<String, String> {
+        Err("update_project_context not available".to_string())
+    }
+
+    /// Resolve `spoke_root` under `[automation].spoke_roots` and under a registered project's spokes.
+    fn resolve_git_workspace_for_project(
+        &self,
+        _project_id: &str,
+        _spoke_root: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        Err("resolve_git_workspace_for_project not available".to_string())
+    }
+
+    /// Env var name for GitHub PAT (`git_create_pr`); project override wins over `[automation].github_token_env`.
+    fn github_token_env_for_pipeline(&self, _project_id: &str) -> String {
+        "GITHUB_TOKEN".to_string()
+    }
+
+    /// `{task_id}` branch naming template for `git_create_branch`.
+    fn pipeline_git_branch_template(&self, _project_id: &str) -> String {
+        "openfang/task-{task_id}".to_string()
+    }
 }

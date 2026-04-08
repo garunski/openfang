@@ -1,6 +1,8 @@
 //! Scan `backlog/tasks` and `backlog/docs` for backlog.md-style markdown.
 
-use openfang_types::backlog::parser::{extract_section, parse_acceptance_criteria, parse_frontmatter};
+use openfang_types::backlog::parser::{
+    extract_section, parse_acceptance_criteria, parse_frontmatter,
+};
 use serde_json::{json, Value as JsonValue};
 use std::fs;
 use std::path::Path;
@@ -37,9 +39,7 @@ fn yaml_to_json(v: &serde_yaml::Value) -> JsonValue {
         }
         serde_yaml::Value::Mapping(m) => JsonValue::Object(
             m.iter()
-                .filter_map(|(k, v)| {
-                    k.as_str().map(|key| (key.to_string(), yaml_to_json(v)))
-                })
+                .filter_map(|(k, v)| k.as_str().map(|key| (key.to_string(), yaml_to_json(v))))
                 .collect(),
         ),
         serde_yaml::Value::Tagged(t) => yaml_to_json(&t.value),
@@ -106,11 +106,7 @@ fn task_id_matches(param: &str, fm_id: Option<&str>, file_stem: &str) -> bool {
     // Filename: `task-19 - Title.md` → stem `task-19 - Title`
     let lower = file_stem.to_ascii_lowercase();
     if let Some(rest) = lower.strip_prefix("task-") {
-        let num = rest
-            .split(" - ")
-            .next()
-            .unwrap_or(rest)
-            .trim();
+        let num = rest.split(" - ").next().unwrap_or(rest).trim();
         if norm_task_id(num) == want {
             return true;
         }
@@ -185,7 +181,10 @@ pub fn list_tasks(
     Ok(out)
 }
 
-pub fn get_task_detail(backlog_root: &Path, task_id: &str) -> Result<Option<JsonValue>, std::io::Error> {
+pub fn get_task_detail(
+    backlog_root: &Path,
+    task_id: &str,
+) -> Result<Option<JsonValue>, std::io::Error> {
     let tasks_dir = backlog_root.join("tasks");
     if !tasks_dir.is_dir() {
         return Ok(None);
@@ -204,13 +203,8 @@ pub fn get_task_detail(backlog_root: &Path, task_id: &str) -> Result<Option<Json
         let Ok((fm, body)) = split_frontmatter(&raw) else {
             continue;
         };
-        let fm_id = fm
-            .as_mapping()
-            .and_then(|m| mapping_str_ci(m, &["id"]));
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let fm_id = fm.as_mapping().and_then(|m| mapping_str_ci(m, &["id"]));
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         if !task_id_matches(task_id, fm_id.as_deref(), stem) {
             continue;
         }
@@ -266,9 +260,11 @@ fn walk_docs_dir(
             Some(m) => m,
             None => continue,
         };
-        let id = mapping_str_ci(m, &["id"]).unwrap_or_else(|| name.trim_end_matches(".md").to_string());
+        let id =
+            mapping_str_ci(m, &["id"]).unwrap_or_else(|| name.trim_end_matches(".md").to_string());
         let title = mapping_str_ci(m, &["title"]).unwrap_or_default();
-        let doc_type = mapping_str_ci(m, &["type", "doc_type", "docType"]).unwrap_or_else(|| "doc".to_string());
+        let doc_type = mapping_str_ci(m, &["type", "doc_type", "docType"])
+            .unwrap_or_else(|| "doc".to_string());
         let rel = p
             .strip_prefix(docs_root)
             .unwrap_or(&p)

@@ -21,9 +21,7 @@ pub fn extract_repo_spoke_name_from_labels<'a>(
         }
     }
     match repo_labels.len() {
-        0 => Err(
-            "Task must have exactly one repo:<spoke> label; none found.".to_string(),
-        ),
+        0 => Err("Task must have exactly one repo:<spoke> label; none found.".to_string()),
         1 => Ok(repo_labels.pop().expect("one repo label")),
         n => Err(format!(
             "Task must have exactly one repo:<spoke> label; found {n}: {:?}",
@@ -113,7 +111,8 @@ mod tests {
     #[test]
     fn extract_duplicate_repo_labels() {
         let labels = ["repo:a".to_string(), "repo:b".to_string()];
-        let err = extract_repo_spoke_name_from_labels(labels.iter().map(String::as_str)).unwrap_err();
+        let err =
+            extract_repo_spoke_name_from_labels(labels.iter().map(String::as_str)).unwrap_err();
         assert!(err.contains("exactly one"), "{err}");
         assert!(err.contains("2"), "{err}");
     }

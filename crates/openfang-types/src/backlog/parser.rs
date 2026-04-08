@@ -28,7 +28,9 @@ pub enum BacklogParseError {
 }
 
 /// Split YAML frontmatter (`---` … `---`) from the body; returns key → value map and remainder.
-pub fn parse_frontmatter(content: &str) -> Result<(HashMap<String, Yaml>, String), BacklogParseError> {
+pub fn parse_frontmatter(
+    content: &str,
+) -> Result<(HashMap<String, Yaml>, String), BacklogParseError> {
     let content = content.replace("\r\n", "\n");
     let trimmed = content.trim_start();
     if !trimmed.starts_with("---") {
@@ -119,7 +121,10 @@ fn parse_checkbox_block(marked_block: &str) -> Vec<AcceptanceCriterion> {
         };
         let mark = cap.get(1).map(|m| m.as_str()).unwrap_or("");
         let checked = mark.eq_ignore_ascii_case("x");
-        let text = cap.get(2).map(|m| m.as_str().trim().to_string()).unwrap_or_default();
+        let text = cap
+            .get(2)
+            .map(|m| m.as_str().trim().to_string())
+            .unwrap_or_default();
         out.push(AcceptanceCriterion {
             index: idx,
             text,
@@ -199,10 +204,7 @@ fn map_get_str(map: &HashMap<String, Yaml>, keys: &[&str]) -> Option<String> {
     }
     for (k, v) in map {
         let kl = k.to_ascii_lowercase();
-        if keys
-            .iter()
-            .any(|w| kl == w.to_ascii_lowercase().as_str())
-        {
+        if keys.iter().any(|w| kl == w.to_ascii_lowercase().as_str()) {
             return yaml_scalar_to_string(v);
         }
     }
@@ -248,10 +250,7 @@ fn map_get_i32_from_number(map: &HashMap<String, Yaml>, keys: &[&str]) -> Option
         }
     }
     for (k, val) in map {
-        if !keys
-            .iter()
-            .any(|w| k.eq_ignore_ascii_case(w))
-        {
+        if !keys.iter().any(|w| k.eq_ignore_ascii_case(w)) {
             continue;
         }
         if let Yaml::Number(n) = val {
@@ -369,10 +368,7 @@ pub fn parse_task(content: &str) -> Result<BacklogTask, BacklogParseError> {
     let id = map_get_str(&map, &["id"]).ok_or(BacklogParseError::MissingField("id"))?;
     let title = map_get_str(&map, &["title"]).ok_or(BacklogParseError::MissingField("title"))?;
     let status = map_get_str(&map, &["status"]).unwrap_or_default();
-    let assignee = map
-        .get("assignee")
-        .map(yaml_assignee)
-        .unwrap_or_default();
+    let assignee = map.get("assignee").map(yaml_assignee).unwrap_or_default();
     let reporter = map_get_str(&map, &["reporter"]);
     let created_raw = map_get_str(&map, &["created_date", "createdDate"])
         .ok_or(BacklogParseError::MissingField("created_date"))?;
@@ -411,12 +407,7 @@ pub fn parse_task(content: &str) -> Result<BacklogTask, BacklogParseError> {
     if implementation_plan.is_none() {
         implementation_plan = h2_fallback(
             &body,
-            &[
-                "Implementation Plan",
-                "Implementation plan",
-                "Plan",
-                "plan",
-            ],
+            &["Implementation Plan", "Implementation plan", "Plan", "plan"],
         );
     }
 
@@ -437,12 +428,7 @@ pub fn parse_task(content: &str) -> Result<BacklogTask, BacklogParseError> {
     if final_summary.is_none() {
         final_summary = h2_fallback(
             &body,
-            &[
-                "Final Summary",
-                "Final summary",
-                "Summary",
-                "summary",
-            ],
+            &["Final Summary", "Final summary", "Summary", "summary"],
         );
     }
 
@@ -490,8 +476,8 @@ pub fn parse_document(content: &str) -> Result<BacklogDocument, BacklogParseErro
     let (map, body) = parse_frontmatter(content)?;
     let id = map_get_str(&map, &["id"]).ok_or(BacklogParseError::MissingField("id"))?;
     let title = map_get_str(&map, &["title"]).unwrap_or_default();
-    let doc_type = map_get_str(&map, &["type", "doc_type", "docType"])
-        .unwrap_or_else(|| "other".to_string());
+    let doc_type =
+        map_get_str(&map, &["type", "doc_type", "docType"]).unwrap_or_else(|| "other".to_string());
     let created_raw = map_get_str(&map, &["created_date", "createdDate"])
         .ok_or(BacklogParseError::MissingField("created_date"))?;
     let created_date = normalize_date(&created_raw);
@@ -672,7 +658,11 @@ Ship it.
         assert_eq!(t.priority, Some(TaskPriority::High));
         assert_eq!(t.ordinal, Some(42));
         assert!(t.description.as_deref().unwrap().contains("Hello"));
-        assert!(t.implementation_plan.as_deref().unwrap().contains("Step one"));
+        assert!(t
+            .implementation_plan
+            .as_deref()
+            .unwrap()
+            .contains("Step one"));
         assert_eq!(t.acceptance_criteria.len(), 2);
         assert!(t.acceptance_criteria[1].checked);
         assert_eq!(t.definition_of_done.len(), 1);
@@ -686,7 +676,10 @@ Ship it.
         assert_eq!(d.doc_type, "guide");
         assert_eq!(d.created_date, "2026-01-15");
         assert_eq!(d.updated_date.as_deref(), Some("2026-02-01"));
-        assert_eq!(d.tags.as_ref().unwrap(), &vec!["api".to_string(), "rest".to_string()]);
+        assert_eq!(
+            d.tags.as_ref().unwrap(),
+            &vec!["api".to_string(), "rest".to_string()]
+        );
         assert!(d.raw_content.contains("Body here"));
     }
 
@@ -750,8 +743,16 @@ done thing
 "#;
         let t = parse_task(raw).unwrap();
         assert_eq!(t.description.as_deref(), Some("Free desc."));
-        assert!(t.implementation_plan.as_deref().unwrap().contains("step one"));
-        assert!(t.implementation_notes.as_deref().unwrap().contains("done thing"));
+        assert!(t
+            .implementation_plan
+            .as_deref()
+            .unwrap()
+            .contains("step one"));
+        assert!(t
+            .implementation_notes
+            .as_deref()
+            .unwrap()
+            .contains("done thing"));
         assert_eq!(t.acceptance_criteria.len(), 1);
     }
 

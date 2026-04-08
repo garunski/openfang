@@ -6,8 +6,8 @@
 use crate::formatter;
 use crate::router::AgentRouter;
 use crate::types::{
-    default_phase_emoji, AgentPhase, ChannelAdapter, ChannelContent, ChannelMessage, ChannelUser,
-    LifecycleReaction,
+    default_phase_emoji, AgentPhase, ChannelAdapter, ChannelContent, ChannelMessage, ChannelType,
+    ChannelUser, LifecycleReaction,
 };
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -239,6 +239,14 @@ pub trait ChannelBridgeHandle: Send + Sync {
     /// Check if auto-reply is enabled and the message should trigger one.
     /// Returns Some(reply_text) if auto-reply fires, None otherwise.
     async fn check_auto_reply(&self, _agent_id: AgentId, _message: &str) -> Option<String> {
+        None
+    }
+
+    /// Mattermost channel id bound to a project → orchestrator agent id and project id string.
+    async fn resolve_mattermost_project_route(
+        &self,
+        _mattermost_channel_id: &str,
+    ) -> Option<(AgentId, String)> {
         None
     }
 
@@ -476,6 +484,12 @@ fn channel_type_str(channel: &crate::types::ChannelType) -> &str {
         crate::types::ChannelType::CLI => "cli",
         crate::types::ChannelType::Custom(s) => s.as_str(),
     }
+}
+
+fn openfang_channel_context_prefix(project_id: &str, mattermost_channel_id: &str) -> String {
+    format!(
+        "[OpenFang channel context: project_id={project_id} mattermost_channel_id={mattermost_channel_id}]\n"
+    )
 }
 
 /// Send a response, applying output formatting and optional threading.
@@ -840,12 +854,34 @@ async fn dispatch_message(
         }
     }
 
+    let mm_channel_id: Option<&str> = if message.channel == ChannelType::Mattermost {
+        Some(
+            message
+                .metadata
+                .get("mattermost_channel_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(message.sender.platform_id.as_str()),
+        )
+    } else {
+        None
+    };
+
+    let project_route = if let Some(ch) = mm_channel_id {
+        handle.resolve_mattermost_project_route(ch).await
+    } else {
+        None
+    };
+
     // Route to agent (standard path)
-    let agent_id = router.resolve(
-        &message.channel,
-        &message.sender.platform_id,
-        message.sender.openfang_user.as_deref(),
-    );
+    let agent_id = if let Some((aid, _)) = project_route {
+        Some(aid)
+    } else {
+        router.resolve(
+            &message.channel,
+            &message.sender.platform_id,
+            message.sender.openfang_user.as_deref(),
+        )
+    };
 
     let agent_id = match agent_id {
         Some(id) => id,
@@ -936,7 +972,7 @@ async fn dispatch_message(
         .metadata
         .get("sender_email")
         .and_then(|v| v.as_str());
-    let prefixed_text = if !sender_name.is_empty() {
+    let mut prefixed_text = if !sender_name.is_empty() {
         match sender_email {
             Some(email) => format!("[From: {sender_name} <{email}>] {text}"),
             None => format!("[From: {sender_name}] {text}"),
@@ -944,6 +980,14 @@ async fn dispatch_message(
     } else {
         text.clone()
     };
+
+    if let (Some((_, pid)), Some(mm)) = (&project_route, mm_channel_id) {
+        prefixed_text = format!(
+            "{}{}",
+            openfang_channel_context_prefix(pid, mm),
+            prefixed_text
+        );
+    }
 
     // Send to agent and relay response
     let result = handle.send_message(agent_id, &prefixed_text).await;
@@ -972,7 +1016,7 @@ async fn dispatch_message(
             // Try re-resolution before reporting error
             if let Some(new_id) = try_reresolution(&e, &channel_key, handle, router).await {
                 let typing_task2 = spawn_typing_loop(adapter_arc.clone(), message.sender.clone());
-                let retry = handle.send_message(new_id, &text).await;
+                let retry = handle.send_message(new_id, &prefixed_text).await;
                 typing_task2.abort();
                 match retry {
                     Ok(response) => {
@@ -1262,7 +1306,7 @@ async fn download_image_to_blocks(url: &str, caption: Option<&str>) -> Vec<Conte
 /// and RBAC the same way as the text path.
 #[allow(clippy::too_many_arguments)]
 async fn dispatch_with_blocks(
-    blocks: Vec<ContentBlock>,
+    mut blocks: Vec<ContentBlock>,
     message: &ChannelMessage,
     handle: &Arc<dyn ChannelBridgeHandle>,
     router: &Arc<AgentRouter>,
@@ -1273,12 +1317,34 @@ async fn dispatch_with_blocks(
     output_format: OutputFormat,
     lifecycle_reactions: bool,
 ) {
+    let mm_channel_id: Option<&str> = if message.channel == ChannelType::Mattermost {
+        Some(
+            message
+                .metadata
+                .get("mattermost_channel_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or(message.sender.platform_id.as_str()),
+        )
+    } else {
+        None
+    };
+
+    let project_route = if let Some(ch) = mm_channel_id {
+        handle.resolve_mattermost_project_route(ch).await
+    } else {
+        None
+    };
+
     // Route to agent (same logic as text path)
-    let agent_id = router.resolve(
-        &message.channel,
-        &message.sender.platform_id,
-        message.sender.openfang_user.as_deref(),
-    );
+    let agent_id = if let Some((aid, _)) = project_route {
+        Some(aid)
+    } else {
+        router.resolve(
+            &message.channel,
+            &message.sender.platform_id,
+            message.sender.openfang_user.as_deref(),
+        )
+    };
 
     let agent_id = match agent_id {
         Some(id) => id,
@@ -1310,6 +1376,18 @@ async fn dispatch_with_blocks(
             }
         }
     };
+
+    if let (Some((_, pid)), Some(mm)) = (&project_route, mm_channel_id) {
+        blocks.insert(
+            0,
+            ContentBlock::Text {
+                text: openfang_channel_context_prefix(pid, mm)
+                    .trim_end()
+                    .to_string(),
+                provider_metadata: None,
+            },
+        );
+    }
 
     // Build channel key for re-resolution lookups
     let channel_key = format!("{:?}", message.channel);

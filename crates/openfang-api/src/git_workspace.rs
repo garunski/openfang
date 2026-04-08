@@ -36,7 +36,10 @@ impl fmt::Display for GitWorkspaceError {
 impl std::error::Error for GitWorkspaceError {}
 
 /// Resolve registered spoke `name` to an absolute directory path.
-pub fn resolve_spoke_root(project: &Project, spoke_name: &str) -> Result<PathBuf, GitWorkspaceError> {
+pub fn resolve_spoke_root(
+    project: &Project,
+    spoke_name: &str,
+) -> Result<PathBuf, GitWorkspaceError> {
     let name = spoke_name.trim();
     if name.is_empty() {
         return Err(GitWorkspaceError::SpokeNotFound);
@@ -84,7 +87,9 @@ pub fn is_git_repo(cwd: &Path) -> Result<bool, GitWorkspaceError> {
     if !out.status.success() {
         return Ok(false);
     }
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_ascii_lowercase();
+    let s = String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .to_ascii_lowercase();
     Ok(s == "true")
 }
 
@@ -215,7 +220,11 @@ pub fn parse_status_porcelain(raw: &str) -> GitStatusResponse {
         });
     }
     let dirty = !files.is_empty();
-    GitStatusResponse { branch, dirty, files }
+    GitStatusResponse {
+        branch,
+        dirty,
+        files,
+    }
 }
 
 fn parse_branch_line(rest: &str, branch: &mut GitBranchInfo) {
@@ -266,10 +275,7 @@ pub fn git_status(cwd: &Path) -> Result<GitStatusResponse, GitWorkspaceError> {
 }
 
 fn git_untracked_paths(cwd: &Path) -> Result<Vec<String>, GitWorkspaceError> {
-    let out = run_git(
-        cwd,
-        &["ls-files", "--others", "--exclude-standard", "-z"],
-    )?;
+    let out = run_git(cwd, &["ls-files", "--others", "--exclude-standard", "-z"])?;
     let text = git_ok(out)?;
     let mut v = Vec::new();
     for s in text.split('\0') {
@@ -317,12 +323,14 @@ fn spawn_git_read_limited(
     let mut child = cmd
         .spawn()
         .map_err(|e| GitWorkspaceError::GitSpawn(e.to_string()))?;
-    let mut stdout = child.stdout.take().ok_or_else(|| {
-        GitWorkspaceError::GitSpawn("git diff: missing stdout".to_string())
-    })?;
-    let stderr = child.stderr.take().ok_or_else(|| {
-        GitWorkspaceError::GitSpawn("git diff: missing stderr".to_string())
-    })?;
+    let mut stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| GitWorkspaceError::GitSpawn("git diff: missing stdout".to_string()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| GitWorkspaceError::GitSpawn("git diff: missing stderr".to_string()))?;
 
     let stderr_handle = std::thread::spawn(move || {
         let mut s = String::new();
@@ -445,7 +453,11 @@ pub fn git_log_head(cwd: &Path, limit: usize) -> Result<Vec<GitLogEntry>, GitWor
 }
 
 /// Unified diff for a single commit (`git show` patch only), size-capped like [`git_diff_head`].
-pub fn git_commit_patch(cwd: &Path, rev: &str, max_bytes: usize) -> Result<GitSpokeDiff, GitWorkspaceError> {
+pub fn git_commit_patch(
+    cwd: &Path,
+    rev: &str,
+    max_bytes: usize,
+) -> Result<GitSpokeDiff, GitWorkspaceError> {
     ensure_git_repo(cwd)?;
     validate_git_rev(rev)?;
     let cap = max_bytes.max(4096);
@@ -545,7 +557,10 @@ pub fn git_diff_head(cwd: &Path) -> Result<GitSpokeDiff, GitWorkspaceError> {
     git_diff_head_with_limit(cwd, GIT_DIFF_MAX_RESPONSE_BYTES)
 }
 
-pub fn git_diff_head_with_limit(cwd: &Path, max_bytes: usize) -> Result<GitSpokeDiff, GitWorkspaceError> {
+pub fn git_diff_head_with_limit(
+    cwd: &Path,
+    max_bytes: usize,
+) -> Result<GitSpokeDiff, GitWorkspaceError> {
     ensure_git_repo(cwd)?;
     let cap = max_bytes.max(4096);
     let (mut unified_diff, mut truncated) = read_git_diff_head_streaming(cwd, cap)?;

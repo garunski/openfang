@@ -19,15 +19,17 @@ use openfang_runtime::agent_loop::{
     run_agent_loop, run_agent_loop_streaming, strip_provider_prefix, AgentLoopResult,
 };
 use openfang_runtime::audit::AuditLog;
+use openfang_runtime::backlog_cli;
 use openfang_runtime::drivers;
 use openfang_runtime::kernel_handle::{self, KernelHandle};
 use openfang_runtime::llm_driver::{
     CompletionRequest, CompletionResponse, DriverConfig, LlmDriver, LlmError, StreamEvent,
 };
+use openfang_runtime::pipeline_audit::parse_backlog_plain_status;
 use openfang_runtime::python_runtime::{self, PythonConfig};
 use openfang_runtime::routing::ModelRouter;
 use openfang_runtime::sandbox::{SandboxConfig, WasmSandbox};
-use openfang_runtime::tool_runner::builtin_tool_definitions;
+use openfang_runtime::tool_runner::{builtin_tool_definitions, parse_backlog_task_list_plain};
 use openfang_types::agent::*;
 use openfang_types::capability::Capability;
 use openfang_types::config::{KernelConfig, OutputFormat};
@@ -884,12 +886,12 @@ impl OpenFangKernel {
                 // Auto-detect embedding provider by checking API key env vars in
                 // priority order.  First match wins.
                 const API_KEY_PROVIDERS: &[(&str, &str)] = &[
-                    ("OPENAI_API_KEY",    "openai"),
-                    ("GROQ_API_KEY",      "groq"),
-                    ("MISTRAL_API_KEY",   "mistral"),
-                    ("TOGETHER_API_KEY",  "together"),
+                    ("OPENAI_API_KEY", "openai"),
+                    ("GROQ_API_KEY", "groq"),
+                    ("MISTRAL_API_KEY", "mistral"),
+                    ("TOGETHER_API_KEY", "together"),
                     ("FIREWORKS_API_KEY", "fireworks"),
-                    ("COHERE_API_KEY",    "cohere"),
+                    ("COHERE_API_KEY", "cohere"),
                 ];
 
                 let detected_from_key = API_KEY_PROVIDERS
@@ -1144,8 +1146,7 @@ impl OpenFangKernel {
                                                 != entry.manifest.tool_allowlist
                                             || disk_manifest.tool_blocklist
                                                 != entry.manifest.tool_blocklist
-                                            || disk_manifest.skills
-                                                != entry.manifest.skills
+                                            || disk_manifest.skills != entry.manifest.skills
                                             || disk_manifest.mcp_servers
                                                 != entry.manifest.mcp_servers;
                                         if changed {
@@ -3576,6 +3577,443 @@ impl OpenFangKernel {
         }
     }
 
+    /// Kill the per-project orchestrator hand + agent for `project` (in-memory fields updated).
+    fn deactivate_project_orchestrator_in_memory(&self, project: &mut Project) -> KernelResult<()> {
+        use std::str::FromStr;
+        if let Some(ref s) = project.orchestrator_agent_id {
+            let t = s.trim();
+            if !t.is_empty() {
+                if let Ok(aid) = AgentId::from_str(t) {
+                    if let Some(inst) = self.hand_registry.find_by_agent(aid) {
+                        self.deactivate_hand(inst.instance_id)?;
+                    } else {
+                        let _ = self.kill_agent(aid);
+                    }
+                    project.bound_agents.retain(|x| x.trim() != t);
+                }
+            }
+        }
+        project.orchestrator_agent_id = None;
+        Ok(())
+    }
+
+    /// Spawns a dedicated `pipeline-coordinator` agent for `project` (unique agent name + UUID).
+    pub fn activate_pipeline_coordinator_for_project(
+        &self,
+        project: &Project,
+    ) -> KernelResult<AgentId> {
+        use openfang_hands::HandError;
+        use std::collections::HashMap;
+
+        const HAND_ID: &str = "pipeline-coordinator";
+
+        let def = self
+            .hand_registry
+            .get_definition(HAND_ID)
+            .ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::AgentNotFound(format!(
+                    "Hand not found: {HAND_ID}"
+                )))
+            })?
+            .clone();
+
+        let mut config = HashMap::new();
+        config.insert(
+            "openfang_project_id".to_string(),
+            serde_json::json!(project.id.to_string()),
+        );
+
+        let instance = self
+            .hand_registry
+            .activate(HAND_ID, config)
+            .map_err(|e| match e {
+                HandError::AlreadyActive(id) => KernelError::OpenFang(OpenFangError::Internal(
+                    format!("Hand already active: {id}"),
+                )),
+                other => KernelError::OpenFang(OpenFangError::Internal(other.to_string())),
+            })?;
+
+        let hand_provider = if def.agent.provider == "default" {
+            self.config.default_model.provider.clone()
+        } else {
+            def.agent.provider.clone()
+        };
+        let hand_model = if def.agent.model == "default" {
+            self.config.default_model.model.clone()
+        } else {
+            def.agent.model.clone()
+        };
+
+        let agent_name = format!("{}-{}", def.agent.name, project.id);
+
+        let mut manifest = AgentManifest {
+            name: agent_name,
+            description: def.agent.description.clone(),
+            module: def.agent.module.clone(),
+            model: ModelConfig {
+                provider: hand_provider,
+                model: hand_model,
+                max_tokens: def.agent.max_tokens,
+                temperature: def.agent.temperature,
+                system_prompt: def.agent.system_prompt.clone(),
+                api_key_env: def.agent.api_key_env.clone(),
+                base_url: def.agent.base_url.clone(),
+            },
+            capabilities: ManifestCapabilities {
+                tools: def.tools.clone(),
+                ..Default::default()
+            },
+            tags: vec![
+                format!("hand:{HAND_ID}"),
+                format!("hand_instance:{}", instance.instance_id),
+                format!("openfang:project:{}", project.id),
+            ],
+            autonomous: def.agent.max_iterations.map(|max_iter| AutonomousConfig {
+                max_iterations: max_iter,
+                heartbeat_interval_secs: def.agent.heartbeat_interval_secs.unwrap_or(30),
+                ..Default::default()
+            }),
+            schedule: if def.agent.max_iterations.is_some() {
+                ScheduleMode::Continuous {
+                    check_interval_secs: 3600,
+                }
+            } else {
+                ScheduleMode::default()
+            },
+            skills: def.skills.clone(),
+            mcp_servers: def.mcp_servers.clone(),
+            exec_policy: if def.tools.iter().any(|t| t == "shell_exec") {
+                Some(openfang_types::config::ExecPolicy {
+                    mode: openfang_types::config::ExecSecurityMode::Full,
+                    timeout_secs: 300,
+                    no_output_timeout_secs: 120,
+                    ..Default::default()
+                })
+            } else {
+                None
+            },
+            tool_blocklist: Vec::new(),
+            profile: if !def.tools.is_empty() {
+                Some(ToolProfile::Custom)
+            } else {
+                None
+            },
+            ..Default::default()
+        };
+
+        let resolved = openfang_hands::resolve_settings(&def.settings, &instance.config);
+        if !resolved.prompt_block.is_empty() {
+            manifest.model.system_prompt = format!(
+                "{}\n\n---\n\n{}",
+                manifest.model.system_prompt, resolved.prompt_block
+            );
+        }
+        let mut allowed_env = resolved.env_vars;
+        for req in &def.requires {
+            match req.requirement_type {
+                openfang_hands::RequirementType::ApiKey
+                | openfang_hands::RequirementType::EnvVar => {
+                    if !req.check_value.is_empty() && !allowed_env.contains(&req.check_value) {
+                        allowed_env.push(req.check_value.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        if !allowed_env.is_empty() {
+            manifest.metadata.insert(
+                "hand_allowed_env".to_string(),
+                serde_json::to_value(&allowed_env).unwrap_or_default(),
+            );
+        }
+
+        if let Some(ref skill_content) = def.skill_content {
+            manifest.model.system_prompt = format!(
+                "{}\n\n---\n\n## Reference Knowledge\n\n{}",
+                manifest.model.system_prompt, skill_content
+            );
+        }
+
+        let spoke_lines: String = project
+            .spokes
+            .iter()
+            .map(|s| {
+                let rp = if s.path.is_absolute() {
+                    s.path.display().to_string()
+                } else {
+                    project.path.join(&s.path).display().to_string()
+                };
+                format!("  - **{}** → `{}` labels={:?}", s.name, rp, s.labels)
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let admin_bl = project
+            .admin_backlog_root()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(none)".to_string());
+
+        let project_block = format!(
+            "## Bound OpenFang project (this instance)\n\
+             - **project_id**: {}\n\
+             - **project_name**: {}\n\
+             - **project_root**: {}\n\
+             - **admin_backlog_root**: {}\n\
+             - **Mattermost channel_id**: {}\n\
+             - **Mattermost channel_name**: {}\n\
+             - **Spokes**:\n{}\n",
+            project.id,
+            project.name,
+            project.path.display(),
+            admin_bl,
+            project.mattermost_channel_id.as_deref().unwrap_or("(none)"),
+            project
+                .mattermost_channel_name
+                .as_deref()
+                .unwrap_or("(none)"),
+            spoke_lines
+        );
+        manifest.model.system_prompt = format!(
+            "{}\n\n---\n\n{}",
+            manifest.model.system_prompt, project_block
+        );
+
+        let agent_id = self.spawn_agent_with_parent(manifest, None, None)?;
+
+        self.hand_registry
+            .set_agent(instance.instance_id, agent_id)
+            .map_err(|e| KernelError::OpenFang(OpenFangError::Internal(e.to_string())))?;
+
+        info!(
+            hand = %HAND_ID,
+            instance = %instance.instance_id,
+            agent = %agent_id,
+            project_id = %project.id,
+            "Per-project pipeline-coordinator activated"
+        );
+
+        self.persist_hand_state();
+
+        Ok(agent_id)
+    }
+
+    /// Keeps `Project::orchestrator_agent_id` in sync with Mattermost binding and project layout.
+    pub fn sync_project_mattermost_orchestrator(
+        &self,
+        before: Option<&Project>,
+        after: &Project,
+    ) -> KernelResult<()> {
+        use std::str::FromStr;
+
+        if after.mattermost_channel_id.is_none() {
+            let mut p = after.clone();
+            self.deactivate_project_orchestrator_in_memory(&mut p)?;
+            self.project_store.replace(p)?;
+            return Ok(());
+        }
+
+        let need_new = match before {
+            None => true,
+            Some(b) => {
+                b.mattermost_channel_id != after.mattermost_channel_id
+                    || b.spokes != after.spokes
+                    || b.name != after.name
+                    || b.path != after.path
+                    || b.admin_spoke != after.admin_spoke
+                    || after.orchestrator_agent_id.is_none()
+            }
+        };
+        let alive = after
+            .orchestrator_agent_id
+            .as_ref()
+            .and_then(|s| AgentId::from_str(s.trim()).ok())
+            .and_then(|id| self.registry.get(id))
+            .is_some();
+
+        if !need_new && alive {
+            return Ok(());
+        }
+
+        let mut p = after.clone();
+        self.deactivate_project_orchestrator_in_memory(&mut p)?;
+        let agent_id = self.activate_pipeline_coordinator_for_project(&p)?;
+        p.orchestrator_agent_id = Some(agent_id.to_string());
+        let id_str = agent_id.to_string();
+        if !p.bound_agents.iter().any(|x| x == &id_str) {
+            p.bound_agents.push(id_str);
+        }
+        self.project_store.replace(p)?;
+        Ok(())
+    }
+
+    /// Tear down the orchestrator before removing the project row.
+    pub fn cleanup_project_orchestrator_on_delete(&self, project: &Project) -> KernelResult<()> {
+        let mut dummy = project.clone();
+        self.deactivate_project_orchestrator_in_memory(&mut dummy)
+    }
+
+    fn project_context_file(&self, id: ProjectId) -> std::path::PathBuf {
+        crate::project_context::project_context_path(&self.config.home_dir, id)
+    }
+
+    /// Load and prune per-project `context.json` (or default empty context).
+    pub fn load_project_context_resolved(
+        &self,
+        id: ProjectId,
+    ) -> openfang_types::project::ProjectContext {
+        let path = self.project_context_file(id);
+        let a = &self.config.automation;
+        crate::project_context::load_project_context_file(
+            &path,
+            a.project_context_max_failures,
+            a.project_context_decision_max_age_days,
+        )
+    }
+
+    /// Persist context after mutation (prunes again before write).
+    pub fn save_project_context_resolved(
+        &self,
+        id: ProjectId,
+        ctx: &mut openfang_types::project::ProjectContext,
+    ) -> Result<(), String> {
+        let path = self.project_context_file(id);
+        let a = &self.config.automation;
+        ctx.prune(
+            a.project_context_max_failures,
+            a.project_context_decision_max_age_days,
+        );
+        crate::project_context::save_project_context_file(&path, ctx)
+    }
+
+    /// JSON snapshot for `read_project_context` tool.
+    pub fn read_project_context_tool(&self, project_id: &str) -> Result<String, String> {
+        let id: ProjectId = project_id
+            .parse()
+            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
+        if self.project_store.get(id).is_none() {
+            return Err("Project not found".to_string());
+        }
+        let ctx = self.load_project_context_resolved(id);
+        serde_json::to_string_pretty(&ctx).map_err(|e| e.to_string())
+    }
+
+    /// Apply `update_project_context` tool patch and persist.
+    pub fn update_project_context_tool(
+        &self,
+        project_id: &str,
+        patch: &serde_json::Value,
+    ) -> Result<String, String> {
+        let id: ProjectId = project_id
+            .parse()
+            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
+        if self.project_store.get(id).is_none() {
+            return Err("Project not found".to_string());
+        }
+        let path = self.project_context_file(id);
+        let a = &self.config.automation;
+        let mut ctx = crate::project_context::load_project_context_file(
+            &path,
+            a.project_context_max_failures,
+            a.project_context_decision_max_age_days,
+        );
+        ctx.apply_tool_update(patch)?;
+        self.save_project_context_resolved(id, &mut ctx)?;
+        serde_json::to_string_pretty(&ctx).map_err(|e| e.to_string())
+    }
+
+    /// Prepends persisted project context to workflow initial input when non-empty.
+    pub fn workflow_input_with_project_context(
+        &self,
+        project_id: ProjectId,
+        task_id: &str,
+    ) -> String {
+        let tid = task_id.trim();
+        let ctx = self.load_project_context_resolved(project_id);
+        let section =
+            ctx.workflow_prompt_section(self.config.automation.project_context_prompt_max_chars);
+        if section.is_empty() {
+            tid.to_string()
+        } else {
+            format!(
+                "{section}\n\n---\n\n**Workflow task id:** `{tid}`\nUse this task id for backlog and pipeline steps."
+            )
+        }
+    }
+
+    /// Resolve a git workspace path: allowlisted under `[automation].spoke_roots` and under the project's spokes.
+    pub fn resolve_git_workspace_for_project(
+        &self,
+        project_id: &str,
+        spoke_root: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        use openfang_types::config::validate_spoke_root_allowlisted;
+
+        let id: ProjectId = project_id
+            .trim()
+            .parse()
+            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
+        let project = self
+            .project_store
+            .get(id)
+            .ok_or_else(|| "Project not found".to_string())?;
+        let path = std::path::Path::new(spoke_root.trim());
+        let resolved = validate_spoke_root_allowlisted(&self.config.automation.spoke_roots, path)?;
+        if !project.workspace_in_spoke_scope(&resolved) {
+            return Err(
+                "spoke_root is not under any configured spoke directory of this project"
+                    .to_string(),
+            );
+        }
+        Ok(resolved)
+    }
+
+    /// Env var holding GitHub PAT for `git_create_pr` (project override → `[automation].github_token_env` → `GITHUB_TOKEN`).
+    pub fn github_token_env_for_pipeline(&self, project_id: &str) -> String {
+        use std::str::FromStr;
+        if let Ok(id) = ProjectId::from_str(project_id.trim()) {
+            if let Some(p) = self.project_store.get(id) {
+                if let Some(ref e) = p.pipeline_overrides.github_token_env {
+                    let t = e.trim();
+                    if !t.is_empty() {
+                        return t.to_string();
+                    }
+                }
+            }
+        }
+        self.config
+            .automation
+            .github_token_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("GITHUB_TOKEN")
+            .to_string()
+    }
+
+    /// Branch name template with `{task_id}` for `git_create_branch`.
+    pub fn pipeline_git_branch_template(&self, project_id: &str) -> String {
+        use std::str::FromStr;
+        const DEF: &str = "openfang/task-{task_id}";
+        if let Ok(id) = ProjectId::from_str(project_id.trim()) {
+            if let Some(p) = self.project_store.get(id) {
+                if let Some(ref t) = p.pipeline_overrides.git_branch_name_template {
+                    let s = t.trim();
+                    if !s.is_empty() {
+                        return s.to_string();
+                    }
+                }
+            }
+        }
+        self.config
+            .automation
+            .git_branch_name_template
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or(DEF)
+            .to_string()
+    }
+
     /// Pause a hand (marks it paused; agent stays alive but won't receive new work).
     pub fn pause_hand(&self, instance_id: uuid::Uuid) -> KernelResult<()> {
         self.hand_registry
@@ -3827,14 +4265,13 @@ impl OpenFangKernel {
             if matches!(step.mode, StepMode::Collect) {
                 continue;
             }
-            let (agent_id, agent_name) = self.resolve_workflow_agent(&step.agent).ok_or_else(
-                || {
+            let (agent_id, agent_name) =
+                self.resolve_workflow_agent(&step.agent).ok_or_else(|| {
                     KernelError::OpenFang(OpenFangError::InvalidInput(format!(
                         "Agent not found for workflow step '{}'",
                         step.name
                     )))
-                },
-            )?;
+                })?;
             if !self.agent_assigned_to_project(&project, agent_id) {
                 return Err(KernelError::OpenFang(OpenFangError::InvalidInput(format!(
                     "Agent '{agent_name}' is not assigned to this project (step '{}')",
@@ -3856,9 +4293,13 @@ impl OpenFangKernel {
         input: String,
         project_context: Option<ProjectId>,
     ) -> KernelResult<(WorkflowRunId, String)> {
-        let wf_def = self.workflows.get_workflow(workflow_id).await.ok_or_else(|| {
-            KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
-        })?;
+        let wf_def = self
+            .workflows
+            .get_workflow(workflow_id)
+            .await
+            .ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
+            })?;
 
         let effective_project = match (wf_def.project_id, project_context) {
             (Some(wf_pid), Some(req_pid)) if wf_pid != req_pid => {
@@ -3919,6 +4360,57 @@ impl OpenFangKernel {
         Ok((run_id, output))
     }
 
+    /// Admin backlog directory for a registered project (for `backlog` CLI).
+    pub fn project_admin_backlog_dir(&self, project_id: &str) -> KernelResult<PathBuf> {
+        let pid: ProjectId = project_id.parse().map_err(|_| {
+            KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                "Invalid project_id: {project_id}"
+            )))
+        })?;
+        let project = self.project_store.get(pid).ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                "Unknown project id {project_id}"
+            )))
+        })?;
+        let root = project.admin_backlog_root().ok_or_else(|| {
+            KernelError::OpenFang(OpenFangError::InvalidInput(
+                "Project has no admin backlog spoke configured".to_string(),
+            ))
+        })?;
+        if !root.is_dir() {
+            return Err(KernelError::OpenFang(OpenFangError::InvalidInput(format!(
+                "Backlog directory not found: {}",
+                root.display()
+            ))));
+        }
+        Ok(root)
+    }
+
+    async fn resolve_workflow_id_for_tool(
+        &self,
+        workflow_id: Option<&str>,
+        workflow_name: Option<&str>,
+    ) -> Result<WorkflowId, String> {
+        if let Some(raw) = workflow_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let u = uuid::Uuid::parse_str(raw)
+                .map_err(|_| format!("Invalid workflow_id UUID: {raw}"))?;
+            return Ok(WorkflowId(u));
+        }
+        if let Some(name) = workflow_name.map(str::trim).filter(|s| !s.is_empty()) {
+            let list = self.workflows.list_workflows().await;
+            let found = list
+                .iter()
+                .find(|w| w.name.eq_ignore_ascii_case(name))
+                .ok_or_else(|| {
+                    format!(
+                        "No workflow named '{name}'. Register workflows or pass workflow_id UUID."
+                    )
+                })?;
+            return Ok(found.id);
+        }
+        Err("Provide workflow_id (UUID) or workflow_name.".to_string())
+    }
+
     /// Auto-load workflow definitions from a directory.
     ///
     /// Scans the given directory for `.json` files, deserializes each as a
@@ -3962,6 +4454,82 @@ impl OpenFangKernel {
         count
     }
 
+    /// Persist a workflow definition next to other hub workflow JSON files.
+    pub fn persist_workflow_to_disk(&self, workflow: &Workflow) {
+        let wf_dir = self
+            .config
+            .workflows_dir
+            .clone()
+            .unwrap_or_else(|| self.config.home_dir.join("workflows"));
+        if let Err(e) = std::fs::create_dir_all(&wf_dir) {
+            warn!(error = %e, "Failed to create workflows directory");
+            return;
+        }
+        let wf_path = wf_dir.join(format!("{}.json", workflow.id));
+        match serde_json::to_string_pretty(workflow) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&wf_path, json) {
+                    warn!(path = ?wf_path, error = %e, "Failed to persist workflow");
+                }
+            }
+            Err(e) => warn!(error = %e, "Failed to serialize workflow for persistence"),
+        }
+    }
+
+    /// Load workflow JSON from the configured hub directory, then install bundled defaults.
+    pub async fn init_default_workflows(&self) {
+        let wf_dir = self
+            .config
+            .workflows_dir
+            .clone()
+            .unwrap_or_else(|| self.config.home_dir.join("workflows"));
+        if wf_dir.exists() {
+            let count = self.load_workflows_from_dir(&wf_dir).await;
+            if count > 0 {
+                info!("Auto-loaded {count} workflow(s) from {}", wf_dir.display());
+            }
+        }
+        self.ensure_bundled_pipeline_full_cycle().await;
+    }
+
+    async fn ensure_bundled_pipeline_full_cycle(&self) {
+        use crate::workflow::{
+            workflow_from_create_request_json, BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME,
+        };
+
+        let list = self.workflows.list_workflows().await;
+        if list
+            .iter()
+            .any(|w| w.name == BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME)
+        {
+            return;
+        }
+
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../bundled/workflows/pipeline-full-cycle.json"
+        ))
+        .expect("bundled pipeline-full-cycle.json must be valid JSON");
+
+        let wf = match workflow_from_create_request_json(&v) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Invalid bundled pipeline-full-cycle workflow template"
+                );
+                return;
+            }
+        };
+
+        let id = self.register_workflow(wf.clone()).await;
+        self.persist_workflow_to_disk(&wf);
+        info!(
+            workflow_id = %id,
+            name = %wf.name,
+            "Installed bundled default workflow"
+        );
+    }
+
     /// Start background loops for all non-reactive agents.
     ///
     /// Must be called after the kernel is wrapped in `Arc` (e.g., from the daemon).
@@ -3974,6 +4542,29 @@ impl OpenFangKernel {
         if !saved_hands.is_empty() {
             info!("Restoring {} persisted hand(s)", saved_hands.len());
             for (hand_id, config, old_agent_id) in saved_hands {
+                // Per-project pipeline coordinators use unique agent IDs; re-sync from `projects.json`.
+                if hand_id == "pipeline-coordinator" {
+                    if let Some(pid_s) = config.get("openfang_project_id").and_then(|v| v.as_str())
+                    {
+                        if let Ok(pid) = pid_s.parse::<ProjectId>() {
+                            if let Some(proj) = self.project_store.get(pid) {
+                                if proj.mattermost_channel_id.is_some() {
+                                    if let Err(e) =
+                                        self.sync_project_mattermost_orchestrator(None, &proj)
+                                    {
+                                        warn!(
+                                            hand = %hand_id,
+                                            project_id = %pid,
+                                            error = %e,
+                                            "Failed to restore per-project pipeline-coordinator"
+                                        );
+                                    }
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                }
                 match self.activate_hand(&hand_id, config) {
                     Ok(inst) => {
                         info!(hand = %hand_id, instance = %inst.instance_id, "Hand restored");
@@ -4192,22 +4783,12 @@ impl OpenFangKernel {
             });
         }
 
-        // Auto-load workflow definitions from configured directory
+        // Auto-load hub workflows and install bundled defaults (e.g. pipeline-full-cycle)
         {
-            let wf_dir = self
-                .config
-                .workflows_dir
-                .clone()
-                .unwrap_or_else(|| self.config.home_dir.join("workflows"));
-            if wf_dir.exists() {
-                let kernel = Arc::clone(self);
-                tokio::spawn(async move {
-                    let count = kernel.load_workflows_from_dir(&wf_dir).await;
-                    if count > 0 {
-                        info!("Auto-loaded {count} workflow(s) from {}", wf_dir.display());
-                    }
-                });
-            }
+            let kernel = Arc::clone(self);
+            tokio::spawn(async move {
+                kernel.init_default_workflows().await;
+            });
         }
 
         // Cron scheduler tick loop — fires due jobs every 15 seconds
@@ -4277,7 +4858,6 @@ impl OpenFangKernel {
                 });
             }
         }
-
     }
 
     /// Start the heartbeat monitor background task.
@@ -5624,7 +6204,8 @@ impl OpenFangKernel {
                     }
                 };
 
-                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input, None)).await {
+                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input, None)).await
+                {
                     Ok(Ok((_run_id, output))) => {
                         match cron_deliver_response(self, agent_id, &output, &delivery).await {
                             Ok(()) => {
@@ -6632,6 +7213,155 @@ impl KernelHandle for OpenFangKernel {
             "File '{}' sent to {} via {}",
             filename, recipient, channel
         ))
+    }
+
+    async fn start_project_workflow(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        workflow_id: Option<&str>,
+        workflow_name: Option<&str>,
+        post_mattermost_confirmation: bool,
+    ) -> Result<String, String> {
+        let tid = task_id.trim();
+        if tid.is_empty() {
+            return Err("task_id must be non-empty".to_string());
+        }
+        let cwd = self
+            .project_admin_backlog_dir(project_id)
+            .map_err(|e| e.to_string())?;
+        let view_args = vec!["task".into(), tid.to_string(), "--plain".into()];
+        let (code, stdout, stderr) = backlog_cli::run_backlog_cli(&cwd, &view_args)
+            .await
+            .map_err(|e| e.to_string())?;
+        if code != 0 {
+            return Err(format!(
+                "Task {tid} not found in project backlog (exit {code}): {stderr}"
+            ));
+        }
+        let status = parse_backlog_plain_status(&stdout)
+            .ok_or_else(|| format!("Could not read task status from backlog output for {tid}"))?;
+        if !status.trim().eq_ignore_ascii_case("Ready for Dev") {
+            return Err(format!(
+                "Cannot start pipeline: task {tid} status is '{status}' (required: Ready for Dev)"
+            ));
+        }
+
+        let wf_id = self
+            .resolve_workflow_id_for_tool(workflow_id, workflow_name)
+            .await?;
+        let pid: ProjectId = project_id
+            .parse()
+            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
+
+        if post_mattermost_confirmation {
+            let project = self
+                .project_store
+                .get(pid)
+                .ok_or_else(|| "Project disappeared while starting workflow".to_string())?;
+            let ch = project
+                .mattermost_channel_id
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    "post_mattermost_confirmation requires project.mattermost_channel_id"
+                        .to_string()
+                })?;
+            let wf_name = self
+                .workflows
+                .get_workflow(wf_id)
+                .await
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| "workflow".to_string());
+            self.send_channel_message(
+                "mattermost",
+                ch,
+                &format!("Starting pipeline `{wf_name}` for `{tid}`…"),
+                None,
+            )
+            .await?;
+        }
+
+        let wf_input = self.workflow_input_with_project_context(pid, tid);
+        let (run_id, output) = self
+            .run_workflow(wf_id, wf_input, Some(pid))
+            .await
+            .map_err(|e| e.to_string())?;
+
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "run_id": run_id.to_string(),
+            "workflow_id": wf_id.to_string(),
+            "output": output,
+        }))
+        .map_err(|e| e.to_string())
+    }
+
+    async fn query_project_status(
+        &self,
+        project_id: &str,
+        task_id: Option<&str>,
+    ) -> Result<String, String> {
+        let cwd = self
+            .project_admin_backlog_dir(project_id)
+            .map_err(|e| e.to_string())?;
+        if let Some(tid) = task_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let args = vec!["task".into(), tid.to_string(), "--plain".into()];
+            let (code, stdout, stderr) = backlog_cli::run_backlog_cli(&cwd, &args)
+                .await
+                .map_err(|e| e.to_string())?;
+            let st = parse_backlog_plain_status(&stdout);
+            return serde_json::to_string(&serde_json::json!({
+                "project_id": project_id,
+                "task_id": tid,
+                "exit_code": code,
+                "status": st,
+                "stderr": stderr,
+                "stdout": stdout,
+            }))
+            .map_err(|e| e.to_string());
+        }
+        let args = vec!["task".into(), "list".into(), "--plain".into()];
+        let (code, stdout, stderr) = backlog_cli::run_backlog_cli(&cwd, &args)
+            .await
+            .map_err(|e| e.to_string())?;
+        let parsed = parse_backlog_task_list_plain(&stdout);
+        serde_json::to_string(&serde_json::json!({
+            "project_id": project_id,
+            "exit_code": code,
+            "stderr": stderr,
+            "parsed": parsed,
+            "stdout": stdout,
+        }))
+        .map_err(|e| e.to_string())
+    }
+
+    fn resolve_git_workspace_for_project(
+        &self,
+        project_id: &str,
+        spoke_root: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        OpenFangKernel::resolve_git_workspace_for_project(self, project_id, spoke_root)
+    }
+
+    fn github_token_env_for_pipeline(&self, project_id: &str) -> String {
+        OpenFangKernel::github_token_env_for_pipeline(self, project_id)
+    }
+
+    fn pipeline_git_branch_template(&self, project_id: &str) -> String {
+        OpenFangKernel::pipeline_git_branch_template(self, project_id)
+    }
+
+    async fn read_project_context(&self, project_id: &str) -> Result<String, String> {
+        OpenFangKernel::read_project_context_tool(self, project_id)
+    }
+
+    async fn update_project_context(
+        &self,
+        project_id: &str,
+        patch: serde_json::Value,
+    ) -> Result<String, String> {
+        OpenFangKernel::update_project_context_tool(self, project_id, &patch)
     }
 
     async fn spawn_agent_checked(

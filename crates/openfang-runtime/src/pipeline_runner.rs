@@ -274,11 +274,13 @@ mod tests {
 
     #[tokio::test]
     async fn pipeline_passes_first_gate() {
-        let mock = Arc::new(MockPipelineExecutor::new(VecDeque::from([PipelineGateOutput {
-            exit_code: 0,
-            stdout: "ok".into(),
-            stderr: String::new(),
-        }])));
+        let mock = Arc::new(MockPipelineExecutor::new(VecDeque::from([
+            PipelineGateOutput {
+                exit_code: 0,
+                stdout: "ok".into(),
+                stderr: String::new(),
+            },
+        ])));
         let runner = PipelineRunner::with_executor(mock, Some("agent-1".into()));
         let ok = runner
             .run(
@@ -335,7 +337,16 @@ mod tests {
         ])));
         let runner = PipelineRunner::with_executor(mock, None);
         let err = runner
-            .run("TASK-3", "/w", "task", 1, "agent", None, &[], Some("Ready for Dev"))
+            .run(
+                "TASK-3",
+                "/w",
+                "task",
+                1,
+                "agent",
+                None,
+                &[],
+                Some("Ready for Dev"),
+            )
             .await
             .unwrap_err();
         assert_eq!(err.retry_count, 1);

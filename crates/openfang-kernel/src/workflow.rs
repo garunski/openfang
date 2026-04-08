@@ -148,6 +148,92 @@ pub enum ErrorMode {
     Retry { max_retries: u32 },
 }
 
+/// Workflow name of the bundled doc-2 full-cycle template installed on hub init.
+pub const BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME: &str = "pipeline-full-cycle";
+
+/// Parses the same JSON body shape as `POST /api/workflows` into a new [`Workflow`]
+/// (fresh id and `created_at`). Shared by the API and bundled default workflow install.
+pub fn workflow_from_create_request_json(req: &serde_json::Value) -> Result<Workflow, String> {
+    let name = req["name"].as_str().unwrap_or("unnamed").to_string();
+    let description = req["description"].as_str().unwrap_or("").to_string();
+
+    let steps_json = req["steps"]
+        .as_array()
+        .ok_or_else(|| "Missing 'steps' array".to_string())?;
+
+    let mut steps = Vec::new();
+    for s in steps_json {
+        let step_name = s["name"].as_str().unwrap_or("step").to_string();
+        let agent = if let Some(id) = s["agent_id"].as_str() {
+            StepAgent::ById { id: id.to_string() }
+        } else if let Some(n) = s["agent_name"].as_str() {
+            StepAgent::ByName {
+                name: n.to_string(),
+            }
+        } else {
+            return Err(format!(
+                "Step '{step_name}' needs 'agent_id' or 'agent_name'"
+            ));
+        };
+
+        let mode = match s["mode"].as_str().unwrap_or("sequential") {
+            "fan_out" => StepMode::FanOut,
+            "collect" => StepMode::Collect,
+            "conditional" => StepMode::Conditional {
+                condition: s["condition"].as_str().unwrap_or("").to_string(),
+            },
+            "loop" => StepMode::Loop {
+                max_iterations: s["max_iterations"].as_u64().unwrap_or(5) as u32,
+                until: s["until"].as_str().unwrap_or("").to_string(),
+            },
+            _ => StepMode::Sequential,
+        };
+
+        let error_mode = match s["error_mode"].as_str().unwrap_or("fail") {
+            "skip" => ErrorMode::Skip,
+            "retry" => ErrorMode::Retry {
+                max_retries: s["max_retries"].as_u64().unwrap_or(3) as u32,
+            },
+            _ => ErrorMode::Fail,
+        };
+
+        steps.push(WorkflowStep {
+            name: step_name,
+            agent,
+            prompt_template: s["prompt"].as_str().unwrap_or("{{input}}").to_string(),
+            mode,
+            timeout_secs: s["timeout_secs"].as_u64().unwrap_or(120),
+            error_mode,
+            output_var: s["output_var"].as_str().map(String::from),
+        });
+    }
+
+    let project_id: Option<ProjectId> = match req.get("project_id") {
+        None => None,
+        Some(v) if v.is_null() => None,
+        Some(v) => {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "project_id must be a string or null".to_string())?
+                .trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.parse().map_err(|_| "Invalid project_id".to_string())?)
+            }
+        }
+    };
+
+    Ok(Workflow {
+        id: WorkflowId::new(),
+        name,
+        description,
+        steps,
+        project_id,
+        created_at: Utc::now(),
+    })
+}
+
 /// The current state of a workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -342,6 +428,35 @@ impl WorkflowEngine {
             })
             .cloned()
             .collect()
+    }
+
+    /// Runs for one workflow definition, newest first.
+    pub async fn list_runs_for_workflow(
+        &self,
+        workflow_id: WorkflowId,
+        state_filter: Option<&str>,
+    ) -> Vec<WorkflowRun> {
+        let mut runs: Vec<WorkflowRun> = self
+            .runs
+            .read()
+            .await
+            .values()
+            .filter(|r| {
+                r.workflow_id == workflow_id
+                    && state_filter
+                        .map(|f| match f {
+                            "pending" => matches!(r.state, WorkflowRunState::Pending),
+                            "running" => matches!(r.state, WorkflowRunState::Running),
+                            "completed" => matches!(r.state, WorkflowRunState::Completed),
+                            "failed" => matches!(r.state, WorkflowRunState::Failed),
+                            _ => true,
+                        })
+                        .unwrap_or(true)
+            })
+            .cloned()
+            .collect();
+        runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
+        runs
     }
 
     /// Replace `{{var_name}}` references in a template with stored variable values.

@@ -12,16 +12,16 @@ use openfang_api::middleware;
 use openfang_api::routes::{self, AppState};
 use openfang_api::ws;
 use openfang_kernel::{BacklogWatcherManager, OpenFangKernel};
-use openfang_types::project::ProjectId;
 use openfang_runtime::pipeline_audit;
 use openfang_types::agent::AgentId;
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
+use openfang_types::project::ProjectId;
 use std::process::Command;
 use std::sync::Arc;
-use uuid::Uuid;
 use std::time::Instant;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
+use uuid::Uuid;
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -160,6 +160,10 @@ async fn start_test_server_with_provider(
         .route(
             "/api/workflows/{id}/run",
             axum::routing::post(routes::run_workflow),
+        )
+        .route(
+            "/api/workflows/{id}/runs/{run_id}",
+            axum::routing::get(routes::get_workflow_run),
         )
         .route(
             "/api/workflows/{id}/runs",
@@ -322,7 +326,8 @@ async fn start_test_server_with_provider(
         )
         .route(
             "/api/projects/{id}/backlog/milestones",
-            axum::routing::get(routes::backlog_list_milestones).post(routes::backlog_create_milestone),
+            axum::routing::get(routes::backlog_list_milestones)
+                .post(routes::backlog_create_milestone),
         )
         .route(
             "/api/projects/{id}/backlog/decisions/{decision_id}",
@@ -332,7 +337,8 @@ async fn start_test_server_with_provider(
         )
         .route(
             "/api/projects/{id}/backlog/decisions",
-            axum::routing::get(routes::backlog_list_decisions).post(routes::backlog_create_decision),
+            axum::routing::get(routes::backlog_list_decisions)
+                .post(routes::backlog_create_decision),
         )
         .route(
             "/api/projects/{id}/backlog/search",
@@ -461,6 +467,8 @@ async fn test_projects_crud_api() {
             "path": proj_root.to_str().unwrap(),
             "spokes": [{"name": "manual", "path": "rel", "labels": ["l1"]}, {"name": "admin", "path": "admin", "labels": []}],
             "admin_spoke": "admin",
+            "mattermost_channel_id": "mm-ch-1",
+            "mattermost_channel_name": "demo-channel",
         }))
         .send()
         .await
@@ -470,6 +478,8 @@ async fn test_projects_crud_api() {
     let pid = body["project_id"].as_str().unwrap().to_string();
     assert_eq!(body["name"], "demo");
     assert_eq!(body["spokes"].as_array().unwrap().len(), 2);
+    assert_eq!(body["mattermost_channel_id"], "mm-ch-1");
+    assert_eq!(body["mattermost_channel_name"], "demo-channel");
 
     let resp = client
         .get(format!("{}/api/projects", server.base_url))
@@ -488,8 +498,13 @@ async fn test_projects_crud_api() {
         .unwrap();
     assert_eq!(resp.status(), 200);
     let detail: serde_json::Value = resp.json().await.unwrap();
-    assert!(detail["admin_backlog_root"].as_str().unwrap().contains("backlog"));
+    assert!(detail["admin_backlog_root"]
+        .as_str()
+        .unwrap()
+        .contains("backlog"));
     assert_eq!(detail["admin_spoke"], "admin");
+    assert_eq!(detail["mattermost_channel_id"], "mm-ch-1");
+    assert_eq!(detail["mattermost_channel_name"], "demo-channel");
     let spokes = detail["spokes"].as_array().unwrap();
     assert_eq!(spokes.len(), 2);
     assert!(!spokes[0]["path_resolved"].as_str().unwrap().is_empty());
@@ -553,6 +568,18 @@ async fn test_projects_crud_api() {
     assert_eq!(resp.status(), 200);
     let up: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(up["name"], "demo2");
+    assert_eq!(up["mattermost_channel_id"], "mm-ch-1");
+
+    let resp = client
+        .put(format!("{}/api/projects/{}", server.base_url, pid))
+        .json(&serde_json::json!({ "mattermost_channel_id": null }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let mm: serde_json::Value = resp.json().await.unwrap();
+    assert!(mm["mattermost_channel_id"].is_null());
+    assert_eq!(mm["mattermost_channel_name"], "demo-channel");
 
     let resp = client
         .delete(format!("{}/api/projects/{}", server.base_url, pid))
@@ -878,7 +905,10 @@ async fn test_project_backlog_endpoints() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.json::<Vec<serde_json::Value>>().await.unwrap().len(), 1);
+    assert_eq!(
+        resp.json::<Vec<serde_json::Value>>().await.unwrap().len(),
+        1
+    );
 
     let resp = client
         .get(format!(
@@ -986,7 +1016,10 @@ async fn test_backlog_store_task_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&project_json_with_admin_spoke("bapi", proj.to_str().unwrap()))
+        .json(&project_json_with_admin_spoke(
+            "bapi",
+            proj.to_str().unwrap(),
+        ))
         .send()
         .await
         .unwrap();
@@ -1025,7 +1058,10 @@ async fn test_backlog_store_task_api() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
-    assert_eq!(resp.json::<Vec<serde_json::Value>>().await.unwrap().len(), 1);
+    assert_eq!(
+        resp.json::<Vec<serde_json::Value>>().await.unwrap().len(),
+        1
+    );
 
     let resp = client
         .get(format!(
@@ -1174,7 +1210,10 @@ async fn test_backlog_cleanup_done_tasks_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&project_json_with_admin_spoke("bcln", proj.to_str().unwrap()))
+        .json(&project_json_with_admin_spoke(
+            "bcln",
+            proj.to_str().unwrap(),
+        ))
         .send()
         .await
         .unwrap();
@@ -1241,7 +1280,10 @@ async fn test_backlog_toggle_ac_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&project_json_with_admin_spoke("tac", proj.to_str().unwrap()))
+        .json(&project_json_with_admin_spoke(
+            "tac",
+            proj.to_str().unwrap(),
+        ))
         .send()
         .await
         .unwrap();
@@ -1283,7 +1325,10 @@ async fn test_backlog_docs_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&project_json_with_admin_spoke("docsproj", proj.to_str().unwrap()))
+        .json(&project_json_with_admin_spoke(
+            "docsproj",
+            proj.to_str().unwrap(),
+        ))
         .send()
         .await
         .unwrap();
@@ -1434,7 +1479,10 @@ e
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&project_json_with_admin_spoke("ddmc", proj.to_str().unwrap()))
+        .json(&project_json_with_admin_spoke(
+            "ddmc",
+            proj.to_str().unwrap(),
+        ))
         .send()
         .await
         .unwrap();
@@ -1671,7 +1719,10 @@ async fn test_backlog_search_and_statistics_api() {
 
     let resp = client
         .post(format!("{}/api/projects", server.base_url))
-        .json(&project_json_with_admin_spoke("searchstat", proj.to_str().unwrap()))
+        .json(&project_json_with_admin_spoke(
+            "searchstat",
+            proj.to_str().unwrap(),
+        ))
         .send()
         .await
         .unwrap();
@@ -1840,10 +1891,7 @@ async fn test_project_scoped_agents_spokes_pipelines() {
     assert_eq!(implicit_row["binding"], "implicit");
 
     let resp = client
-        .post(format!(
-            "{}/api/projects/{}/agents",
-            server.base_url, pid
-        ))
+        .post(format!("{}/api/projects/{}/agents", server.base_url, pid))
         .json(&serde_json::json!({ "agent_id": first_id }))
         .send()
         .await
@@ -1854,10 +1902,7 @@ async fn test_project_scoped_agents_spokes_pipelines() {
     assert_eq!(bound["agent_id"], first_id);
 
     let resp = client
-        .post(format!(
-            "{}/api/projects/{}/agents",
-            server.base_url, pid
-        ))
+        .post(format!("{}/api/projects/{}/agents", server.base_url, pid))
         .json(&serde_json::json!({ "agent_id": first_id }))
         .send()
         .await
@@ -1865,10 +1910,7 @@ async fn test_project_scoped_agents_spokes_pipelines() {
     assert_eq!(resp.status(), 409);
 
     let resp = client
-        .post(format!(
-            "{}/api/projects/{}/agents",
-            server.base_url, pid
-        ))
+        .post(format!("{}/api/projects/{}/agents", server.base_url, pid))
         .json(&serde_json::json!({ "agent_id": Uuid::nil().to_string() }))
         .send()
         .await
@@ -2289,6 +2331,108 @@ async fn test_project_workflow_requires_assigned_agents() {
     );
 }
 
+/// TASK-46: `pipeline-full-cycle` template registers via POST /api/workflows and runs via project route.
+#[tokio::test]
+async fn test_pipeline_full_cycle_workflow_registers_and_project_run() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+    let home = server.state.kernel.config.home_dir.clone();
+    let proj_root = home.join("pfcycle");
+    std::fs::create_dir_all(test_admin_backlog(&proj_root)).unwrap();
+    let spoke = proj_root.join("code-spoke");
+    std::fs::create_dir_all(&spoke).unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects", server.base_url))
+        .json(&serde_json::json!({
+            "name": "pfcycle",
+            "path": proj_root.to_str().unwrap(),
+            "spokes": [
+                {"name": "code-spoke", "path": "code-spoke", "labels": ["repo:dev"]},
+                {"name": "admin", "path": "admin", "labels": []},
+            ],
+            "admin_spoke": "admin",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let pid = body["project_id"].as_str().unwrap();
+
+    const COORD_MANIFEST: &str = r#"
+name = "pipeline-coordinator-hand"
+version = "0.1.0"
+description = "Test stand-in for pipeline coordinator workflow steps"
+author = "test"
+module = "builtin:chat"
+
+[model]
+provider = "ollama"
+model = "test-model"
+system_prompt = "You are a test pipeline orchestrator. Reply briefly."
+
+[capabilities]
+tools = ["file_read", "backlog_task_view", "query_project_status", "read_project_context", "update_project_context", "backlog_task_edit", "trigger_cursor_worker", "enforce_quality_gate", "record_git_action", "git_create_branch", "git_commit_and_push", "git_create_pr"]
+memory_read = ["*"]
+memory_write = ["self.*"]
+"#;
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": COORD_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let body: serde_json::Value = resp.json().await.unwrap();
+    let agent_id = body["agent_id"].as_str().unwrap();
+
+    let mut wf_template: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../openfang-kernel/bundled/workflows/pipeline-full-cycle.json"
+    )))
+    .unwrap();
+    wf_template["project_id"] = serde_json::json!(pid);
+
+    let resp = client
+        .post(format!("{}/api/workflows", server.base_url))
+        .json(&wf_template)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let wf_body: serde_json::Value = resp.json().await.unwrap();
+    let wf_id = wf_body["workflow_id"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{}/api/projects/{}/agents", server.base_url, pid))
+        .json(&serde_json::json!({"agent_id": agent_id}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/workflows/{}/run",
+            server.base_url, pid, wf_id
+        ))
+        .json(&serde_json::json!({
+            "input": r#"{"task_id":"TASK-46","repo_spoke_label":"repo:dev"}"#
+        }))
+        .send()
+        .await
+        .unwrap();
+    let status = resp.status();
+    let err_body = resp.text().await.unwrap_or_default();
+    assert_ne!(
+        status,
+        reqwest::StatusCode::BAD_REQUEST,
+        "unexpected 400: {err_body}"
+    );
+}
+
 #[tokio::test]
 async fn test_trigger_crud() {
     let server = start_test_server().await;
@@ -2636,6 +2780,10 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
             axum::routing::post(routes::run_workflow),
         )
         .route(
+            "/api/workflows/{id}/runs/{run_id}",
+            axum::routing::get(routes::get_workflow_run),
+        )
+        .route(
             "/api/workflows/{id}/runs",
             axum::routing::get(routes::list_workflow_runs),
         )
@@ -2744,4 +2892,147 @@ async fn test_auth_disabled_when_no_key() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_workflow_runs_filtered_list_and_run_detail() {
+    let server = start_test_server().await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
+    let resp = client
+        .post(format!("{}/api/workflows", server.base_url))
+        .json(&serde_json::json!({
+            "name": "wf-runs-test-a",
+            "description": "test",
+            "steps": [{
+                "name": "only",
+                "agent_name": "test-agent",
+                "mode": "sequential",
+                "prompt": "Echo: {{input}}"
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let wf_a: serde_json::Value = resp.json().await.unwrap();
+    let wf_id_a = wf_a["workflow_id"].as_str().unwrap();
+
+    let resp = client
+        .post(format!("{}/api/workflows", server.base_url))
+        .json(&serde_json::json!({
+            "name": "wf-runs-test-b",
+            "description": "other",
+            "steps": [{
+                "name": "x",
+                "agent_name": "test-agent",
+                "mode": "sequential",
+                "prompt": "{{input}}"
+            }]
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+    let wf_b: serde_json::Value = resp.json().await.unwrap();
+    let wf_id_b = wf_b["workflow_id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/workflows/{}/runs",
+            server.base_url, wf_id_a
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let runs_a0: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(runs_a0.is_empty());
+
+    let _ = client
+        .post(format!(
+            "{}/api/workflows/{}/run",
+            server.base_url, wf_id_a
+        ))
+        .json(&serde_json::json!({"input": "hello-runs-test"}))
+        .send()
+        .await
+        .unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/workflows/{}/runs",
+            server.base_url, wf_id_a
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let runs_a: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert_eq!(runs_a.len(), 1);
+    assert_eq!(runs_a[0]["workflow_id"], wf_id_a);
+    assert_ne!(runs_a[0]["workflow_id"], wf_id_b);
+    assert!(runs_a[0]["state"].is_string());
+    assert!(runs_a[0]["input_preview"].is_string());
+    assert!(
+        runs_a[0]["duration_ms"].is_u64() || runs_a[0]["duration_ms"].is_i64(),
+        "duration_ms: {:?}",
+        runs_a[0]["duration_ms"]
+    );
+    assert_eq!(runs_a[0]["step_count"], 1);
+    let run_id = runs_a[0]["id"].as_str().unwrap();
+
+    let resp = client
+        .get(format!(
+            "{}/api/workflows/{}/runs",
+            server.base_url, wf_id_b
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let runs_b: Vec<serde_json::Value> = resp.json().await.unwrap();
+    assert!(runs_b.is_empty());
+
+    let resp = client
+        .get(format!(
+            "{}/api/workflows/{}/runs/{}",
+            server.base_url, wf_id_a, run_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let detail: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(detail["id"], run_id);
+    assert_eq!(detail["workflow_id"], wf_id_a);
+    assert!(detail["step_results"].is_array());
+
+    let resp = client
+        .get(format!(
+            "{}/api/workflows/{}/runs/{}",
+            server.base_url, wf_id_b, run_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+
+    let resp = client
+        .get(format!(
+            "{}/api/workflows/{}/runs/not-a-uuid",
+            server.base_url, wf_id_a
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
 }

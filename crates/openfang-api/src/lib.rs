@@ -18,3 +18,42 @@ pub mod stream_dedup;
 pub mod types;
 pub mod webchat;
 pub mod ws;
+
+#[cfg(test)]
+mod dashboard_static_tests {
+    #[test]
+    fn project_detail_includes_mattermost_tab() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let html =
+            std::fs::read_to_string(root.join("static/index_body.html")).expect("read index_body");
+        let js =
+            std::fs::read_to_string(root.join("static/js/pages/projects.js")).expect("read projects.js");
+        assert!(
+            html.contains("detailTab === 'mattermost'"),
+            "expected Mattermost panel markup"
+        );
+        assert!(
+            js.contains("saveMattermostBinding"),
+            "expected Mattermost save handler"
+        );
+        assert!(
+            js.contains("mattermost: true"),
+            "expected mattermost tab flag in tab set"
+        );
+    }
+
+    #[test]
+    fn project_workflows_include_run_progress_panel() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let html =
+            std::fs::read_to_string(root.join("static/index_body.html")).expect("read index_body");
+        let js =
+            std::fs::read_to_string(root.join("static/js/pages/projects.js")).expect("read projects.js");
+        assert!(html.contains("wfRunsForWorkflow"), "expected runs panel markup");
+        assert!(
+            js.contains("openWorkflowRunsPanel"),
+            "expected workflow runs panel opener"
+        );
+        assert!(js.contains("fetchWorkflowRunDetail"), "expected run detail fetch");
+    }
+}

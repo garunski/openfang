@@ -1,9 +1,11 @@
 //! File-backed project registry (`<home>/projects.json`).
 
+use openfang_types::agent::AgentId;
 use openfang_types::error::{OpenFangError, OpenFangResult};
 use openfang_types::project::{Project, ProjectId, ProjectPatch, SpokeDescriptor};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, info};
 
@@ -27,12 +29,10 @@ impl ProjectStore {
         if !self.persist_path.exists() {
             return Ok(0);
         }
-        let data = std::fs::read_to_string(&self.persist_path).map_err(|e| {
-            OpenFangError::Internal(format!("Failed to read projects: {e}"))
-        })?;
-        let list: Vec<Project> = serde_json::from_str(&data).map_err(|e| {
-            OpenFangError::Internal(format!("Failed to parse projects: {e}"))
-        })?;
+        let data = std::fs::read_to_string(&self.persist_path)
+            .map_err(|e| OpenFangError::Internal(format!("Failed to read projects: {e}")))?;
+        let list: Vec<Project> = serde_json::from_str(&data)
+            .map_err(|e| OpenFangError::Internal(format!("Failed to parse projects: {e}")))?;
         let count = list.len();
         let mut map = self
             .projects
@@ -60,9 +60,8 @@ impl ProjectStore {
         std::fs::write(&tmp_path, data.as_bytes()).map_err(|e| {
             OpenFangError::Internal(format!("Failed to write projects temp file: {e}"))
         })?;
-        std::fs::rename(&tmp_path, &self.persist_path).map_err(|e| {
-            OpenFangError::Internal(format!("Failed to rename projects file: {e}"))
-        })?;
+        std::fs::rename(&tmp_path, &self.persist_path)
+            .map_err(|e| OpenFangError::Internal(format!("Failed to rename projects file: {e}")))?;
         debug!(count = list.len(), "Persisted projects");
         Ok(())
     }
@@ -112,6 +111,32 @@ impl ProjectStore {
         self.projects.read().ok()?.get(&id).cloned()
     }
 
+    /// Project that binds this Mattermost channel id, if any.
+    pub fn find_by_mattermost_channel_id(&self, channel_id: &str) -> Option<Project> {
+        self.list()
+            .into_iter()
+            .find(|p| p.mattermost_channel_id.as_deref() == Some(channel_id))
+    }
+
+    /// Route Mattermost traffic: [`Project::orchestrator_agent_id`] when set, else last `bound_agents`.
+    pub fn mattermost_project_route(&self, channel_id: &str) -> Option<(AgentId, ProjectId)> {
+        let p = self.find_by_mattermost_channel_id(channel_id)?;
+        if let Some(ref raw) = p.orchestrator_agent_id {
+            let t = raw.trim();
+            if !t.is_empty() {
+                if let Ok(aid) = AgentId::from_str(t) {
+                    return Some((aid, p.id));
+                }
+            }
+        }
+        let raw = p.bound_agents.last()?.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let aid = AgentId::from_str(raw).ok()?;
+        Some((aid, p.id))
+    }
+
     /// Apply patch; checks name uniqueness when name changes.
     pub fn update(&self, id: ProjectId, patch: ProjectPatch) -> OpenFangResult<Project> {
         let mut map = self
@@ -144,7 +169,21 @@ impl ProjectStore {
             updated.pipeline_overrides = overrides;
         }
         if let Some(admin) = patch.admin_spoke {
-            updated.admin_spoke = admin.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+            updated.admin_spoke = admin
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+        }
+        if let Some(v) = patch.mattermost_channel_id {
+            updated.mattermost_channel_id =
+                v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        }
+        if let Some(v) = patch.mattermost_channel_name {
+            updated.mattermost_channel_name =
+                v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        }
+        if let Some(v) = patch.orchestrator_agent_id {
+            updated.orchestrator_agent_id =
+                v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
         updated.normalize_admin_spoke_field();
         validate_admin_spoke_references(&updated)?;
@@ -168,9 +207,9 @@ impl ProjectStore {
             .projects
             .write()
             .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
-        let project = map
-            .get_mut(&project_id)
-            .ok_or_else(|| OpenFangError::InvalidInput(format!("Unknown project id {project_id}")))?;
+        let project = map.get_mut(&project_id).ok_or_else(|| {
+            OpenFangError::InvalidInput(format!("Unknown project id {project_id}"))
+        })?;
         if project.bound_agents.iter().any(|a| a == &id_norm) {
             return Err(OpenFangError::InvalidInput(
                 "Agent already bound to project".into(),
@@ -194,9 +233,9 @@ impl ProjectStore {
             .projects
             .write()
             .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
-        let project = map
-            .get_mut(&project_id)
-            .ok_or_else(|| OpenFangError::InvalidInput(format!("Unknown project id {project_id}")))?;
+        let project = map.get_mut(&project_id).ok_or_else(|| {
+            OpenFangError::InvalidInput(format!("Unknown project id {project_id}"))
+        })?;
         let pos = project
             .bound_agents
             .iter()
@@ -219,6 +258,18 @@ impl ProjectStore {
         drop(map);
         self.persist()?;
         Ok(removed)
+    }
+
+    /// Replace a project by id (used after kernel updates orchestrator fields).
+    pub fn replace(&self, project: Project) -> OpenFangResult<()> {
+        validate_admin_spoke_references(&project)?;
+        let mut map = self
+            .projects
+            .write()
+            .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
+        map.insert(project.id, project);
+        drop(map);
+        self.persist()
     }
 
     /// Discover spokes: immediate child dirs of the project root that are Git work trees
@@ -371,10 +422,7 @@ mod tests {
             .register(sample_project("same", b))
             .expect_err("dup name");
         let msg = err.to_string();
-        assert!(
-            msg.contains("already exists"),
-            "unexpected message: {msg}"
-        );
+        assert!(msg.contains("already exists"), "unexpected message: {msg}");
     }
 
     #[test]
@@ -384,7 +432,9 @@ mod tests {
         let child = parent.join("child");
         std::fs::create_dir_all(&child).unwrap();
         let store = ProjectStore::new(dir.path());
-        store.register(sample_project("outer", parent.clone())).unwrap();
+        store
+            .register(sample_project("outer", parent.clone()))
+            .unwrap();
         let err = store
             .register(sample_project("inner", child))
             .expect_err("overlap");
@@ -412,6 +462,7 @@ mod tests {
                     pipeline_overrides: Some(ProjectPipelineOverrides {
                         max_retries: Some(3),
                         model_routing: None,
+                        ..Default::default()
                     }),
                     ..Default::default()
                 },
@@ -420,6 +471,88 @@ mod tests {
         assert_eq!(u.name, "n2");
         assert_eq!(u.spokes.len(), 1);
         assert_eq!(u.pipeline_overrides.max_retries, Some(3));
+    }
+
+    #[test]
+    fn update_mattermost_fields_patch() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("r");
+        std::fs::create_dir_all(&p).unwrap();
+        let store = ProjectStore::new(dir.path());
+        let id = store.register(sample_project("n1", p)).unwrap();
+        let u = store
+            .update(
+                id,
+                ProjectPatch {
+                    mattermost_channel_id: Some(Some("ch-1".into())),
+                    mattermost_channel_name: Some(Some("town-square".into())),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(u.mattermost_channel_id.as_deref(), Some("ch-1"));
+        assert_eq!(u.mattermost_channel_name.as_deref(), Some("town-square"));
+
+        let cleared = store
+            .update(
+                id,
+                ProjectPatch {
+                    mattermost_channel_id: Some(None),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(cleared.mattermost_channel_id.is_none());
+        assert_eq!(
+            cleared.mattermost_channel_name.as_deref(),
+            Some("town-square")
+        );
+    }
+
+    #[test]
+    fn mattermost_project_route_uses_last_bound_agent() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("r");
+        std::fs::create_dir_all(&p).unwrap();
+        let store = ProjectStore::new(dir.path());
+        let orch = uuid::Uuid::new_v4();
+        let other = uuid::Uuid::new_v4();
+        let id = store
+            .register(Project {
+                name: "p".into(),
+                path: p,
+                mattermost_channel_id: Some("mm-ch-99".into()),
+                bound_agents: vec![other.to_string(), orch.to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let got = store.mattermost_project_route("mm-ch-99").unwrap();
+        assert_eq!(got.0 .0, orch);
+        assert_eq!(got.1, id);
+        assert!(store.mattermost_project_route("unknown").is_none());
+    }
+
+    #[test]
+    fn mattermost_project_route_prefers_orchestrator_agent_id() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("r");
+        std::fs::create_dir_all(&p).unwrap();
+        let store = ProjectStore::new(dir.path());
+        let orch = uuid::Uuid::new_v4();
+        let other = uuid::Uuid::new_v4();
+        let id = store
+            .register(Project {
+                name: "p".into(),
+                path: p,
+                mattermost_channel_id: Some("mm-orch".into()),
+                orchestrator_agent_id: Some(orch.to_string()),
+                bound_agents: vec![other.to_string()],
+                ..Default::default()
+            })
+            .unwrap();
+        let got = store.mattermost_project_route("mm-orch").unwrap();
+        assert_eq!(got.0 .0, orch);
+        assert_eq!(got.1, id);
     }
 
     #[test]
@@ -500,10 +633,20 @@ mod tests {
         let root = dir.path().join("proj");
         let disk_a = root.join("legacy");
         std::fs::create_dir_all(&disk_a).unwrap();
-        assert!(Command::new("git").arg("init").current_dir(&disk_a).status().unwrap().success());
+        assert!(Command::new("git")
+            .arg("init")
+            .current_dir(&disk_a)
+            .status()
+            .unwrap()
+            .success());
         let disk_b = root.join("only");
         std::fs::create_dir_all(&disk_b).unwrap();
-        assert!(Command::new("git").arg("init").current_dir(&disk_b).status().unwrap().success());
+        assert!(Command::new("git")
+            .arg("init")
+            .current_dir(&disk_b)
+            .status()
+            .unwrap()
+            .success());
 
         let store = ProjectStore::new(dir.path());
         let id = store

@@ -99,6 +99,12 @@ function agentsPage() {
     // Load templates from API
     async init() {
       await this.loadTemplates();
+      var st = Alpine.store('app');
+      var pend = st.pendingShowAgentDetail;
+      if (pend) {
+        st.pendingShowAgentDetail = null;
+        this.showDetail(pend);
+      }
     },
 
     // ── Profile Descriptions ──

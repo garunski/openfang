@@ -82,7 +82,10 @@ pub fn pipeline_event_in_scope(
 }
 
 pub fn flatten_pipeline_event(ev: &Value) -> Value {
-    let event = ev.get("event").and_then(|x| x.as_str()).unwrap_or("unknown");
+    let event = ev
+        .get("event")
+        .and_then(|x| x.as_str())
+        .unwrap_or("unknown");
     let timestamp = ev
         .get("timestamp")
         .and_then(|x| x.as_str())

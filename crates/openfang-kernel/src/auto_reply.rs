@@ -176,7 +176,9 @@ mod tests {
             .is_none());
 
         // Not suppressed
-        assert!(engine.should_reply("hello", "mattermost", agent_id).is_some());
+        assert!(engine
+            .should_reply("hello", "mattermost", agent_id)
+            .is_some());
     }
 
     #[test]

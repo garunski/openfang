@@ -528,4 +528,3 @@ fn render_separator(frame: &mut ratatui::Frame, area: Rect) {
     )]);
     frame.render_widget(Paragraph::new(line), area);
 }
-

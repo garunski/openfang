@@ -209,6 +209,16 @@ fn parse_mattermost_event(
         ChannelContent::Text(message.to_string())
     };
 
+    let mut metadata = HashMap::new();
+    metadata.insert(
+        "mattermost_channel_id".to_string(),
+        serde_json::Value::String(channel_id.to_string()),
+    );
+    metadata.insert(
+        "sender_user_id".to_string(),
+        serde_json::Value::String(user_id.to_string()),
+    );
+
     Some(ChannelMessage {
         channel: ChannelType::Mattermost,
         platform_message_id: post_id,
@@ -222,7 +232,7 @@ fn parse_mattermost_event(
         timestamp: Utc::now(),
         is_group,
         thread_id,
-        metadata: HashMap::new(),
+        metadata,
     })
 }
 
@@ -558,6 +568,16 @@ mod tests {
         assert_eq!(msg.channel, ChannelType::Mattermost);
         assert_eq!(msg.sender.display_name, "alice");
         assert_eq!(msg.sender.platform_id, "ch-789");
+        assert_eq!(
+            msg.metadata
+                .get("mattermost_channel_id")
+                .and_then(|v| v.as_str()),
+            Some("ch-789")
+        );
+        assert_eq!(
+            msg.metadata.get("sender_user_id").and_then(|v| v.as_str()),
+            Some("user-456")
+        );
         assert!(msg.is_group);
         assert!(msg.thread_id.is_none());
         assert!(

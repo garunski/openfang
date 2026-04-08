@@ -210,10 +210,33 @@ impl HandRegistry {
             .get(hand_id)
             .ok_or_else(|| HandError::NotFound(hand_id.to_string()))?;
 
-        // Check if already active
+        // Conflict: same hand_id + same scope. Global activations (no `openfang_project_id`)
+        // conflict with each other; per-project activations are keyed by that id.
         for entry in self.instances.iter() {
-            if entry.hand_id == hand_id && entry.status == HandStatus::Active {
-                return Err(HandError::AlreadyActive(hand_id.to_string()));
+            if entry.hand_id != hand_id || entry.status != HandStatus::Active {
+                continue;
+            }
+            let new_key = config
+                .get("openfang_project_id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            let old_key = entry
+                .config
+                .get("openfang_project_id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            match (&new_key, &old_key) {
+                (None, None) => {
+                    return Err(HandError::AlreadyActive(hand_id.to_string()));
+                }
+                (Some(a), Some(b)) if a == b => {
+                    return Err(HandError::AlreadyActive(format!("{hand_id} (project {a})")));
+                }
+                _ => {}
             }
         }
 
@@ -636,6 +659,7 @@ fn check_option_available(provider_env: Option<&str>, binary: Option<&str>) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn new_registry_is_empty() {
@@ -648,8 +672,33 @@ mod tests {
     fn load_bundled_hands() {
         let reg = HandRegistry::new();
         let count = reg.load_bundled();
-        assert_eq!(count, 0);
-        assert!(reg.list_definitions().is_empty());
+        assert_eq!(count, 1);
+        assert!(reg.get_definition("pipeline-coordinator").is_some());
+    }
+
+    #[test]
+    fn pipeline_coordinator_two_openfang_project_instances() {
+        let reg = HandRegistry::new();
+        reg.load_bundled();
+        let mut c1 = HashMap::new();
+        c1.insert(
+            "openfang_project_id".into(),
+            serde_json::json!("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        );
+        let i1 = reg.activate("pipeline-coordinator", c1).unwrap();
+        let mut c2 = HashMap::new();
+        c2.insert(
+            "openfang_project_id".into(),
+            serde_json::json!("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb"),
+        );
+        let i2 = reg.activate("pipeline-coordinator", c2).unwrap();
+        assert_ne!(i1.instance_id, i2.instance_id);
+        let mut c1dup = HashMap::new();
+        c1dup.insert(
+            "openfang_project_id".into(),
+            serde_json::json!("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        );
+        assert!(reg.activate("pipeline-coordinator", c1dup).is_err());
     }
 
     #[test]
@@ -666,7 +715,9 @@ mod tests {
     #[test]
     fn set_error_status_not_found() {
         let reg = HandRegistry::new();
-        assert!(reg.set_error(Uuid::new_v4(), "something broke".to_string()).is_err());
+        assert!(reg
+            .set_error(Uuid::new_v4(), "something broke".to_string())
+            .is_err());
     }
 
     #[test]

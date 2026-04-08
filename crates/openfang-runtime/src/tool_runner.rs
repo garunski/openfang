@@ -392,6 +392,104 @@ pub async fn execute_tool(
                 },
             };
         }
+        "start_project_workflow" => {
+            return match tool_start_project_workflow(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "query_project_status" => {
+            return match tool_query_project_status(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "read_project_context" => {
+            return match tool_read_project_context(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "update_project_context" => {
+            return match tool_update_project_context(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "git_create_branch" => {
+            return match tool_git_create_branch(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "git_commit_and_push" => {
+            return match tool_git_commit_and_push(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "git_create_pr" => {
+            return match tool_git_create_pr(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
         "backlog_doc_create" => {
             return match tool_backlog_doc_create(input, kernel).await {
                 Ok((content, is_error)) => ToolResult {
@@ -817,14 +915,14 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "trigger_cursor_worker".to_string(),
-            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Maps to `cursor agent -d <workspace> -p <prompt> --mode <mode> -o json` plus optional allowlisted flags. In `agent` mode the prompt always includes the implementation contract referencing `.cursor/skills/implement/SKILL.md`. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
+            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Maps to `cursor agent -d <workspace> -p <prompt> --mode <mode> -o json` plus optional allowlisted flags. OpenFang always passes `-o json`. Before launching Cursor, OpenFang writes bundled skill files to `<workspace>/.cursor/skills/{explore,review,test-write,implement}/SKILL.md` (skipped when unchanged). In `agent` mode the prompt includes a mandatory contract: default references `.cursor/skills/implement/SKILL.md`; if `behavior` contains `.cursor/skills/test-write/SKILL.md`, the test-write contract is used instead. For read-only phases use `--mode ask` and point `behavior` at `.cursor/skills/explore/SKILL.md` or `.cursor/skills/review/SKILL.md`. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string", "description": "Absolute path to the spoke repository root (allowlisted)" },
                     "prompt": { "type": "string", "description": "Task text / instructions for the agent" },
-                    "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor agent mode (default: agent)" },
-                    "behavior": { "type": "string", "description": "Extra expectations after the default agent contract. In `agent` mode, OpenFang always appends a mandatory contract that references `.cursor/skills/implement/SKILL.md` in the workspace; use this field for spoke-specific notes (e.g. gate stderr on retry)." },
+                    "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor agent mode: use `ask` with explore/review skills; `agent` with implement or test-write (default: agent)" },
+                    "behavior": { "type": "string", "description": "Orchestrator contract line(s). Typical values (paths are inside the spoke workspace): implement — omit or add spoke notes; explore — `Follow .cursor/skills/explore/SKILL.md in this workspace.` with mode ask; review — `Follow .cursor/skills/review/SKILL.md in this workspace.` with mode ask; test-write — include `.cursor/skills/test-write/SKILL.md` in this string with mode agent to swap in the test authoring contract. Extra notes (e.g. gate stderr) can follow." },
                     "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI flags allowlisted by OpenFang (e.g. --yolo, --force)" },
                     "task_id": { "type": "string", "description": "Backlog task id for audit correlation; default unknown if omitted" }
                 },
@@ -833,7 +931,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "run_pipeline".to_string(),
-            description: "Run the automation pipeline in Rust: repeated `trigger_cursor_worker` then `enforce_quality_gate` until the gate passes or `max_retries` is exhausted. Emits the same `QualityGate`, `CursorWorker`, and `PipelineRunOutcome` audit events as the standalone tools. Provide either `workspace` or `task_labels` (with a `repo:<spoke>` label) to resolve the spoke root.".to_string(),
+            description: "Run the automation pipeline in Rust: repeated `trigger_cursor_worker` then `enforce_quality_gate` until the gate passes or `max_retries` is exhausted. Each Cursor round deploys bundled `.cursor/skills/*` into the spoke (same as `trigger_cursor_worker`) before `cursor agent` runs. Emits the same `QualityGate`, `CursorWorker`, and `PipelineRunOutcome` audit events as the standalone tools. Provide either `workspace` or `task_labels` (with a `repo:<spoke>` label) to resolve the spoke root.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -901,6 +999,116 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
                 },
                 "required": ["task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "start_project_workflow".to_string(),
+            description: "Start a registered workflow for a backlog task in a project. Validates the task exists and is Ready for Dev. Optionally posts a confirmation to the project's Mattermost channel first. Returns JSON with run_id and output.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "task_id": { "type": "string", "description": "Backlog task id (e.g. TASK-40)" },
+                    "workflow_id": { "type": "string", "description": "Workflow definition UUID (omit if using workflow_name)" },
+                    "workflow_name": { "type": "string", "description": "Registered workflow name (omit if using workflow_id)" },
+                    "post_mattermost_confirmation": { "type": "boolean", "description": "If true, post a short confirmation to project mattermost_channel_id before running (requires channel bridge)" }
+                },
+                "required": ["project_id", "task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "query_project_status".to_string(),
+            description: "Read-only: list tasks or view one task in the project's admin backlog via the backlog CLI. Returns JSON (parsed list or full task stdout).".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "task_id": { "type": "string", "description": "If set, run task view; otherwise task list" }
+                },
+                "required": ["project_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "read_project_context".to_string(),
+            description: "Load persisted per-project pipeline context (repo summary, conventions, recent failures, decision log) from the hub. Returns JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" }
+                },
+                "required": ["project_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "update_project_context".to_string(),
+            description: "Update per-project context: optional set_repo_structure_summary, set_coding_conventions, append_past_failure {task_id?, stderr_snippet}, append_decision {summary}. Returns updated JSON.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "set_repo_structure_summary": { "type": "string" },
+                    "set_coding_conventions": { "type": "string" },
+                    "append_past_failure": {
+                        "type": "object",
+                        "properties": {
+                            "task_id": { "type": "string" },
+                            "stderr_snippet": { "type": "string" }
+                        }
+                    },
+                    "append_decision": {
+                        "type": "object",
+                        "properties": {
+                            "summary": { "type": "string" }
+                        },
+                        "required": ["summary"]
+                    }
+                },
+                "required": ["project_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "git_create_branch".to_string(),
+            description: "Create a new git branch in a project spoke (after checkout of base branch). Branch name defaults to the configured `{task_id}` template. Requires [automation].spoke_roots and a registered project whose spoke contains spoke_root.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "spoke_root": { "type": "string", "description": "Absolute path to the spoke git repo root" },
+                    "task_id": { "type": "string", "description": "Backlog task id for default branch name template" },
+                    "branch_name": { "type": "string", "description": "Override branch name (optional)" },
+                    "base_branch": { "type": "string", "description": "Branch to branch from (default main)" }
+                },
+                "required": ["project_id", "spoke_root", "task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "git_commit_and_push".to_string(),
+            description: "Stage all changes, commit with [task_id] title line, push current branch to origin. Returns commit SHA and branch name.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "spoke_root": { "type": "string", "description": "Absolute spoke git repo root" },
+                    "task_id": { "type": "string", "description": "Backlog task id (in commit subject)" },
+                    "task_title": { "type": "string", "description": "Short title for commit subject (optional)" },
+                    "commit_body_extra": { "type": "string", "description": "Optional extra commit body paragraph" }
+                },
+                "required": ["project_id", "spoke_root", "task_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "git_create_pr".to_string(),
+            description: "Open a GitHub pull request for the current branch using the GitHub REST API. Token from project pipeline_overrides.github_token_env, [automation].github_token_env, or GITHUB_TOKEN.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "spoke_root": { "type": "string", "description": "Absolute spoke git repo root" },
+                    "title": { "type": "string", "description": "PR title" },
+                    "body": { "type": "string", "description": "PR body (markdown)" },
+                    "base_branch": { "type": "string", "description": "Base branch name (default main)" }
+                },
+                "required": ["project_id", "spoke_root", "title", "body"]
             }),
         },
         ToolDefinition {
@@ -1933,8 +2141,8 @@ async fn tool_enforce_quality_gate(
         .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
     let task_id = optional_pipeline_task_id(input);
     let actor = pipeline_tool_actor(caller_agent_id);
-    let out = crate::pipeline_steps::run_quality_gate(kh.as_ref(), spoke_root, &task_id, &actor)
-        .await?;
+    let out =
+        crate::pipeline_steps::run_quality_gate(kh.as_ref(), spoke_root, &task_id, &actor).await?;
     let body = serde_json::json!({
         "exit_code": out.exit_code,
         "stdout": out.stdout,
@@ -2054,10 +2262,8 @@ async fn tool_run_pipeline(
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let runner = crate::pipeline_runner::PipelineRunner::new(
-        kh.clone(),
-        caller_agent_id.map(String::from),
-    );
+    let runner =
+        crate::pipeline_runner::PipelineRunner::new(kh.clone(), caller_agent_id.map(String::from));
     match runner
         .run(
             &task_id,
@@ -2081,7 +2287,10 @@ async fn tool_run_pipeline(
                     "stderr": ok.gate.stderr,
                 },
             });
-            Ok((serde_json::to_string(&body).map_err(|e| e.to_string())?, false))
+            Ok((
+                serde_json::to_string(&body).map_err(|e| e.to_string())?,
+                false,
+            ))
         }
         Err(e) => {
             let body = serde_json::json!({
@@ -2092,7 +2301,10 @@ async fn tool_run_pipeline(
                 "last_gate_stderr": e.last_gate_stderr,
                 "rollback_to_status": rollback,
             });
-            Ok((serde_json::to_string(&body).map_err(|e| e.to_string())?, true))
+            Ok((
+                serde_json::to_string(&body).map_err(|e| e.to_string())?,
+                true,
+            ))
         }
     }
 }
@@ -2110,22 +2322,21 @@ static BACKLOG_DOC_LIST_LINE: LazyLock<regex_lite::Regex> = LazyLock::new(|| {
     regex_lite::Regex::new(r"^(\S+)\s+-\s+(\d+)\s+-\s+(.+)$").expect("backlog doc list line regex")
 });
 
-const BACKLOG_CLI_TIMEOUT_SECS: u64 = 300;
-
-pub(crate) fn parse_backlog_task_list_plain(text: &str) -> serde_json::Value {
+pub fn parse_backlog_task_list_plain(text: &str) -> serde_json::Value {
     let mut sections: Vec<serde_json::Value> = Vec::new();
     let mut section_name = String::new();
     let mut tasks: Vec<serde_json::Value> = Vec::new();
 
-    let flush = |sn: &mut String, ts: &mut Vec<serde_json::Value>, sec: &mut Vec<serde_json::Value>| {
-        if sn.is_empty() && ts.is_empty() {
-            return;
-        }
-        sec.push(serde_json::json!({
-            "section": std::mem::take(sn),
-            "tasks": std::mem::take(ts),
-        }));
-    };
+    let flush =
+        |sn: &mut String, ts: &mut Vec<serde_json::Value>, sec: &mut Vec<serde_json::Value>| {
+            if sn.is_empty() && ts.is_empty() {
+                return;
+            }
+            sec.push(serde_json::json!({
+                "section": std::mem::take(sn),
+                "tasks": std::mem::take(ts),
+            }));
+        };
 
     for line in text.lines() {
         let line = line.trim_end();
@@ -2174,7 +2385,10 @@ fn parse_backlog_created_task_id(text: &str) -> Option<String> {
     for line in text.lines() {
         let t = line.trim();
         if let Some(rest) = t.strip_prefix("Task ") {
-            return rest.split_whitespace().next().map(std::string::ToString::to_string);
+            return rest
+                .split_whitespace()
+                .next()
+                .map(std::string::ToString::to_string);
         }
     }
     None
@@ -2247,42 +2461,8 @@ fn normalize_backlog_priority(s: &str) -> Result<String, String> {
     let p = s.to_ascii_lowercase();
     match p.as_str() {
         "high" | "medium" | "low" => Ok(p),
-        _ => Err(format!(
-            "invalid priority '{s}'; use high, medium, or low"
-        )),
+        _ => Err(format!("invalid priority '{s}'; use high, medium, or low")),
     }
-}
-
-async fn run_backlog_cli(cwd: &Path, args: &[String]) -> Result<(i32, String, String), String> {
-    let mut cmd = tokio::process::Command::new("backlog");
-    for a in args {
-        cmd.arg(a);
-    }
-    cmd.current_dir(cwd);
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-
-    let output = tokio::time::timeout(
-        std::time::Duration::from_secs(BACKLOG_CLI_TIMEOUT_SECS),
-        cmd.output(),
-    )
-    .await
-    .map_err(|_| {
-        format!("backlog CLI timed out after {BACKLOG_CLI_TIMEOUT_SECS}s")
-    })?
-    .map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            "backlog CLI not found on PATH (install backlog.md / mise tool 'backlog')".to_string()
-        } else {
-            format!("Failed to run backlog: {e}")
-        }
-    })?;
-
-    let code = output.status.code().unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    Ok((code, stdout, stderr))
 }
 
 fn backlog_tool_json_response(
@@ -2346,7 +2526,7 @@ async fn tool_backlog_task_create(
         }
     }
 
-    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let parsed = serde_json::json!({
         "created_task_id": parse_backlog_created_task_id(&stdout),
     });
@@ -2362,12 +2542,8 @@ async fn tool_backlog_task_list(
         &kh.automation_backlog_roots(),
         optional_backlog_root_param(input),
     )?;
-    let args = vec![
-        "task".into(),
-        "list".into(),
-        "--plain".into(),
-    ];
-    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let args = vec!["task".into(), "list".into(), "--plain".into()];
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let parsed = parse_backlog_task_list_plain(&stdout);
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
@@ -2383,7 +2559,7 @@ async fn tool_backlog_task_view(
         optional_backlog_root_param(input),
     )?;
     let args = vec!["task".into(), id, "--plain".into()];
-    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let headline = stdout.lines().next().unwrap_or("").to_string();
     let parsed = serde_json::json!({ "headline": headline });
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
@@ -2410,7 +2586,7 @@ async fn tool_backlog_task_edit(
 
     let from_status = if to_status.is_some() {
         let view_args = vec!["task".into(), id.clone(), "--plain".into()];
-        match run_backlog_cli(&cwd, &view_args).await {
+        match crate::backlog_cli::run_backlog_cli(&cwd, &view_args).await {
             Ok((0, stdout, _)) => crate::pipeline_audit::parse_backlog_plain_status(&stdout),
             _ => None,
         }
@@ -2456,7 +2632,7 @@ async fn tool_backlog_task_edit(
     }
     args.push("--plain".into());
 
-    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     if code == 0 {
         if let Some(ts) = to_status {
             crate::pipeline_audit::log_backlog_status_transition(
@@ -2471,6 +2647,250 @@ async fn tool_backlog_task_edit(
         "headline": stdout.lines().next().unwrap_or(""),
     });
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_start_project_workflow(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?;
+    let workflow_id = input["workflow_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let workflow_name = input["workflow_name"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let post_mattermost_confirmation = input["post_mattermost_confirmation"]
+        .as_bool()
+        .unwrap_or(false);
+    let json = kh
+        .start_project_workflow(
+            project_id,
+            task_id,
+            workflow_id,
+            workflow_name,
+            post_mattermost_confirmation,
+        )
+        .await?;
+    Ok((json, false))
+}
+
+async fn tool_query_project_status(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let json = kh.query_project_status(project_id, task_id).await?;
+    Ok((json, false))
+}
+
+async fn tool_read_project_context(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let json = kh.read_project_context(project_id).await?;
+    Ok((json, false))
+}
+
+async fn tool_update_project_context(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let mut patch = input.clone();
+    if let Some(obj) = patch.as_object_mut() {
+        obj.remove("project_id");
+    }
+    let json = kh.update_project_context(project_id, patch).await?;
+    Ok((json, false))
+}
+
+async fn tool_git_create_branch(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let spoke_root = input["spoke_root"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?;
+    let branch_override = input["branch_name"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let base_branch = input["base_branch"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main");
+    let cwd = kh.resolve_git_workspace_for_project(project_id, spoke_root)?;
+    let tmpl = kh.pipeline_git_branch_template(project_id);
+    let branch = crate::git_pipeline::resolve_branch_name(&tmpl, task_id, branch_override);
+    crate::git_pipeline::git_create_branch(&cwd, &branch, base_branch).await?;
+    let out = serde_json::json!({
+        "ok": true,
+        "branch": branch,
+        "base_branch": base_branch,
+        "spoke_root": cwd.display().to_string(),
+    });
+    Ok((
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
+        false,
+    ))
+}
+
+async fn tool_git_commit_and_push(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let spoke_root = input["spoke_root"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
+    let task_id = input["task_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?;
+    let task_title = input["task_title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Automated pipeline commit");
+    let cwd = kh.resolve_git_workspace_for_project(project_id, spoke_root)?;
+    let subject = format!("[{}] {}", task_id.trim(), task_title);
+    let body_extra = input["commit_body_extra"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let default_body = "Automated pipeline commit via OpenFang.";
+    let body = body_extra.or(Some(default_body));
+    let (sha, branch) = crate::git_pipeline::git_commit_and_push(&cwd, &subject, body).await?;
+    let out = serde_json::json!({
+        "ok": true,
+        "commit_sha": sha,
+        "branch": branch,
+        "spoke_root": cwd.display().to_string(),
+    });
+    Ok((
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
+        false,
+    ))
+}
+
+async fn tool_git_create_pr(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let spoke_root = input["spoke_root"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'spoke_root'".to_string())?;
+    let title = input["title"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'title'".to_string())?;
+    let body = input["body"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'body'".to_string())?;
+    let base_branch = input["base_branch"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("main");
+    let cwd = kh.resolve_git_workspace_for_project(project_id, spoke_root)?;
+    let env_name = kh.github_token_env_for_pipeline(project_id);
+    let token = std::env::var(&env_name)
+        .map_err(|_| format!("GitHub token env `{env_name}` is not set"))?;
+    let remote = crate::git_pipeline::git_remote_origin_url(&cwd).await?;
+    let (owner, repo) = crate::git_pipeline::parse_github_owner_repo(&remote)?;
+    let head =
+        crate::git_pipeline::git_stdout(&cwd, &["rev-parse", "--abbrev-ref", "HEAD"]).await?;
+    let pr = crate::git_pipeline::github_create_pull_request(
+        &token,
+        &owner,
+        &repo,
+        title,
+        body,
+        &head,
+        base_branch,
+    )
+    .await?;
+    let pr_url = pr["html_url"].as_str().unwrap_or("").to_string();
+    let number = pr["number"].clone();
+    let out = serde_json::json!({
+        "ok": true,
+        "pr_url": pr_url,
+        "number": number,
+        "head": head,
+        "base_branch": base_branch,
+        "owner": owner,
+        "repo": repo,
+    });
+    Ok((
+        serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?,
+        false,
+    ))
 }
 
 async fn tool_record_git_action(
@@ -2554,26 +2974,33 @@ async fn tool_record_pipeline_outcome(
         .ok_or_else(|| "Missing required boolean parameter 'success'".to_string())?;
     let retry_count = input["retry_count"]
         .as_u64()
-        .or_else(|| input["retry_count"].as_i64().filter(|&i| i >= 0).map(|i| i as u64))
+        .or_else(|| {
+            input["retry_count"]
+                .as_i64()
+                .filter(|&i| i >= 0)
+                .map(|i| i as u64)
+        })
         .ok_or_else(|| "Missing required integer parameter 'retry_count'".to_string())?;
-    let retry_count: u32 = retry_count.try_into().map_err(|_| {
-        "retry_count out of range for u32".to_string()
-    })?;
+    let retry_count: u32 = retry_count
+        .try_into()
+        .map_err(|_| "retry_count out of range for u32".to_string())?;
     let rollback_to_status = input
         .get("rollback_to_status")
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from);
-    crate::pipeline_audit::emit(crate::pipeline_audit::PipelineAuditEvent::PipelineRunOutcome {
-        timestamp: chrono::Utc::now().to_rfc3339(),
-        task_id,
-        success,
-        retry_count,
-        rollback_to_status,
-        actor: pipeline_tool_actor(caller_agent_id),
-        tool: "record_pipeline_outcome".to_string(),
-    });
+    crate::pipeline_audit::emit(
+        crate::pipeline_audit::PipelineAuditEvent::PipelineRunOutcome {
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            task_id,
+            success,
+            retry_count,
+            rollback_to_status,
+            actor: pipeline_tool_actor(caller_agent_id),
+            tool: "record_pipeline_outcome".to_string(),
+        },
+    );
     Ok((serde_json::json!({ "ok": true }).to_string(), false))
 }
 
@@ -2615,7 +3042,7 @@ async fn tool_backlog_doc_create(
         "-t".into(),
         doc_type.trim().to_string(),
     ];
-    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let created = stdout.lines().find_map(|l| {
         l.trim()
             .strip_prefix("Created document ")
@@ -2639,7 +3066,7 @@ async fn tool_backlog_doc_list(
         optional_backlog_root_param(input),
     )?;
     let args = vec!["doc".into(), "list".into(), "--plain".into()];
-    let (code, stdout, stderr) = run_backlog_cli(&cwd, &args).await?;
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let parsed = parse_backlog_doc_list_plain(&stdout);
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
@@ -4339,11 +4766,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl KernelHandle for QaGateStubKernel {
-        async fn spawn_agent(
-            &self,
-            _: &str,
-            _: Option<&str>,
-        ) -> Result<(String, String), String> {
+        async fn spawn_agent(&self, _: &str, _: Option<&str>) -> Result<(String, String), String> {
             Err("stub".into())
         }
         async fn send_to_agent(&self, _: &str, _: &str) -> Result<String, String> {
@@ -4409,6 +4832,73 @@ mod tests {
         fn automation_backlog_roots(&self) -> Vec<PathBuf> {
             self.backlog_roots.clone()
         }
+
+        fn resolve_git_workspace_for_project(
+            &self,
+            project_id: &str,
+            spoke_root: &str,
+        ) -> Result<PathBuf, String> {
+            let _ = project_id;
+            openfang_types::config::validate_spoke_root_allowlisted(
+                &self.roots,
+                std::path::Path::new(spoke_root),
+            )
+        }
+
+        fn github_token_env_for_pipeline(&self, _project_id: &str) -> String {
+            "GITHUB_TOKEN".to_string()
+        }
+
+        fn pipeline_git_branch_template(&self, _project_id: &str) -> String {
+            crate::git_pipeline::default_git_branch_template().to_string()
+        }
+
+        async fn start_project_workflow(
+            &self,
+            project_id: &str,
+            task_id: &str,
+            workflow_id: Option<&str>,
+            workflow_name: Option<&str>,
+            post_mattermost_confirmation: bool,
+        ) -> Result<String, String> {
+            Ok(serde_json::json!({
+                "ok": true,
+                "project_id": project_id,
+                "task_id": task_id,
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "post_mattermost_confirmation": post_mattermost_confirmation,
+            })
+            .to_string())
+        }
+
+        async fn query_project_status(
+            &self,
+            project_id: &str,
+            task_id: Option<&str>,
+        ) -> Result<String, String> {
+            Ok(serde_json::json!({
+                "project_id": project_id,
+                "task_id": task_id,
+            })
+            .to_string())
+        }
+
+        async fn read_project_context(&self, project_id: &str) -> Result<String, String> {
+            Ok(serde_json::json!({ "project_id": project_id, "stub": true }).to_string())
+        }
+
+        async fn update_project_context(
+            &self,
+            project_id: &str,
+            patch: serde_json::Value,
+        ) -> Result<String, String> {
+            Ok(serde_json::json!({
+                "project_id": project_id,
+                "patch": patch,
+            })
+            .to_string())
+        }
     }
 
     #[test]
@@ -4430,6 +4920,13 @@ mod tests {
         assert!(names.contains(&"backlog_task_list"));
         assert!(names.contains(&"backlog_task_view"));
         assert!(names.contains(&"backlog_task_edit"));
+        assert!(names.contains(&"start_project_workflow"));
+        assert!(names.contains(&"query_project_status"));
+        assert!(names.contains(&"read_project_context"));
+        assert!(names.contains(&"update_project_context"));
+        assert!(names.contains(&"git_create_branch"));
+        assert!(names.contains(&"git_commit_and_push"));
+        assert!(names.contains(&"git_create_pr"));
         assert!(names.contains(&"backlog_doc_create"));
         assert!(names.contains(&"backlog_doc_list"));
         assert!(names.contains(&"record_git_action"));
@@ -4829,7 +5326,11 @@ mod tests {
         )
         .await;
         assert!(result.is_error);
-        assert!(result.content.contains("not allowlisted"), "{}", result.content);
+        assert!(
+            result.content.contains("not allowlisted"),
+            "{}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -4865,7 +5366,11 @@ mod tests {
         )
         .await;
         assert!(result.is_error);
-        assert!(result.content.contains("invalid mode"), "{}", result.content);
+        assert!(
+            result.content.contains("invalid mode"),
+            "{}",
+            result.content
+        );
     }
 
     #[tokio::test]
@@ -4952,7 +5457,8 @@ mod tests {
 
     #[test]
     fn test_parse_backlog_task_list_plain_fixture() {
-        let sample = "New:\n  [HIGH] TASK-8 - Title one\n\nReady for Dev:\n  [MEDIUM] TASK-4 - Other\n";
+        let sample =
+            "New:\n  [HIGH] TASK-8 - Title one\n\nReady for Dev:\n  [MEDIUM] TASK-4 - Other\n";
         let v = parse_backlog_task_list_plain(sample);
         let sections = v["sections"].as_array().unwrap();
         assert_eq!(sections.len(), 2);
@@ -5113,6 +5619,257 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("Multiple"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_start_project_workflow_tool_stub() {
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![],
+        });
+        let result = execute_tool(
+            "tid",
+            "start_project_workflow",
+            &serde_json::json!({
+                "project_id": "550e8400-e29b-41d4-a716-446655440000",
+                "task_id": "TASK-40",
+                "workflow_name": "demo",
+                "post_mattermost_confirmation": true,
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.content);
+        let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["task_id"], "TASK-40");
+    }
+
+    #[tokio::test]
+    async fn test_query_project_status_tool_stub() {
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![],
+        });
+        let result = execute_tool(
+            "tid",
+            "query_project_status",
+            &serde_json::json!({
+                "project_id": "550e8400-e29b-41d4-a716-446655440000",
+                "task_id": "TASK-1",
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.content);
+        let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(v["project_id"], "550e8400-e29b-41d4-a716-446655440000");
+    }
+
+    #[tokio::test]
+    async fn test_git_create_branch_tool_real_repo() {
+        use std::process::Command;
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().canonicalize().unwrap();
+        let repo = base.path().join("r");
+        std::fs::create_dir_all(&repo).unwrap();
+        let repo = repo.canonicalize().unwrap();
+        assert!(Command::new("git")
+            .args(["init"])
+            .current_dir(&repo)
+            .status()
+            .expect("git")
+            .success());
+        assert!(Command::new("git")
+            .args(["config", "user.email", "t@t.co"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["config", "user.name", "t"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(repo.join("x.txt"), "a").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "x.txt"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(&repo)
+            .status()
+            .unwrap()
+            .success());
+
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![root],
+            backlog_roots: vec![],
+        });
+        let result = execute_tool(
+            "tid",
+            "git_create_branch",
+            &serde_json::json!({
+                "project_id": "550e8400-e29b-41d4-a716-446655440000",
+                "spoke_root": repo.to_str().unwrap(),
+                "task_id": "TASK-50",
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.content);
+        let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert_eq!(v["branch"], "openfang/task-TASK-50");
+    }
+
+    #[tokio::test]
+    async fn test_git_commit_and_push_tool() {
+        use std::process::Command;
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().canonicalize().unwrap();
+        let bare = base.path().join("remote.git");
+        let wc = base.path().join("wc");
+        assert!(Command::new("git")
+            .args(["init", "--bare"])
+            .arg(&bare)
+            .status()
+            .expect("bare")
+            .success());
+        assert!(Command::new("git")
+            .args(["clone"])
+            .arg(&bare)
+            .arg(&wc)
+            .status()
+            .expect("clone")
+            .success());
+        let wc = wc.canonicalize().unwrap();
+        assert!(Command::new("git")
+            .args(["config", "user.email", "t@t.co"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["config", "user.name", "t"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(wc.join("f"), "1").unwrap();
+        assert!(Command::new("git")
+            .args(["add", "f"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["push", "-u", "origin", "main"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        assert!(Command::new("git")
+            .args(["checkout", "-b", "openfang/task-TASK-99"])
+            .current_dir(&wc)
+            .status()
+            .unwrap()
+            .success());
+        std::fs::write(wc.join("g"), "2").unwrap();
+
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![root],
+            backlog_roots: vec![],
+        });
+        let result = execute_tool(
+            "tid",
+            "git_commit_and_push",
+            &serde_json::json!({
+                "project_id": "550e8400-e29b-41d4-a716-446655440000",
+                "spoke_root": wc.to_str().unwrap(),
+                "task_id": "TASK-99",
+                "task_title": "fix",
+            }),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(!result.is_error, "{}", result.content);
+        let v: serde_json::Value = serde_json::from_str(&result.content).unwrap();
+        assert!(v["commit_sha"].as_str().unwrap().len() >= 7);
+        assert_eq!(v["branch"], "openfang/task-TASK-99");
     }
 
     #[tokio::test]

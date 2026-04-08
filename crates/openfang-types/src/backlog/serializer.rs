@@ -28,19 +28,20 @@ fn format_yaml_scalar(value: &str) -> String {
 }
 
 fn yaml_string_seq(items: &[String]) -> Yaml {
-    Yaml::Sequence(
-        items
-            .iter()
-            .map(|s| Yaml::String(s.clone()))
-            .collect(),
-    )
+    Yaml::Sequence(items.iter().map(|s| Yaml::String(s.clone())).collect())
 }
 
 fn task_to_mapping(task: &BacklogTask) -> Mapping {
     let mut m = Mapping::new();
     m.insert(Yaml::String("id".into()), Yaml::String(task.id.clone()));
-    m.insert(Yaml::String("title".into()), Yaml::String(task.title.clone()));
-    m.insert(Yaml::String("status".into()), Yaml::String(task.status.clone()));
+    m.insert(
+        Yaml::String("title".into()),
+        Yaml::String(task.title.clone()),
+    );
+    m.insert(
+        Yaml::String("status".into()),
+        Yaml::String(task.status.clone()),
+    );
     if !task.assignee.is_empty() {
         m.insert(
             Yaml::String("assignee".into()),
@@ -80,7 +81,10 @@ fn task_to_mapping(task: &BacklogTask) -> Mapping {
         }
     }
     if let Some(ref p) = task.parent_task_id {
-        m.insert(Yaml::String("parent_task_id".into()), Yaml::String(p.clone()));
+        m.insert(
+            Yaml::String("parent_task_id".into()),
+            Yaml::String(p.clone()),
+        );
     }
     if let Some(ref st) = task.subtasks {
         if !st.is_empty() {
@@ -388,7 +392,10 @@ fn decision_status_str(s: DecisionStatus) -> &'static str {
 pub fn serialize_document(doc: &BacklogDocument) -> String {
     let mut m = Mapping::new();
     m.insert(Yaml::String("id".into()), Yaml::String(doc.id.clone()));
-    m.insert(Yaml::String("title".into()), Yaml::String(doc.title.clone()));
+    m.insert(
+        Yaml::String("title".into()),
+        Yaml::String(doc.title.clone()),
+    );
     m.insert(
         Yaml::String("type".into()),
         Yaml::String(doc.doc_type.clone()),
@@ -413,8 +420,14 @@ pub fn serialize_document(doc: &BacklogDocument) -> String {
 pub fn serialize_decision(decision: &BacklogDecision) -> String {
     let mut m = Mapping::new();
     m.insert(Yaml::String("id".into()), Yaml::String(decision.id.clone()));
-    m.insert(Yaml::String("title".into()), Yaml::String(decision.title.clone()));
-    m.insert(Yaml::String("date".into()), Yaml::String(decision.date.clone()));
+    m.insert(
+        Yaml::String("title".into()),
+        Yaml::String(decision.title.clone()),
+    );
+    m.insert(
+        Yaml::String("date".into()),
+        Yaml::String(decision.date.clone()),
+    );
     m.insert(
         Yaml::String("status".into()),
         Yaml::String(decision_status_str(decision.status).into()),

@@ -2,8 +2,8 @@
 
 use super::parser::{parse_decision, parse_document, parse_milestone, parse_task};
 use super::{
-    BacklogConfig, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSnapshot, BacklogTask,
-    DocTree, DocTreeNode,
+    BacklogConfig, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSnapshot,
+    BacklogTask, DocTree, DocTreeNode,
 };
 use std::fs;
 use std::path::Path;
@@ -19,8 +19,7 @@ pub enum BacklogReadError {
 }
 
 fn is_md(path: &Path) -> bool {
-    path
-        .extension()
+    path.extension()
         .map(|e| e.eq_ignore_ascii_case("md"))
         .unwrap_or(false)
 }
@@ -114,11 +113,7 @@ pub fn read_documents(backlog_root: &Path) -> Result<Vec<BacklogDocument>, Backl
             .replace('\\', "/")
             .trim_matches('/')
             .to_string();
-        d.path = if cat.is_empty() {
-            None
-        } else {
-            Some(cat)
-        };
+        d.path = if cat.is_empty() { None } else { Some(cat) };
         d.file_path = Some(rel_from_backlog(backlog_root, path));
         out.push(d);
     }
@@ -280,7 +275,10 @@ mod tests {
     fn write(p: &Path, s: &str) {
         let parent = p.parent().unwrap();
         fs::create_dir_all(parent).unwrap();
-        fs::File::create(p).unwrap().write_all(s.as_bytes()).unwrap();
+        fs::File::create(p)
+            .unwrap()
+            .write_all(s.as_bytes())
+            .unwrap();
     }
 
     #[test]

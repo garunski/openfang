@@ -7,20 +7,21 @@ use axum::response::IntoResponse;
 use axum::Json;
 use dashmap::DashMap;
 use openfang_channels::bridge::channel_command_specs;
+use openfang_kernel::error::KernelError;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
 use openfang_kernel::workflow::{
-    ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
+    workflow_from_create_request_json, ErrorMode, StepAgent, StepMode, Workflow, WorkflowId,
+    WorkflowRun, WorkflowRunId, WorkflowRunState, WorkflowStep,
 };
-use openfang_kernel::error::KernelError;
 use openfang_kernel::{BacklogStore, BacklogWatcherManager, OpenFangKernel};
 use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_runtime::tool_runner::builtin_tool_definitions;
 use openfang_types::agent::{AgentId, AgentIdentity, AgentManifest};
 use openfang_types::error::OpenFangError;
-use serde::Deserialize;
 use openfang_types::project::{
     Project, ProjectId, ProjectPatch, SpokeDescriptor, ADMIN_SPOKE_REQUIRED_MSG,
 };
+use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, LazyLock};
@@ -793,97 +794,17 @@ pub async fn create_workflow(
     State(state): State<Arc<AppState>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let name = req["name"].as_str().unwrap_or("unnamed").to_string();
-    let description = req["description"].as_str().unwrap_or("").to_string();
-
-    let steps_json = match req["steps"].as_array() {
-        Some(s) => s,
-        None => {
+    let workflow = match workflow_from_create_request_json(&req) {
+        Ok(w) => w,
+        Err(e) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Missing 'steps' array"})),
+                Json(serde_json::json!({"error": e})),
             );
         }
     };
 
-    let mut steps = Vec::new();
-    for s in steps_json {
-        let step_name = s["name"].as_str().unwrap_or("step").to_string();
-        let agent = if let Some(id) = s["agent_id"].as_str() {
-            StepAgent::ById { id: id.to_string() }
-        } else if let Some(name) = s["agent_name"].as_str() {
-            StepAgent::ByName {
-                name: name.to_string(),
-            }
-        } else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": format!("Step '{}' needs 'agent_id' or 'agent_name'", step_name)}),
-                ),
-            );
-        };
-
-        let mode = match s["mode"].as_str().unwrap_or("sequential") {
-            "fan_out" => StepMode::FanOut,
-            "collect" => StepMode::Collect,
-            "conditional" => StepMode::Conditional {
-                condition: s["condition"].as_str().unwrap_or("").to_string(),
-            },
-            "loop" => StepMode::Loop {
-                max_iterations: s["max_iterations"].as_u64().unwrap_or(5) as u32,
-                until: s["until"].as_str().unwrap_or("").to_string(),
-            },
-            _ => StepMode::Sequential,
-        };
-
-        let error_mode = match s["error_mode"].as_str().unwrap_or("fail") {
-            "skip" => ErrorMode::Skip,
-            "retry" => ErrorMode::Retry {
-                max_retries: s["max_retries"].as_u64().unwrap_or(3) as u32,
-            },
-            _ => ErrorMode::Fail,
-        };
-
-        steps.push(WorkflowStep {
-            name: step_name,
-            agent,
-            prompt_template: s["prompt"].as_str().unwrap_or("{{input}}").to_string(),
-            mode,
-            timeout_secs: s["timeout_secs"].as_u64().unwrap_or(120),
-            error_mode,
-            output_var: s["output_var"].as_str().map(String::from),
-        });
-    }
-
-    let project_id: Option<ProjectId> = match req.get("project_id") {
-        None => None,
-        Some(v) if v.is_null() => None,
-        Some(v) => {
-            let Some(s) = v.as_str() else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "project_id must be a string or null"})),
-                );
-            };
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                match s.parse::<ProjectId>() {
-                    Ok(p) => Some(p),
-                    Err(_) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({"error": "Invalid project_id"})),
-                        );
-                    }
-                }
-            }
-        }
-    };
-
-    if let Some(pid) = project_id {
+    if let Some(pid) = workflow.project_id {
         if state.kernel.project_store.get(pid).is_none() {
             return (
                 StatusCode::NOT_FOUND,
@@ -892,34 +813,8 @@ pub async fn create_workflow(
         }
     }
 
-    let workflow = Workflow {
-        id: WorkflowId::new(),
-        name,
-        description,
-        steps,
-        project_id,
-        created_at: chrono::Utc::now(),
-    };
-
     let id = state.kernel.register_workflow(workflow.clone()).await;
-
-    // Persist workflow to disk so it survives daemon restarts (#751)
-    let wf_dir = state
-        .kernel
-        .config
-        .workflows_dir
-        .clone()
-        .unwrap_or_else(|| state.kernel.config.home_dir.join("workflows"));
-    if let Err(e) = std::fs::create_dir_all(&wf_dir) {
-        tracing::warn!("Failed to create workflows dir: {e}");
-    } else {
-        let wf_path = wf_dir.join(format!("{}.json", id));
-        if let Ok(json) = serde_json::to_string_pretty(&workflow) {
-            if let Err(e) = std::fs::write(&wf_path, json) {
-                tracing::warn!("Failed to persist workflow {id}: {e}");
-            }
-        }
-    }
+    state.kernel.persist_workflow_to_disk(&workflow);
 
     (
         StatusCode::CREATED,
@@ -1057,26 +952,152 @@ pub async fn run_project_workflow(
     }
 }
 
-/// GET /api/workflows/:id/runs — List runs for a workflow.
-pub async fn list_workflow_runs(
-    State(state): State<Arc<AppState>>,
-    Path(_id): Path<String>,
-) -> impl IntoResponse {
-    let runs = state.kernel.workflows.list_runs(None).await;
-    let list: Vec<serde_json::Value> = runs
+fn workflow_run_state_str(state: &WorkflowRunState) -> &'static str {
+    match state {
+        WorkflowRunState::Pending => "pending",
+        WorkflowRunState::Running => "running",
+        WorkflowRunState::Completed => "completed",
+        WorkflowRunState::Failed => "failed",
+    }
+}
+
+fn workflow_run_duration_ms(r: &WorkflowRun) -> u64 {
+    let now = chrono::Utc::now();
+    let end = r.completed_at.unwrap_or(now);
+    (end - r.started_at).num_milliseconds().max(0) as u64
+}
+
+fn workflow_run_detail_json(r: &WorkflowRun) -> serde_json::Value {
+    let steps: Vec<serde_json::Value> = r
+        .step_results
         .iter()
-        .map(|r| {
+        .map(|s| {
             serde_json::json!({
-                "id": r.id.to_string(),
-                "workflow_name": r.workflow_name,
-                "state": serde_json::to_value(&r.state).unwrap_or_default(),
-                "steps_completed": r.step_results.len(),
-                "started_at": r.started_at.to_rfc3339(),
-                "completed_at": r.completed_at.map(|t| t.to_rfc3339()),
+                "step_name": s.step_name,
+                "agent_id": s.agent_id,
+                "agent_name": s.agent_name,
+                "status": "completed",
+                "duration_ms": s.duration_ms,
+                "input_tokens": s.input_tokens,
+                "output_tokens": s.output_tokens,
+                "output": s.output,
             })
         })
         .collect();
-    Json(list)
+    serde_json::json!({
+        "id": r.id.to_string(),
+        "workflow_id": r.workflow_id.to_string(),
+        "workflow_name": r.workflow_name,
+        "state": workflow_run_state_str(&r.state),
+        "input": r.input,
+        "output": r.output,
+        "error": r.error,
+        "started_at": r.started_at.to_rfc3339(),
+        "completed_at": r.completed_at.map(|t| t.to_rfc3339()),
+        "duration_ms": workflow_run_duration_ms(r),
+        "step_results": steps,
+    })
+}
+
+/// GET /api/workflows/:id/runs/:run_id — Single run with step results.
+pub async fn get_workflow_run(
+    State(state): State<Arc<AppState>>,
+    Path((wf_path_id, run_path_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let workflow_id = WorkflowId(match wf_path_id.parse() {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+            )
+                .into_response();
+        }
+    });
+    let run_uuid = match uuid::Uuid::parse_str(&run_path_id) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid run ID"})),
+            )
+                .into_response();
+        }
+    };
+    let run_id = WorkflowRunId(run_uuid);
+    let Some(run) = state.kernel.workflows.get_run(run_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Workflow run not found"})),
+        )
+            .into_response();
+    };
+    if run.workflow_id != workflow_id {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Workflow run not found"})),
+        )
+            .into_response();
+    }
+    Json(workflow_run_detail_json(&run)).into_response()
+}
+
+/// GET /api/workflows/:id/runs — List runs for that workflow (newest first).
+pub async fn list_workflow_runs(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let workflow_id = WorkflowId(match id.parse() {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid workflow ID"})),
+            )
+                .into_response();
+        }
+    });
+
+    let step_count = state
+        .kernel
+        .workflows
+        .get_workflow(workflow_id)
+        .await
+        .map(|w| w.steps.len());
+
+    let runs = state
+        .kernel
+        .workflows
+        .list_runs_for_workflow(workflow_id, None)
+        .await;
+
+    let now = chrono::Utc::now();
+    let list: Vec<serde_json::Value> = runs
+        .iter()
+        .map(|r| {
+            let end = r.completed_at.unwrap_or(now);
+            let duration_ms = (end - r.started_at).num_milliseconds().max(0) as u64;
+            let input = r.input.as_str();
+            let input_preview = if input.chars().count() > 200 {
+                format!("{}…", input.chars().take(200).collect::<String>())
+            } else {
+                input.to_string()
+            };
+            serde_json::json!({
+                "id": r.id.to_string(),
+                "workflow_id": r.workflow_id.to_string(),
+                "workflow_name": r.workflow_name,
+                "state": workflow_run_state_str(&r.state),
+                "steps_completed": r.step_results.len(),
+                "step_count": step_count,
+                "started_at": r.started_at.to_rfc3339(),
+                "completed_at": r.completed_at.map(|t| t.to_rfc3339()),
+                "duration_ms": duration_ms,
+                "input_preview": input_preview,
+            })
+        })
+        .collect();
+    Json(list).into_response()
 }
 
 /// GET /api/workflows/:id — Get a single workflow by ID.
@@ -1319,9 +1340,7 @@ pub use backlog_routes::{
     backlog_update_decision, backlog_update_doc, backlog_update_milestone,
 };
 
-fn project_store_error_response(
-    e: OpenFangError,
-) -> (StatusCode, Json<serde_json::Value>) {
+fn project_store_error_response(e: OpenFangError) -> (StatusCode, Json<serde_json::Value>) {
     match &e {
         OpenFangError::InvalidInput(msg) if msg.starts_with("Unknown project id") => (
             StatusCode::NOT_FOUND,
@@ -1341,9 +1360,7 @@ fn project_store_error_response(
     }
 }
 
-fn project_agent_binding_error_response(
-    e: OpenFangError,
-) -> (StatusCode, Json<serde_json::Value>) {
+fn project_agent_binding_error_response(e: OpenFangError) -> (StatusCode, Json<serde_json::Value>) {
     match &e {
         OpenFangError::InvalidInput(msg) if msg == "Agent already bound to project" => (
             StatusCode::CONFLICT,
@@ -1426,6 +1443,9 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "spokes": spokes,
         "bound_agents": p.bound_agents,
         "pipeline_overrides": p.pipeline_overrides,
+        "mattermost_channel_id": p.mattermost_channel_id,
+        "mattermost_channel_name": p.mattermost_channel_name,
+        "orchestrator_agent_id": p.orchestrator_agent_id,
         "created_at": p.created_at.to_rfc3339(),
         "updated_at": p.updated_at.to_rfc3339(),
     })
@@ -1521,7 +1541,55 @@ pub async fn create_project(
             None => {
                 return (
                     StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Invalid 'admin_spoke': expected string or null"})),
+                    Json(
+                        serde_json::json!({"error": "Invalid 'admin_spoke': expected string or null"}),
+                    ),
+                );
+            }
+        },
+    };
+
+    let mattermost_channel_id: Option<String> = match req.get("mattermost_channel_id") {
+        None => None,
+        Some(v) if v.is_null() => None,
+        Some(v) => match v.as_str() {
+            Some(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({"error": "Invalid 'mattermost_channel_id': expected string or null"}),
+                    ),
+                );
+            }
+        },
+    };
+
+    let mattermost_channel_name: Option<String> = match req.get("mattermost_channel_name") {
+        None => None,
+        Some(v) if v.is_null() => None,
+        Some(v) => match v.as_str() {
+            Some(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({"error": "Invalid 'mattermost_channel_name': expected string or null"}),
+                    ),
                 );
             }
         },
@@ -1533,12 +1601,22 @@ pub async fn create_project(
         spokes,
         pipeline_overrides,
         admin_spoke,
+        mattermost_channel_id,
+        mattermost_channel_name,
         ..Default::default()
     };
 
     match state.kernel.project_store.register(project) {
         Ok(id) => match state.kernel.project_store.get(id) {
             Some(p) => {
+                if let Err(e) = state.kernel.sync_project_mattermost_orchestrator(None, &p) {
+                    tracing::warn!(
+                        project_id = %id,
+                        error = %e,
+                        "Mattermost orchestrator sync failed (project registered)"
+                    );
+                }
+                let p = state.kernel.project_store.get(id).unwrap_or(p);
                 let mut body = project_detail_json(&p);
                 if let Some(m) = body.as_object_mut() {
                     m.insert(
@@ -1614,7 +1692,9 @@ pub async fn update_project(
                 Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
-                        Json(serde_json::json!({"error": format!("Invalid 'pipeline_overrides': {e}")})),
+                        Json(
+                            serde_json::json!({"error": format!("Invalid 'pipeline_overrides': {e}")}),
+                        ),
                     );
                 }
             }
@@ -1633,13 +1713,67 @@ pub async fn update_project(
         } else {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid 'admin_spoke': expected string or null"})),
+                Json(
+                    serde_json::json!({"error": "Invalid 'admin_spoke': expected string or null"}),
+                ),
+            );
+        }
+    }
+    if let Some(v) = req.get("mattermost_channel_id") {
+        if v.is_null() {
+            patch.mattermost_channel_id = Some(None);
+        } else if let Some(s) = v.as_str() {
+            let t = s.trim();
+            patch.mattermost_channel_id = Some(if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            });
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "Invalid 'mattermost_channel_id': expected string or null"}),
+                ),
+            );
+        }
+    }
+    if let Some(v) = req.get("mattermost_channel_name") {
+        if v.is_null() {
+            patch.mattermost_channel_name = Some(None);
+        } else if let Some(s) = v.as_str() {
+            let t = s.trim();
+            patch.mattermost_channel_name = Some(if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            });
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(
+                    serde_json::json!({"error": "Invalid 'mattermost_channel_name': expected string or null"}),
+                ),
             );
         }
     }
 
+    let before = state.kernel.project_store.get(pid);
     match state.kernel.project_store.update(pid, patch) {
-        Ok(p) => (StatusCode::OK, Json(project_detail_json(&p))),
+        Ok(p) => {
+            if let Err(e) = state
+                .kernel
+                .sync_project_mattermost_orchestrator(before.as_ref(), &p)
+            {
+                tracing::warn!(
+                    project_id = %pid,
+                    error = %e,
+                    "Mattermost orchestrator sync failed (project updated)"
+                );
+            }
+            let p = state.kernel.project_store.get(pid).unwrap_or(p);
+            (StatusCode::OK, Json(project_detail_json(&p)))
+        }
         Err(e) => project_store_error_response(e),
     }
 }
@@ -1653,6 +1787,22 @@ pub async fn delete_project(
         Ok(p) => p,
         Err(tup) => return tup,
     };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        );
+    };
+    if let Err(e) = state
+        .kernel
+        .cleanup_project_orchestrator_on_delete(&project)
+    {
+        tracing::warn!(
+            project_id = %pid,
+            error = %e,
+            "Orchestrator cleanup before project delete failed"
+        );
+    }
     match state.kernel.project_store.remove(pid) {
         Ok(removed) => {
             state.backlog_watcher.stop_watching(&pid);
@@ -1682,20 +1832,30 @@ pub async fn discover_project_spokes(
         spokes: Some(spokes.clone()),
         ..Default::default()
     };
+    let before = state.kernel.project_store.get(pid);
     match state.kernel.project_store.update(pid, patch) {
-        Ok(_) => match serde_json::to_value(&spokes) {
-            Ok(v) => (
-                StatusCode::OK,
-                Json(serde_json::json!({ "spokes": v })),
-            ),
-            Err(e) => {
-                tracing::error!("Failed to serialize spokes: {e}");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Internal error"})),
-                )
+        Ok(p) => {
+            if let Err(e) = state
+                .kernel
+                .sync_project_mattermost_orchestrator(before.as_ref(), &p)
+            {
+                tracing::warn!(
+                    project_id = %pid,
+                    error = %e,
+                    "Mattermost orchestrator sync failed after discover"
+                );
             }
-        },
+            match serde_json::to_value(&spokes) {
+                Ok(v) => (StatusCode::OK, Json(serde_json::json!({ "spokes": v }))),
+                Err(e) => {
+                    tracing::error!("Failed to serialize spokes: {e}");
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(serde_json::json!({"error": "Internal error"})),
+                    )
+                }
+            }
+        }
         Err(e) => project_store_error_response(e),
     }
 }
@@ -2120,15 +2280,14 @@ fn git_workspace_error_response(
             stdout,
         } => {
             let stderr_l = stderr.trim();
-            let status =
-                if stderr_l.contains("Authentication failed")
-                    || stderr_l.contains("could not read Username")
-                    || stderr_l.contains("Permission denied (publickey)")
-                {
-                    StatusCode::UNAUTHORIZED
-                } else {
-                    StatusCode::BAD_REQUEST
-                };
+            let status = if stderr_l.contains("Authentication failed")
+                || stderr_l.contains("could not read Username")
+                || stderr_l.contains("Permission denied (publickey)")
+            {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::BAD_REQUEST
+            };
             (
                 status,
                 Json(serde_json::json!({
@@ -2210,30 +2369,28 @@ pub async fn get_project_spoke_git_status(
     Path((id, spoke)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::is_git_repo(&root) {
-                Ok(false) => (
+        Ok((_project, root)) => match crate::git_workspace::is_git_repo(&root) {
+            Ok(false) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "is_git_repo": false,
+                    "status": serde_json::Value::Null,
+                })),
+            )
+                .into_response(),
+            Ok(true) => match crate::git_workspace::git_status(&root) {
+                Ok(status) => (
                     StatusCode::OK,
                     Json(serde_json::json!({
-                        "is_git_repo": false,
-                        "status": serde_json::Value::Null,
+                        "is_git_repo": true,
+                        "status": status,
                     })),
                 )
                     .into_response(),
-                Ok(true) => match crate::git_workspace::git_status(&root) {
-                    Ok(status) => (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "is_git_repo": true,
-                            "status": status,
-                        })),
-                    )
-                        .into_response(),
-                    Err(e) => git_workspace_error_response(e).into_response(),
-                },
                 Err(e) => git_workspace_error_response(e).into_response(),
-            }
-        }
+            },
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2244,32 +2401,30 @@ pub async fn get_project_spoke_git_diff(
     Path((id, spoke)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::is_git_repo(&root) {
-                Ok(false) => (
+        Ok((_project, root)) => match crate::git_workspace::is_git_repo(&root) {
+            Ok(false) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "is_git_repo": false,
+                    "unified_diff": "",
+                })),
+            )
+                .into_response(),
+            Ok(true) => match crate::git_workspace::git_diff_head(&root) {
+                Ok(spoke_diff) => (
                     StatusCode::OK,
                     Json(serde_json::json!({
-                        "is_git_repo": false,
-                        "unified_diff": "",
+                        "is_git_repo": true,
+                        "unified_diff": spoke_diff.unified_diff,
+                        "diff_truncated": spoke_diff.truncated,
+                        "diff_max_bytes": spoke_diff.max_bytes,
                     })),
                 )
                     .into_response(),
-                Ok(true) => match crate::git_workspace::git_diff_head(&root) {
-                    Ok(spoke_diff) => (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "is_git_repo": true,
-                            "unified_diff": spoke_diff.unified_diff,
-                            "diff_truncated": spoke_diff.truncated,
-                            "diff_max_bytes": spoke_diff.max_bytes,
-                        })),
-                    )
-                        .into_response(),
-                    Err(e) => git_workspace_error_response(e).into_response(),
-                },
                 Err(e) => git_workspace_error_response(e).into_response(),
-            }
-        }
+            },
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2280,30 +2435,28 @@ pub async fn get_project_spoke_git_branches(
     Path((id, spoke)): Path<(String, String)>,
 ) -> impl IntoResponse {
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::is_git_repo(&root) {
-                Ok(false) => (
+        Ok((_project, root)) => match crate::git_workspace::is_git_repo(&root) {
+            Ok(false) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "is_git_repo": false,
+                    "branches": serde_json::json!([]),
+                })),
+            )
+                .into_response(),
+            Ok(true) => match crate::git_workspace::git_branches(&root) {
+                Ok(branches) => (
                     StatusCode::OK,
                     Json(serde_json::json!({
-                        "is_git_repo": false,
-                        "branches": serde_json::json!([]),
+                        "is_git_repo": true,
+                        "branches": branches,
                     })),
                 )
                     .into_response(),
-                Ok(true) => match crate::git_workspace::git_branches(&root) {
-                    Ok(branches) => (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "is_git_repo": true,
-                            "branches": branches,
-                        })),
-                    )
-                        .into_response(),
-                    Err(e) => git_workspace_error_response(e).into_response(),
-                },
                 Err(e) => git_workspace_error_response(e).into_response(),
-            }
-        }
+            },
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2321,30 +2474,28 @@ pub async fn get_project_spoke_git_log(
 ) -> impl IntoResponse {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::is_git_repo(&root) {
-                Ok(false) => (
+        Ok((_project, root)) => match crate::git_workspace::is_git_repo(&root) {
+            Ok(false) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "is_git_repo": false,
+                    "commits": serde_json::json!([]),
+                })),
+            )
+                .into_response(),
+            Ok(true) => match crate::git_workspace::git_log_head(&root, limit as usize) {
+                Ok(commits) => (
                     StatusCode::OK,
                     Json(serde_json::json!({
-                        "is_git_repo": false,
-                        "commits": serde_json::json!([]),
+                        "is_git_repo": true,
+                        "commits": commits,
                     })),
                 )
                     .into_response(),
-                Ok(true) => match crate::git_workspace::git_log_head(&root, limit as usize) {
-                    Ok(commits) => (
-                        StatusCode::OK,
-                        Json(serde_json::json!({
-                            "is_git_repo": true,
-                            "commits": commits,
-                        })),
-                    )
-                        .into_response(),
-                    Err(e) => git_workspace_error_response(e).into_response(),
-                },
                 Err(e) => git_workspace_error_response(e).into_response(),
-            }
-        }
+            },
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2355,41 +2506,39 @@ pub async fn get_project_spoke_git_commit_diff(
     Path((id, spoke, sha)): Path<(String, String, String)>,
 ) -> impl IntoResponse {
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::is_git_repo(&root) {
-                Ok(false) => (
-                    StatusCode::OK,
-                    Json(serde_json::json!({
-                        "is_git_repo": false,
-                        "unified_diff": "",
-                        "diff_truncated": false,
-                        "diff_max_bytes": 0,
-                    })),
-                )
-                    .into_response(),
-                Ok(true) => {
-                    match crate::git_workspace::git_commit_patch(
-                        &root,
-                        &sha,
-                        crate::git_workspace::GIT_DIFF_MAX_RESPONSE_BYTES,
-                    ) {
-                        Ok(d) => (
-                            StatusCode::OK,
-                            Json(serde_json::json!({
-                                "is_git_repo": true,
-                                "commit": sha,
-                                "unified_diff": d.unified_diff,
-                                "diff_truncated": d.truncated,
-                                "diff_max_bytes": d.max_bytes,
-                            })),
-                        )
-                            .into_response(),
-                        Err(e) => git_workspace_error_response(e).into_response(),
-                    }
+        Ok((_project, root)) => match crate::git_workspace::is_git_repo(&root) {
+            Ok(false) => (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "is_git_repo": false,
+                    "unified_diff": "",
+                    "diff_truncated": false,
+                    "diff_max_bytes": 0,
+                })),
+            )
+                .into_response(),
+            Ok(true) => {
+                match crate::git_workspace::git_commit_patch(
+                    &root,
+                    &sha,
+                    crate::git_workspace::GIT_DIFF_MAX_RESPONSE_BYTES,
+                ) {
+                    Ok(d) => (
+                        StatusCode::OK,
+                        Json(serde_json::json!({
+                            "is_git_repo": true,
+                            "commit": sha,
+                            "unified_diff": d.unified_diff,
+                            "diff_truncated": d.truncated,
+                            "diff_max_bytes": d.max_bytes,
+                        })),
+                    )
+                        .into_response(),
+                    Err(e) => git_workspace_error_response(e).into_response(),
                 }
-                Err(e) => git_workspace_error_response(e).into_response(),
             }
-        }
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2406,12 +2555,10 @@ pub async fn post_project_spoke_git_stage(
     Json(req): Json<GitStagePathRequest>,
 ) -> impl IntoResponse {
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::git_add_path(&root, &req.path) {
-                Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
-                Err(e) => git_workspace_error_response(e).into_response(),
-            }
-        }
+        Ok((_project, root)) => match crate::git_workspace::git_add_path(&root, &req.path) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2423,12 +2570,10 @@ pub async fn post_project_spoke_git_unstage(
     Json(req): Json<GitStagePathRequest>,
 ) -> impl IntoResponse {
     match project_and_spoke_root(&state, &id, &spoke) {
-        Ok((_project, root)) => {
-            match crate::git_workspace::git_reset_path(&root, &req.path) {
-                Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
-                Err(e) => git_workspace_error_response(e).into_response(),
-            }
-        }
+        Ok((_project, root)) => match crate::git_workspace::git_reset_path(&root, &req.path) {
+            Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+            Err(e) => git_workspace_error_response(e).into_response(),
+        },
         Err(tup) => tup.into_response(),
     }
 }
@@ -2940,33 +3085,106 @@ struct ChannelMeta {
 
 const CHANNEL_REGISTRY: &[ChannelMeta] = &[
     ChannelMeta {
-        name: "signal", display_name: "Signal", icon: "SG",
+        name: "signal",
+        display_name: "Signal",
+        icon: "SG",
         description: "Signal via signal-cli REST API",
-        category: "messaging", difficulty: "Medium", setup_time: "~10 min",
+        category: "messaging",
+        difficulty: "Medium",
+        setup_time: "~10 min",
         quick_setup: "Enter your signal-cli API URL",
         setup_type: "form",
         fields: &[
-            ChannelField { key: "api_url", label: "signal-cli API URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "http://localhost:8080", advanced: false },
-            ChannelField { key: "phone_number", label: "Phone Number", field_type: FieldType::Text, env_var: None, required: true, placeholder: "+1234567890", advanced: false },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
+            ChannelField {
+                key: "api_url",
+                label: "signal-cli API URL",
+                field_type: FieldType::Text,
+                env_var: None,
+                required: true,
+                placeholder: "http://localhost:8080",
+                advanced: false,
+            },
+            ChannelField {
+                key: "phone_number",
+                label: "Phone Number",
+                field_type: FieldType::Text,
+                env_var: None,
+                required: true,
+                placeholder: "+1234567890",
+                advanced: false,
+            },
+            ChannelField {
+                key: "default_agent",
+                label: "Default Agent",
+                field_type: FieldType::Text,
+                env_var: None,
+                required: false,
+                placeholder: "assistant",
+                advanced: true,
+            },
         ],
-        setup_steps: &["Install signal-cli-rest-api", "Enter the API URL and your phone number"],
-        config_template: "[channels.signal]\napi_url = \"http://localhost:8080\"\nphone_number = \"\"",
+        setup_steps: &[
+            "Install signal-cli-rest-api",
+            "Enter the API URL and your phone number",
+        ],
+        config_template:
+            "[channels.signal]\napi_url = \"http://localhost:8080\"\nphone_number = \"\"",
     },
     ChannelMeta {
-        name: "mattermost", display_name: "Mattermost", icon: "MM",
+        name: "mattermost",
+        display_name: "Mattermost",
+        icon: "MM",
         description: "Mattermost WebSocket adapter",
-        category: "enterprise", difficulty: "Easy", setup_time: "~2 min",
+        category: "enterprise",
+        difficulty: "Easy",
+        setup_time: "~2 min",
         quick_setup: "Paste your bot token and server URL",
         setup_type: "form",
         fields: &[
-            ChannelField { key: "server_url", label: "Server URL", field_type: FieldType::Text, env_var: None, required: true, placeholder: "https://mattermost.example.com", advanced: false },
-            ChannelField { key: "token_env", label: "Bot Token", field_type: FieldType::Secret, env_var: Some("MATTERMOST_TOKEN"), required: true, placeholder: "abc123...", advanced: false },
-            ChannelField { key: "allowed_channels", label: "Allowed Channels", field_type: FieldType::List, env_var: None, required: false, placeholder: "abc123, def456", advanced: true },
-            ChannelField { key: "default_agent", label: "Default Agent", field_type: FieldType::Text, env_var: None, required: false, placeholder: "assistant", advanced: true },
+            ChannelField {
+                key: "server_url",
+                label: "Server URL",
+                field_type: FieldType::Text,
+                env_var: None,
+                required: true,
+                placeholder: "https://mattermost.example.com",
+                advanced: false,
+            },
+            ChannelField {
+                key: "token_env",
+                label: "Bot Token",
+                field_type: FieldType::Secret,
+                env_var: Some("MATTERMOST_TOKEN"),
+                required: true,
+                placeholder: "abc123...",
+                advanced: false,
+            },
+            ChannelField {
+                key: "allowed_channels",
+                label: "Allowed Channels",
+                field_type: FieldType::List,
+                env_var: None,
+                required: false,
+                placeholder: "abc123, def456",
+                advanced: true,
+            },
+            ChannelField {
+                key: "default_agent",
+                label: "Default Agent",
+                field_type: FieldType::Text,
+                env_var: None,
+                required: false,
+                placeholder: "assistant",
+                advanced: true,
+            },
         ],
-        setup_steps: &["Create a bot in System Console > Bot Accounts", "Copy the token", "Enter server URL and token below"],
-        config_template: "[channels.mattermost]\nserver_url = \"\"\ntoken_env = \"MATTERMOST_TOKEN\"",
+        setup_steps: &[
+            "Create a bot in System Console > Bot Accounts",
+            "Copy the token",
+            "Enter server URL and token below",
+        ],
+        config_template:
+            "[channels.mattermost]\nserver_url = \"\"\ntoken_env = \"MATTERMOST_TOKEN\"",
     },
 ];
 
@@ -3428,8 +3646,8 @@ async fn send_channel_test_message(
             if cfg.server_url.trim().is_empty() {
                 return Err("Mattermost server_url must be set in config".to_string());
             }
-            let token = std::env::var(&cfg.token_env)
-                .map_err(|_| format!("{} not set", cfg.token_env))?;
+            let token =
+                std::env::var(&cfg.token_env).map_err(|_| format!("{} not set", cfg.token_env))?;
             let base = cfg.server_url.trim_end_matches('/');
             let url = format!("{base}/api/v4/posts");
             let resp = client

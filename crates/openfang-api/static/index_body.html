@@ -2432,6 +2432,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <option value="agents">Agents</option>
                     <option value="pipelines">Pipelines</option>
                     <option value="workflows">Workflows</option>
+                    <option value="mattermost">Mattermost</option>
                   </optgroup>
                 </select>
                 <div class="project-subnav__mobile-actions">
@@ -3597,23 +3598,157 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('workflows')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.workflows && !detailErrors.workflows">
-                  <div class="table-wrap" x-show="projectWorkflows.length">
-                    <table>
-                      <thead><tr><th>Name</th><th>Steps</th><th></th></tr></thead>
-                      <tbody>
-                        <template x-for="wf in projectWorkflows" :key="wf.id">
-                          <tr>
-                            <td class="text-sm" style="font-weight:600" x-text="wf.name || wf.id"></td>
-                            <td class="text-xs text-dim" x-text="wf.steps != null ? wf.steps : '—'"></td>
-                            <td><button type="button" class="button is-primary is-small" @click="openWfRunModal(wf)"><i class="fa fa-play" aria-hidden="true"></i><span>Start</span></button></td>
-                          </tr>
+                  <div x-show="wfRunsForWorkflow" class="mb-4">
+                    <div class="flex flex-wrap gap-2 items-center mb-3">
+                      <button type="button" class="button is-ghost is-small" @click="closeWorkflowRunsPanel()">
+                        <i class="fa fa-arrow-left" aria-hidden="true"></i><span>Workflows</span>
+                      </button>
+                      <span class="text-sm font-semibold" x-text="wfRunsForWorkflow && wfRunsForWorkflow.name"></span>
+                    </div>
+                    <div class="grid gap-4" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr));align-items:start">
+                      <div class="of-card p-3">
+                        <h4 class="text-xs text-dim font-semibold mb-2">Runs</h4>
+                        <div x-show="wfRunsLoading" class="loading-state py-4"><div class="spinner"></div><span>Loading…</span></div>
+                        <p class="text-xs text-danger" x-show="wfRunsPanelError && !wfRunsLoading" x-text="wfRunsPanelError"></p>
+                        <div x-show="!wfRunsLoading && !wfRunsPanelError && !wfRunsList.length" class="text-xs text-dim py-2">No runs yet.</div>
+                        <template x-for="r in wfRunsList" :key="r.id">
+                          <button
+                            type="button"
+                            class="w-full text-left p-2 mb-2"
+                            style="border:1px solid var(--border);border-radius:8px;background:transparent;cursor:pointer"
+                            :style="wfRunSelectedId === r.id ? 'border-color:var(--accent);background:var(--bg-inset)' : ''"
+                            @click="selectWorkflowRun(r)"
+                          >
+                            <div class="flex flex-wrap gap-2 items-center justify-between">
+                              <span class="badge text-xs" :class="wfRunStateBadgeClass(r.state)" x-text="r.state || '—'"></span>
+                              <span class="text-xs text-dim font-mono" x-text="formatWfDurationMs(r.duration_ms)"></span>
+                            </div>
+                            <div class="text-xs text-dim mt-1" x-text="r.started_at || ''"></div>
+                            <p class="text-xs mt-1" style="word-break:break-word" x-text="r.input_preview || ''"></p>
+                          </button>
                         </template>
-                      </tbody>
-                    </table>
+                      </div>
+                      <div class="of-card p-3">
+                        <h4 class="text-xs text-dim font-semibold mb-2">Run detail</h4>
+                        <div x-show="!wfRunSelectedId" class="text-xs text-dim py-4">Select a run.</div>
+                        <div x-show="wfRunDetailLoading && wfRunSelectedId" class="loading-state py-4"><div class="spinner"></div><span>Loading…</span></div>
+                        <div x-show="wfRunDetail && !wfRunDetailLoading">
+                          <div class="flex flex-wrap gap-2 items-center mb-2">
+                            <span class="badge" :class="wfRunStateBadgeClass(wfRunDetail.state)" x-text="wfRunDetail.state || '—'"></span>
+                            <span class="text-xs text-dim font-mono" x-text="formatWfDurationMs(wfRunDetail.duration_ms)"></span>
+                          </div>
+                          <p class="text-xs text-dim mb-2"><span class="font-semibold">Started:</span> <span x-text="wfRunDetail.started_at || '—'"></span></p>
+                          <p class="text-xs mb-2" style="word-break:break-word"><span class="text-dim font-semibold">Input:</span> <span x-text="wfRunDetail.input || ''"></span></p>
+                          <div class="p-2 mb-3" style="border-radius:8px;background:var(--bg-inset);border:1px solid var(--border)" x-show="wfRunDetail.error">
+                            <p class="text-xs font-semibold text-danger mb-1">Error</p>
+                            <p class="text-xs" style="word-break:break-word" x-text="wfRunDetail.error"></p>
+                            <p class="text-xs text-dim mt-1" x-show="wfRunDetail.state === 'failed' && wfRunLastStepName()">
+                              Last completed step: <span class="font-mono" x-text="wfRunLastStepName()"></span>
+                            </p>
+                          </div>
+                          <p class="text-xs font-semibold mb-2">Steps</p>
+                          <div class="flex flex-col gap-0" style="border-left:2px solid var(--border);padding-left:12px">
+                            <template x-for="(st, idx) in (wfRunDetail.step_results || [])" :key="idx">
+                              <div class="mb-3 pl-0">
+                                <div class="flex flex-wrap gap-2 items-center">
+                                  <span class="badge badge-success text-xs" x-text="st.status || 'completed'"></span>
+                                  <span class="text-sm font-semibold" x-text="st.step_name || 'step'"></span>
+                                  <span class="text-xs text-dim font-mono" x-text="formatWfDurationMs(st.duration_ms)"></span>
+                                </div>
+                                <p class="text-xs text-dim mt-1"><span x-text="st.agent_name || st.agent_id || '—'"></span></p>
+                                <pre class="text-xs mt-1 p-2" style="white-space:pre-wrap;word-break:break-word;background:var(--bg-inset);border-radius:6px;max-height:8rem;overflow:auto;margin:0" x-text="wfRunStepOutputPreview(st.output)"></pre>
+                              </div>
+                            </template>
+                            <div class="mb-2" x-show="wfRunDetail && String(wfRunDetail.state || '').toLowerCase() === 'running'">
+                              <div class="flex flex-wrap gap-2 items-center">
+                                <span class="loading-state" style="padding:0;min-height:auto"><div class="spinner" style="width:14px;height:14px"></div></span>
+                                <span class="text-sm font-semibold">In progress…</span>
+                              </div>
+                              <p class="text-xs text-dim mt-1">Next step executing or waiting.</p>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   </div>
-                  <div class="empty-state py-8" x-show="!projectWorkflows.length">
-                    <p class="text-dim text-sm mb-2">No workflows are assigned to this project yet.</p>
-                    <p class="text-xs text-dim">Create a workflow from the Workflows page and include <code class="font-mono">project_id</code> in the JSON body, or PUT <code class="font-mono">/api/workflows/{id}</code> with <code class="font-mono">project_id</code> set to this project’s id.</p>
+                  <div x-show="!wfRunsForWorkflow">
+                    <div class="table-wrap" x-show="projectWorkflows.length">
+                      <table>
+                        <thead><tr><th>Name</th><th>Steps</th><th></th></tr></thead>
+                        <tbody>
+                          <template x-for="wf in projectWorkflows" :key="wf.id">
+                            <tr>
+                              <td>
+                                <button type="button" class="button is-ghost is-small" style="padding-left:0;font-weight:600" @click="openWorkflowRunsPanel(wf)" x-text="wf.name || wf.id"></button>
+                              </td>
+                              <td class="text-xs text-dim" x-text="wf.steps != null ? wf.steps : '—'"></td>
+                              <td>
+                                <div class="flex flex-wrap gap-1">
+                                  <button type="button" class="button is-ghost is-small" @click="openWorkflowRunsPanel(wf)"><i class="fa fa-history" aria-hidden="true"></i><span>Runs</span></button>
+                                  <button type="button" class="button is-primary is-small" @click="openWfRunModal(wf)"><i class="fa fa-play" aria-hidden="true"></i><span>Start</span></button>
+                                </div>
+                              </td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div class="empty-state py-8" x-show="!projectWorkflows.length">
+                      <p class="text-dim text-sm mb-2">No workflows are assigned to this project yet.</p>
+                      <p class="text-xs text-dim">Create a workflow from the Workflows page and include <code class="font-mono">project_id</code> in the JSON body, or PUT <code class="font-mono">/api/workflows/{id}</code> with <code class="font-mono">project_id</code> set to this project’s id.</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div x-show="detailTab === 'mattermost'" class="mt-4">
+                <div x-show="detailLoading.mattermost" class="loading-state"><div class="spinner"></div><span>Loading Mattermost…</span></div>
+                <div x-show="detailErrors.mattermost && !detailLoading.mattermost" class="error-state">
+                  <span class="error-icon">!</span>
+                  <p x-text="detailErrors.mattermost"></p>
+                  <button type="button" class="button is-ghost is-small" @click="retryLoad('mattermost')">Retry</button>
+                </div>
+                <div x-show="!detailLoading.mattermost && !detailErrors.mattermost" class="grid gap-4" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
+                  <div class="of-card p-4">
+                    <h4 class="text-sm font-semibold mb-2">Channel binding</h4>
+                    <p class="text-sm" x-text="mattermostBindingSummary()"></p>
+                    <p class="text-xs text-dim mt-2">Maps Mattermost traffic to this project’s orchestrator.</p>
+                  </div>
+                  <div class="of-card p-4">
+                    <h4 class="text-sm font-semibold mb-2">Orchestrator</h4>
+                    <div x-show="selectedProject && selectedProject.orchestrator_agent_id">
+                      <p class="text-xs mb-2">
+                        <span class="badge" :class="orchestratorIsActive() ? 'badge-success' : 'badge-dim'" x-text="orchestratorIsActive() ? 'Active' : 'Inactive'"></span>
+                        <span class="text-dim ml-2" x-show="_orchestratorAgentMeta && _orchestratorAgentMeta.missing">Agent not found in registry.</span>
+                      </p>
+                      <button type="button" class="button is-small is-link" style="padding-left:0" @click="openOrchestratorAgentDetail()">
+                        <i class="fa fa-external-link" aria-hidden="true"></i>
+                        <span x-text="orchestratorDisplayName() || selectedProject.orchestrator_agent_id"></span>
+                      </button>
+                    </div>
+                    <p class="text-xs text-dim" x-show="!selectedProject || !selectedProject.orchestrator_agent_id">Not running. Save a channel binding to create the orchestrator agent.</p>
+                  </div>
+                  <div class="of-card p-4" style="grid-column:1/-1">
+                    <h4 class="text-sm font-semibold mb-3">Edit binding</h4>
+                    <div class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+                      <div class="form-group mb-0">
+                        <label class="text-xs text-dim">Channel ID</label>
+                        <input class="form-input text-xs font-mono" x-model="mattermostForm.channel_id" placeholder="e.g. channel id from Mattermost API" :disabled="mattermostSaving">
+                      </div>
+                      <div class="form-group mb-0">
+                        <label class="text-xs text-dim">Channel name</label>
+                        <input class="form-input text-xs" x-model="mattermostForm.channel_name" placeholder="e.g. town-square" :disabled="mattermostSaving">
+                      </div>
+                    </div>
+                    <p class="text-xs text-danger mt-2 mb-2" x-show="mattermostError" x-text="mattermostError"></p>
+                    <div class="flex flex-wrap gap-2 mt-3">
+                      <button type="button" class="button is-primary is-small" @click="saveMattermostBinding()" :disabled="mattermostSaving">
+                        <i class="fa fa-floppy-o" aria-hidden="true" x-show="!mattermostSaving"></i>
+                        <span x-text="mattermostSaving ? 'Saving…' : 'Save'"></span>
+                      </button>
+                      <button type="button" class="button is-ghost is-small" @click="clearMattermostBinding()" :disabled="mattermostSaving">Clear binding</button>
+                    </div>
+                    <p class="text-xs text-dim mt-3">Uses <code class="font-mono">PUT /api/projects/{id}</code> with <code class="font-mono">mattermost_channel_id</code> and <code class="font-mono">mattermost_channel_name</code> (null clears).</p>
                   </div>
                 </div>
               </div>

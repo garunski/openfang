@@ -172,6 +172,7 @@ document.addEventListener('alpine:init', function() {
     pendingApprovalCount: 0,
     lastPendingApprovalSignature: '',
     pendingAgent: null,
+    pendingShowAgentDetail: null,
     focusMode: localStorage.getItem('openfang-focus') === 'true',
     showOnboarding: false,
     showAuthPrompt: false,

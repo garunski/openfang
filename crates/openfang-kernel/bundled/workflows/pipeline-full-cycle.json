@@ -1,0 +1,56 @@
+{
+  "name": "pipeline-full-cycle",
+  "description": "Doc-2 style six-phase automation: resolve context → backlog In Progress → Cursor explore (ask) → Cursor implement (agent) → quality gate → Done + git audit. Each step is one orchestrator turn using native tools.",
+  "project_id": null,
+  "steps": [
+    {
+      "name": "resolve_context",
+      "agent_name": "pipeline-coordinator-hand",
+      "prompt": "WORKFLOW INPUT (preserve task_id, workspace path, and project_id in your reply so later steps can use them):\n{{input}}\n\n**Phase 1 — resolve context.** Parse `task_id` (e.g. TASK-42) and how to locate the spoke workspace (e.g. `repo:<spoke>` label or path) from the input. Use `backlog_task_view` or `query_project_status` to confirm the task exists and capture its status. Resolve the absolute spoke root directory for Cursor and `enforce_quality_gate`. If the task is not in a state where the pipeline should start, say so clearly and stop. Otherwise reply with a concise structured summary: task_id, task_status, workspace (absolute path), project_id.",
+      "mode": "sequential",
+      "timeout_secs": 900,
+      "error_mode": "fail"
+    },
+    {
+      "name": "backlog_in_progress",
+      "agent_name": "pipeline-coordinator-hand",
+      "prompt": "Prior phase output (carry forward task_id, workspace, project_id):\n{{input}}\n\n**Phase 2 — backlog In Progress.** Call `backlog_task_edit` to set the task from the context to status **In Progress**. Confirm success or error in your reply.",
+      "mode": "sequential",
+      "timeout_secs": 600,
+      "error_mode": "fail"
+    },
+    {
+      "name": "explore_cursor",
+      "agent_name": "pipeline-coordinator-hand",
+      "prompt": "Prior phases output:\n{{input}}\n\n**Phase 3 — explore (read-only).** Call `trigger_cursor_worker` with:\n- `workspace`: absolute spoke path from context\n- `mode`: \"ask\"\n- `behavior`: include a line referencing `.cursor/skills/explore/SKILL.md` in that workspace\n- `prompt`: map architecture and files relevant to the task\nSummarize findings for the implement phase.",
+      "mode": "sequential",
+      "timeout_secs": 3600,
+      "error_mode": "fail"
+    },
+    {
+      "name": "implement_cursor",
+      "agent_name": "pipeline-coordinator-hand",
+      "prompt": "Prior phases output:\n{{input}}\n\n**Phase 4 — implement.** Call `trigger_cursor_worker` with:\n- `workspace`: absolute spoke path from context\n- `mode`: \"agent\"\n- `prompt`: full implementation instructions with path to the task markdown and acceptance criteria\n- optional `behavior`: extra orchestrator notes; default implement contract applies unless behavior references test-write skill\nUse the project’s automation settings when choosing `max_retries` / follow-up if the tool returns a failing gate (or call `run_pipeline` if that matches your runbook). Reply with a short outcome summary.",
+      "mode": "sequential",
+      "timeout_secs": 7200,
+      "error_mode": "retry",
+      "max_retries": 3
+    },
+    {
+      "name": "quality_gate",
+      "agent_name": "pipeline-coordinator-hand",
+      "prompt": "Prior phases output:\n{{input}}\n\n**Phase 5 — quality gate.** Call `enforce_quality_gate` with `spoke_root` set to the absolute workspace path and `task_id` from context. Report exit status and whether the spoke passes the gate.",
+      "mode": "sequential",
+      "timeout_secs": 3600,
+      "error_mode": "fail"
+    },
+    {
+      "name": "finalize_done_git",
+      "agent_name": "pipeline-coordinator-hand",
+      "prompt": "Prior phases output:\n{{input}}\n\n**Phase 6 — finalize.** If the quality gate passed: call `backlog_task_edit` to set the task to **Done**. Use `record_git_action` (and other git tools if available) to log branch, commit, push, and PR actions per your project runbook. If the gate failed, do **not** mark Done; summarize what is needed (e.g. rollback, fix, retry).",
+      "mode": "sequential",
+      "timeout_secs": 1200,
+      "error_mode": "fail"
+    }
+  ]
+}

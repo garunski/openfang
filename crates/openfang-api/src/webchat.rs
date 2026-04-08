@@ -50,7 +50,9 @@ pub async fn diff2html_css() -> impl IntoResponse {
 }
 
 /// GET /vendor/fa4/{name} — Font Awesome 4 webfonts for the dashboard (public; no auth header on @font-face fetches).
-pub async fn fa4_font(axum::extract::Path(name): axum::extract::Path<String>) -> Result<impl IntoResponse, StatusCode> {
+pub async fn fa4_font(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Result<impl IntoResponse, StatusCode> {
     let (bytes, ct): (&[u8], &'static str) = match name.as_str() {
         "fontawesome-webfont.woff2" => (FA4_WOFF2, "font/woff2"),
         "fontawesome-webfont.woff" => (FA4_WOFF, "font/woff"),

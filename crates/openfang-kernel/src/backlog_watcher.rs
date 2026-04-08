@@ -232,13 +232,7 @@ impl BacklogWatcherManager {
             }
             drop(watcher);
         });
-        g.insert(
-            project_id,
-            WatcherEntry {
-                stop_tx,
-                thread,
-            },
-        );
+        g.insert(project_id, WatcherEntry { stop_tx, thread });
     }
 
     pub fn stop_watching(&self, project_id: &ProjectId) {
@@ -267,13 +261,15 @@ mod tests {
 
     #[test]
     fn ignore_notify_skips_access_and_atime_metadata() {
-        assert!(ignore_notify_event_kind(&EventKind::Access(AccessKind::Read)));
-        assert!(ignore_notify_event_kind(&EventKind::Modify(ModifyKind::Metadata(
-            MetadataKind::AccessTime,
-        ))));
-        assert!(!ignore_notify_event_kind(&EventKind::Modify(ModifyKind::Data(
-            DataChange::Content,
-        ))));
+        assert!(ignore_notify_event_kind(&EventKind::Access(
+            AccessKind::Read
+        )));
+        assert!(ignore_notify_event_kind(&EventKind::Modify(
+            ModifyKind::Metadata(MetadataKind::AccessTime,)
+        )));
+        assert!(!ignore_notify_event_kind(&EventKind::Modify(
+            ModifyKind::Data(DataChange::Content,)
+        )));
         assert!(!ignore_notify_event_kind(&EventKind::Create(
             notify::event::CreateKind::File,
         )));

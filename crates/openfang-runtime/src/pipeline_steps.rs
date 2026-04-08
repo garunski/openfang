@@ -15,17 +15,31 @@ pub(crate) const TRIGGER_CURSOR_WORKER_TIMEOUT_SECS: u64 = 3600;
 /// Default implementation contract for `trigger_cursor_worker` in `agent` mode.
 const CURSOR_IMPLEMENT_CONTRACT_REF: &str = "Follow the implementation behavior contract in `.cursor/skills/implement/SKILL.md` in this workspace (read it at the start of the run). If that file is missing, still: read the task markdown from the path or task id in the prompt, implement until every acceptance criterion is satisfied, run `mise run 001-qa` from this workspace root before you finish, and honor `.cursorignore` and `.cursor/rules`.";
 
-/// Builds the `-p` payload for Cursor Agent CLI. In `agent` mode, always appends the implementation contract;
-/// optional `behavior` adds project-specific expectations after it.
+/// Agent-mode contract when `behavior` references `.cursor/skills/test-write/SKILL.md`.
+const CURSOR_TEST_WRITE_CONTRACT_REF: &str = "Follow the test authoring contract in `.cursor/skills/test-write/SKILL.md` in this workspace (read it at the start of the run). If that file is missing, still: use the task prompt to write or update automated tests only (minimal production edits if required for testability), run `mise run 001-qa` from this workspace root when available or the repo’s documented test command, and honor `.cursorignore` and `.cursor/rules`.";
+
+/// Substring that switches agent mode from the default implement skill to the test-write skill.
+const TEST_WRITE_SKILL_PATH: &str = ".cursor/skills/test-write/SKILL.md";
+
+/// Builds the `-p` payload for Cursor Agent CLI. In `agent` mode, appends the implementation contract
+/// (or the test-write contract when `behavior` references `test-write/SKILL.md`);
+/// optional `behavior` adds orchestrator notes after it.
 pub(crate) fn compose_trigger_cursor_worker_prompt(
     prompt: &str,
     mode: &str,
     behavior: Option<&str>,
 ) -> String {
     let extra = behavior.map(str::trim).filter(|s| !s.is_empty());
+    let use_test_write = extra
+        .map(|b| b.contains(TEST_WRITE_SKILL_PATH))
+        .unwrap_or(false);
     if mode == "agent" {
         let mut block = String::from("--- Behavior / expectations ---\n");
-        block.push_str(CURSOR_IMPLEMENT_CONTRACT_REF);
+        if use_test_write {
+            block.push_str(CURSOR_TEST_WRITE_CONTRACT_REF);
+        } else {
+            block.push_str(CURSOR_IMPLEMENT_CONTRACT_REF);
+        }
         if let Some(b) = extra {
             block.push_str("\n\n--- Additional behavior ---\n");
             block.push_str(b);
@@ -105,9 +119,7 @@ pub(crate) async fn run_quality_gate(
         cmd.output(),
     )
     .await
-    .map_err(|_| {
-        format!("enforce_quality_gate timed out after {ENFORCE_QA_GATE_TIMEOUT_SECS}s")
-    })?
+    .map_err(|_| format!("enforce_quality_gate timed out after {ENFORCE_QA_GATE_TIMEOUT_SECS}s"))?
     .map_err(|e| format!("Failed to run mise: {e}"))?;
 
     let exit_code = output.status.code().unwrap_or(-1);
@@ -140,9 +152,7 @@ pub(crate) async fn run_cursor_worker(
     actor: &str,
 ) -> Result<PipelineCursorOutput, String> {
     if !matches!(mode, "agent" | "plan" | "ask") {
-        return Err(format!(
-            "invalid mode '{mode}'; allowed: agent, plan, ask"
-        ));
+        return Err(format!("invalid mode '{mode}'; allowed: agent, plan, ask"));
     }
     let full_prompt = compose_trigger_cursor_worker_prompt(prompt, mode, behavior);
 
@@ -151,6 +161,8 @@ pub(crate) async fn run_cursor_worker(
         &kh.automation_spoke_roots(),
         path,
     )?;
+
+    crate::cursor_skills::deploy_cursor_skills(&resolved)?;
 
     let mut cmd = tokio::process::Command::new("cursor");
     cmd.args(["agent", "-d"])
@@ -173,9 +185,7 @@ pub(crate) async fn run_cursor_worker(
     )
     .await
     .map_err(|_| {
-        format!(
-            "trigger_cursor_worker timed out after {TRIGGER_CURSOR_WORKER_TIMEOUT_SECS}s"
-        )
+        format!("trigger_cursor_worker timed out after {TRIGGER_CURSOR_WORKER_TIMEOUT_SECS}s")
     })?
     .map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -189,8 +199,7 @@ pub(crate) async fn run_cursor_worker(
     let exit_code = output.status.code().unwrap_or(-1);
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-    let structured_output: Option<serde_json::Value> =
-        serde_json::from_str(stdout.trim()).ok();
+    let structured_output: Option<serde_json::Value> = serde_json::from_str(stdout.trim()).ok();
 
     crate::pipeline_audit::log_cursor_worker(
         task_id,
@@ -227,6 +236,26 @@ mod tests {
         assert!(s.contains(".cursor/skills/implement/SKILL.md"));
         assert!(s.contains("fix clippy"));
         assert!(s.contains("--- Additional behavior ---"));
+    }
+
+    #[test]
+    fn compose_trigger_cursor_worker_prompt_agent_test_write_skill_replaces_implement() {
+        let b = "Follow .cursor/skills/test-write/SKILL.md in this workspace.";
+        let s = compose_trigger_cursor_worker_prompt("add tests for foo", "agent", Some(b));
+        assert!(s.contains("add tests for foo"));
+        assert!(s.contains(".cursor/skills/test-write/SKILL.md"));
+        assert!(!s.contains(".cursor/skills/implement/SKILL.md"));
+        assert!(s.contains("--- Additional behavior ---"));
+        assert!(s.contains(b));
+    }
+
+    #[test]
+    fn compose_trigger_cursor_worker_prompt_ask_explore_behavior() {
+        let b = "Follow .cursor/skills/explore/SKILL.md in this workspace.";
+        let s = compose_trigger_cursor_worker_prompt("map the api crate", "ask", Some(b));
+        assert!(s.contains("map the api crate"));
+        assert!(s.contains(".cursor/skills/explore/SKILL.md"));
+        assert!(!s.contains("implement/SKILL.md"));
     }
 
     #[test]

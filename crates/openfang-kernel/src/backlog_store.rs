@@ -5,11 +5,12 @@ use openfang_types::backlog::parser::normalize_date;
 use openfang_types::backlog::reader::{read_all, BacklogReadError};
 use openfang_types::backlog::serializer::{
     serialize_decision, serialize_document, serialize_milestone, serialize_task,
-    toggle_acceptance_criterion, update_frontmatter_field, update_frontmatter_i32, update_task_status,
+    toggle_acceptance_criterion, update_frontmatter_field, update_frontmatter_i32,
+    update_task_status,
 };
 use openfang_types::backlog::{
-    BacklogConfig, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSnapshot, BacklogTask,
-    DecisionStatus,
+    BacklogConfig, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSnapshot,
+    BacklogTask, DecisionStatus,
 };
 use openfang_types::project::ProjectId;
 use std::collections::HashMap;
@@ -86,13 +87,19 @@ impl BacklogStore {
         }
     }
 
-    fn lock_read(&self) -> Result<std::sync::RwLockReadGuard<'_, HashMap<ProjectId, CachedBacklog>>, BacklogStoreError> {
+    fn lock_read(
+        &self,
+    ) -> Result<std::sync::RwLockReadGuard<'_, HashMap<ProjectId, CachedBacklog>>, BacklogStoreError>
+    {
         self.data
             .read()
             .map_err(|_| BacklogStoreError::Msg("backlog store lock poisoned".into()))
     }
 
-    fn lock_write(&self) -> Result<std::sync::RwLockWriteGuard<'_, HashMap<ProjectId, CachedBacklog>>, BacklogStoreError> {
+    fn lock_write(
+        &self,
+    ) -> Result<std::sync::RwLockWriteGuard<'_, HashMap<ProjectId, CachedBacklog>>, BacklogStoreError>
+    {
         self.data
             .write()
             .map_err(|_| BacklogStoreError::Msg("backlog store lock poisoned".into()))
@@ -245,11 +252,7 @@ impl BacklogStore {
     }
 
     /// Active task clone from cache (`tasks/` only).
-    pub fn get_active_task(
-        &self,
-        project_id: &ProjectId,
-        task_id: &str,
-    ) -> Option<BacklogTask> {
+    pub fn get_active_task(&self, project_id: &ProjectId, task_id: &str) -> Option<BacklogTask> {
         let g = self.data.read().ok()?;
         let snap = &g.get(project_id)?.snapshot;
         snap.tasks.iter().find(|t| t.id == task_id).cloned()
@@ -265,7 +268,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             Self::find_task_rel_tasks_only(snap, &task.id)
                 .ok_or_else(|| BacklogStoreError::NotFound(task.id.clone()))?
         };
@@ -300,7 +306,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             Self::find_task_rel(snap, task_id)
                 .ok_or_else(|| BacklogStoreError::NotFound(task_id.to_string()))?
         };
@@ -322,7 +331,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             Self::find_task_rel(snap, task_id)
                 .ok_or_else(|| BacklogStoreError::NotFound(task_id.to_string()))?
         };
@@ -343,7 +355,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             Self::find_task_rel(snap, task_id)
                 .ok_or_else(|| BacklogStoreError::NotFound(task_id.to_string()))?
         };
@@ -393,7 +408,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             Self::find_task_rel_tasks_only(snap, task_id)
                 .ok_or_else(|| BacklogStoreError::NotFound(task_id.to_string()))?
         };
@@ -423,7 +441,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             Self::find_task_rel_tasks_only(snap, task_id)
                 .ok_or_else(|| BacklogStoreError::NotFound(task_id.to_string()))?
         };
@@ -523,16 +544,16 @@ impl BacklogStore {
         for (ord, id) in ordered_ids.iter().enumerate() {
             let rel = {
                 let g = self.lock_read()?;
-                let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+                let snap = &g
+                    .get(project_id)
+                    .ok_or(BacklogStoreError::NotLoaded)?
+                    .snapshot;
                 Self::find_task_rel_tasks_only(snap, id.as_str())
                     .ok_or_else(|| BacklogStoreError::NotFound(id.clone()))?
             };
             let path = Self::join_safe(&root, &rel)?;
             let raw = fs::read_to_string(&path)?;
-            fs::write(
-                &path,
-                update_frontmatter_i32(&raw, "ordinal", ord as i32),
-            )?;
+            fs::write(&path, update_frontmatter_i32(&raw, "ordinal", ord as i32))?;
         }
         self.refresh(project_id)
     }
@@ -624,9 +645,8 @@ impl BacklogStore {
         };
         let id = doc.id.clone();
         self.create_doc(project_id, &doc, projects)?;
-        self.get_document(project_id, &id).ok_or_else(|| {
-            BacklogStoreError::Msg("document missing after create".into())
-        })
+        self.get_document(project_id, &id)
+            .ok_or_else(|| BacklogStoreError::Msg("document missing after create".into()))
     }
 
     pub fn create_doc(
@@ -661,7 +681,10 @@ impl BacklogStore {
                 fp.clone()
             } else {
                 let g = self.lock_read()?;
-                let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+                let snap = &g
+                    .get(project_id)
+                    .ok_or(BacklogStoreError::NotLoaded)?
+                    .snapshot;
                 snap.documents
                     .iter()
                     .find(|d| d.id == doc.id)
@@ -684,7 +707,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             snap.documents
                 .iter()
                 .find(|d| d.id == doc_id)
@@ -740,7 +766,10 @@ impl BacklogStore {
                 fp.clone()
             } else {
                 let g = self.lock_read()?;
-                let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+                let snap = &g
+                    .get(project_id)
+                    .ok_or(BacklogStoreError::NotLoaded)?
+                    .snapshot;
                 snap.decisions
                     .iter()
                     .find(|d| d.id == decision.id)
@@ -763,7 +792,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             snap.decisions
                 .iter()
                 .find(|d| d.id == decision_id)
@@ -784,13 +816,14 @@ impl BacklogStore {
         self.refresh(project_id)
     }
 
-    pub fn get_decision(&self, project_id: &ProjectId, decision_id: &str) -> Option<BacklogDecision> {
+    pub fn get_decision(
+        &self,
+        project_id: &ProjectId,
+        decision_id: &str,
+    ) -> Option<BacklogDecision> {
         let g = self.data.read().ok()?;
         let snap = &g.get(project_id)?.snapshot;
-        snap.decisions
-            .iter()
-            .find(|d| d.id == decision_id)
-            .cloned()
+        snap.decisions.iter().find(|d| d.id == decision_id).cloned()
     }
 
     pub fn get_draft(&self, project_id: &ProjectId, draft_id: &str) -> Option<BacklogTask> {
@@ -799,7 +832,11 @@ impl BacklogStore {
         snap.drafts.iter().find(|t| t.id == draft_id).cloned()
     }
 
-    pub fn get_milestone(&self, project_id: &ProjectId, milestone_id: &str) -> Option<BacklogMilestone> {
+    pub fn get_milestone(
+        &self,
+        project_id: &ProjectId,
+        milestone_id: &str,
+    ) -> Option<BacklogMilestone> {
         let g = self.data.read().ok()?;
         let snap = &g.get(project_id)?.snapshot;
         snap.milestones
@@ -852,9 +889,8 @@ impl BacklogStore {
             file_path: None,
         };
         self.create_decision(project_id, &decision, projects)?;
-        self.get_decision(project_id, &id).ok_or_else(|| {
-            BacklogStoreError::Msg("decision missing after create".into())
-        })
+        self.get_decision(project_id, &id)
+            .ok_or_else(|| BacklogStoreError::Msg("decision missing after create".into()))
     }
 
     fn next_milestone_num(active: &[BacklogMilestone], archived: &[BacklogMilestone]) -> u32 {
@@ -885,7 +921,10 @@ impl BacklogStore {
         let (root, n) = {
             let g = self.lock_read()?;
             let ent = g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?;
-            let n = Self::next_milestone_num(&ent.snapshot.milestones, &ent.snapshot.archived_milestones);
+            let n = Self::next_milestone_num(
+                &ent.snapshot.milestones,
+                &ent.snapshot.archived_milestones,
+            );
             (ent.backlog_root.clone(), n)
         };
         let id = format!("MS-{n}");
@@ -908,9 +947,8 @@ impl BacklogStore {
         };
         fs::write(&path, serialize_milestone(&ms))?;
         self.refresh(project_id)?;
-        self.get_milestone(project_id, &id).ok_or_else(|| {
-            BacklogStoreError::Msg("milestone missing after create".into())
-        })
+        self.get_milestone(project_id, &id)
+            .ok_or_else(|| BacklogStoreError::Msg("milestone missing after create".into()))
     }
 
     pub fn update_milestone(
@@ -925,7 +963,10 @@ impl BacklogStore {
                 fp.clone()
             } else {
                 let g = self.lock_read()?;
-                let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+                let snap = &g
+                    .get(project_id)
+                    .ok_or(BacklogStoreError::NotLoaded)?
+                    .snapshot;
                 snap.milestones
                     .iter()
                     .find(|m| m.id == milestone.id)
@@ -953,7 +994,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             snap.milestones
                 .iter()
                 .find(|m| m.id == milestone_id)
@@ -1004,7 +1048,9 @@ impl BacklogStore {
             (ent.backlog_root.clone(), rel, d.title.clone())
         };
         if !rel.starts_with("drafts/") {
-            return Err(BacklogStoreError::Msg("promote_draft expects drafts/ path".into()));
+            return Err(BacklogStoreError::Msg(
+                "promote_draft expects drafts/ path".into(),
+            ));
         }
         let draft_path = Self::join_safe(&root, &rel)?;
         let raw = fs::read_to_string(&draft_path)?;
@@ -1042,7 +1088,10 @@ impl BacklogStore {
         self.ensure_loaded(project_id, projects)?;
         let rel = {
             let g = self.lock_read()?;
-            let snap = &g.get(project_id).ok_or(BacklogStoreError::NotLoaded)?.snapshot;
+            let snap = &g
+                .get(project_id)
+                .ok_or(BacklogStoreError::NotLoaded)?
+                .snapshot;
             snap.milestones
                 .iter()
                 .find(|m| m.id == milestone_id)
@@ -1104,7 +1153,10 @@ mod tests {
     fn write(p: &Path, s: &str) {
         let parent = p.parent().unwrap();
         fs::create_dir_all(parent).unwrap();
-        fs::File::create(p).unwrap().write_all(s.as_bytes()).unwrap();
+        fs::File::create(p)
+            .unwrap()
+            .write_all(s.as_bytes())
+            .unwrap();
     }
 
     fn admin_backlog_root(repo: &Path) -> PathBuf {
@@ -1166,7 +1218,8 @@ mod tests {
         let pid = sample_project(&repo, &pstore);
         let bs = BacklogStore::new();
         bs.load_backlog(&pid, &root).unwrap();
-        bs.update_task_status(&pid, "TASK-1", "Done", &pstore).unwrap();
+        bs.update_task_status(&pid, "TASK-1", "Done", &pstore)
+            .unwrap();
         let raw = fs::read_to_string(root.join("tasks/task-1 - t.md")).unwrap();
         assert!(raw.contains("status: Done"));
         let nt = BacklogTask {
@@ -1203,12 +1256,7 @@ mod tests {
         assert!(!root.join("drafts/draft-1.md").exists());
         assert!(root.join("tasks").read_dir().unwrap().count() >= 1);
         bs.archive_milestone(&pid, "MS-1", &pstore).unwrap();
-        assert!(root
-            .join("archive/milestones")
-            .read_dir()
-            .unwrap()
-            .count()
-            >= 1);
+        assert!(root.join("archive/milestones").read_dir().unwrap().count() >= 1);
     }
 
     #[test]
@@ -1238,9 +1286,7 @@ mod tests {
             d.file_path.as_deref(),
             Some("docs/overview/architecture/doc-1.md")
         );
-        assert!(root
-            .join("docs/overview/architecture/doc-1.md")
-            .is_file());
+        assert!(root.join("docs/overview/architecture/doc-1.md").is_file());
     }
 
     #[test]
@@ -1259,9 +1305,7 @@ mod tests {
             .create_decision_with_title(&pid, "Choose Rust", &pstore)
             .unwrap();
         assert!(d.id.starts_with("DEC-"));
-        let m = bs
-            .create_milestone(&pid, "v1", "Ship it", &pstore)
-            .unwrap();
+        let m = bs.create_milestone(&pid, "v1", "Ship it", &pstore).unwrap();
         assert_eq!(m.id, "MS-1");
         assert!(root.join("milestones").read_dir().unwrap().count() >= 1);
     }

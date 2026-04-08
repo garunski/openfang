@@ -3762,8 +3762,7 @@ fn cmd_channel_setup(channel: Option<&str>) {
             println!("  See: https://github.com/AsamK/signal-cli");
             ui::blank();
 
-            let api_url =
-                prompt_input("  signal-cli REST API URL [http://127.0.0.1:8080]: ");
+            let api_url = prompt_input("  signal-cli REST API URL [http://127.0.0.1:8080]: ");
             let api_url = if api_url.is_empty() {
                 "http://127.0.0.1:8080".to_string()
             } else {

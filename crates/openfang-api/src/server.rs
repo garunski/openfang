@@ -151,10 +151,7 @@ pub async fn build_router(
         .route("/favicon.ico", axum::routing::get(webchat::favicon_ico))
         .route("/manifest.json", axum::routing::get(webchat::manifest_json))
         .route("/sw.js", axum::routing::get(webchat::sw_js))
-        .route(
-            "/vendor/fa4/{name}",
-            axum::routing::get(webchat::fa4_font),
-        )
+        .route("/vendor/fa4/{name}", axum::routing::get(webchat::fa4_font))
         .route(
             "/vendor/diff2html/diff2html.min.css",
             axum::routing::get(webchat::diff2html_css),
@@ -349,6 +346,10 @@ pub async fn build_router(
             axum::routing::post(routes::run_workflow),
         )
         .route(
+            "/api/workflows/{id}/runs/{run_id}",
+            axum::routing::get(routes::get_workflow_run),
+        )
+        .route(
             "/api/workflows/{id}/runs",
             axum::routing::get(routes::list_workflow_runs),
         )
@@ -511,7 +512,8 @@ pub async fn build_router(
         )
         .route(
             "/api/projects/{id}/backlog/milestones",
-            axum::routing::get(routes::backlog_list_milestones).post(routes::backlog_create_milestone),
+            axum::routing::get(routes::backlog_list_milestones)
+                .post(routes::backlog_create_milestone),
         )
         .route(
             "/api/projects/{id}/backlog/decisions/{decision_id}",
@@ -521,7 +523,8 @@ pub async fn build_router(
         )
         .route(
             "/api/projects/{id}/backlog/decisions",
-            axum::routing::get(routes::backlog_list_decisions).post(routes::backlog_create_decision),
+            axum::routing::get(routes::backlog_list_decisions)
+                .post(routes::backlog_create_decision),
         )
         .route(
             "/api/projects/{id}/backlog/search",

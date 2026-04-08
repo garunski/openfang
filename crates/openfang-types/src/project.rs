@@ -49,10 +49,16 @@ pub struct ProjectPipelineOverrides {
     pub max_retries: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_routing: Option<HashMap<String, String>>,
+    /// Env var name holding a GitHub PAT for `git_create_pr` (per-project override).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_token_env: Option<String>,
+    /// `{task_id}` placeholder, e.g. `openfang/task-{task_id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch_name_template: Option<String>,
 }
 
 /// One spoke workspace under a project.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SpokeDescriptor {
     pub name: String,
@@ -78,6 +84,11 @@ pub struct ProjectPatch {
     pub pipeline_overrides: Option<ProjectPipelineOverrides>,
     /// `None` = no change; `Some(None)` = clear; `Some(Some(name))` = set.
     pub admin_spoke: Option<Option<String>>,
+    /// Mattermost channel id: same semantics as [`Self::admin_spoke`].
+    pub mattermost_channel_id: Option<Option<String>>,
+    pub mattermost_channel_name: Option<Option<String>>,
+    /// `None` = no change; `Some(None)` = clear; `Some(Some(id))` = set.
+    pub orchestrator_agent_id: Option<Option<String>>,
 }
 
 /// Registered OpenFang project (backlog root + spokes).
@@ -95,6 +106,14 @@ pub struct Project {
     /// Spoke name whose `<spoke>/backlog` holds tasks, docs, and knowledge.
     #[serde(default)]
     pub admin_spoke: Option<String>,
+    /// Mattermost channel id for project-scoped orchestrator traffic.
+    #[serde(default)]
+    pub mattermost_channel_id: Option<String>,
+    #[serde(default)]
+    pub mattermost_channel_name: Option<String>,
+    /// Agent UUID for the per-project `pipeline-coordinator` hand (Mattermost orchestrator).
+    #[serde(default)]
+    pub orchestrator_agent_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -110,6 +129,9 @@ impl Default for Project {
             pipeline_overrides: ProjectPipelineOverrides::default(),
             bound_agents: Vec::new(),
             admin_spoke: None,
+            mattermost_channel_id: None,
+            mattermost_channel_name: None,
+            orchestrator_agent_id: None,
             created_at: now,
             updated_at: now,
         }
@@ -168,6 +190,172 @@ impl Project {
         }
         false
     }
+}
+
+/// One quality-gate or tool failure recorded for project-scoped context (stderr excerpt).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PastFailure {
+    pub at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub stderr_snippet: String,
+}
+
+/// A decision or outcome note from a prior pipeline run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DecisionLogEntry {
+    pub at: DateTime<Utc>,
+    pub summary: String,
+}
+
+/// File-backed per-project context for orchestrator prompts and Cursor enrichment (`context.json`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectContext {
+    #[serde(default)]
+    pub repo_structure_summary: String,
+    #[serde(default)]
+    pub coding_conventions: String,
+    #[serde(default)]
+    pub past_failures: Vec<PastFailure>,
+    #[serde(default)]
+    pub decision_log: Vec<DecisionLogEntry>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl Default for ProjectContext {
+    fn default() -> Self {
+        Self {
+            repo_structure_summary: String::new(),
+            coding_conventions: String::new(),
+            past_failures: Vec::new(),
+            decision_log: Vec::new(),
+            updated_at: Utc::now(),
+        }
+    }
+}
+
+impl ProjectContext {
+    /// Drop old decisions and cap list sizes (called after load and before save).
+    pub fn prune(&mut self, max_failures: usize, decision_max_age_days: u32) {
+        if decision_max_age_days > 0 {
+            let cutoff = Utc::now() - chrono::Duration::days(decision_max_age_days as i64);
+            self.decision_log.retain(|d| d.at >= cutoff);
+        }
+        const MAX_DECISION_ENTRIES: usize = 200;
+        if self.decision_log.len() > MAX_DECISION_ENTRIES {
+            let drop = self.decision_log.len() - MAX_DECISION_ENTRIES;
+            self.decision_log.drain(..drop);
+        }
+        let cap = max_failures.max(1);
+        if self.past_failures.len() > cap {
+            let drop = self.past_failures.len() - cap;
+            self.past_failures.drain(..drop);
+        }
+        self.updated_at = Utc::now();
+    }
+
+    /// Merge fields from `update_project_context` tool JSON.
+    pub fn apply_tool_update(&mut self, input: &serde_json::Value) -> Result<(), String> {
+        if let Some(s) = input
+            .get("set_repo_structure_summary")
+            .and_then(|v| v.as_str())
+        {
+            self.repo_structure_summary = s.to_string();
+        }
+        if let Some(s) = input.get("set_coding_conventions").and_then(|v| v.as_str()) {
+            self.coding_conventions = s.to_string();
+        }
+        if let Some(f) = input.get("append_past_failure") {
+            let stderr_snippet = f
+                .get("stderr_snippet")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let task_id = f
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(String::from);
+            self.past_failures.push(PastFailure {
+                at: Utc::now(),
+                task_id,
+                stderr_snippet,
+            });
+        }
+        if let Some(summary) = input
+            .get("append_decision")
+            .and_then(|v| v.get("summary"))
+            .and_then(|v| v.as_str())
+        {
+            let summary = summary.trim();
+            if !summary.is_empty() {
+                self.decision_log.push(DecisionLogEntry {
+                    at: Utc::now(),
+                    summary: summary.to_string(),
+                });
+            }
+        }
+        self.updated_at = Utc::now();
+        Ok(())
+    }
+
+    /// Human-readable block prepended to workflow input (truncated to `max_chars`).
+    pub fn workflow_prompt_section(&self, max_chars: usize) -> String {
+        let mut parts: Vec<String> = Vec::new();
+        if !self.repo_structure_summary.trim().is_empty() {
+            parts.push(format!(
+                "### Repo structure\n{}",
+                self.repo_structure_summary.trim()
+            ));
+        }
+        if !self.coding_conventions.trim().is_empty() {
+            parts.push(format!(
+                "### Coding conventions\n{}",
+                self.coding_conventions.trim()
+            ));
+        }
+        if !self.past_failures.is_empty() {
+            let mut lines = vec!["### Recent failures (stderr excerpts)".to_string()];
+            for f in &self.past_failures {
+                let tid = f
+                    .task_id
+                    .as_deref()
+                    .map(|s| format!(" ({s})"))
+                    .unwrap_or_default();
+                let snip = truncate_chars(&f.stderr_snippet, 800);
+                lines.push(format!("- {}{}: {}", f.at.to_rfc3339(), tid, snip));
+            }
+            parts.push(lines.join("\n"));
+        }
+        if !self.decision_log.is_empty() {
+            let mut lines = vec!["### Decision log".to_string()];
+            for d in &self.decision_log {
+                lines.push(format!(
+                    "- {}: {}",
+                    d.at.to_rfc3339(),
+                    truncate_chars(&d.summary, 500)
+                ));
+            }
+            parts.push(lines.join("\n"));
+        }
+        if parts.is_empty() {
+            return String::new();
+        }
+        let body = parts.join("\n\n");
+        let header = "## Accumulated project context\n\n";
+        let full = format!("{header}{body}");
+        truncate_chars(&full, max_chars.max(256))
+    }
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    let mut t = s.chars().take(max.saturating_sub(20)).collect::<String>();
+    t.push_str("\n…[truncated]");
+    t
 }
 
 #[cfg(test)]
@@ -243,6 +431,23 @@ mod tests {
         let p: Project = serde_json::from_str(j).unwrap();
         assert!(p.bound_agents.is_empty());
         assert!(p.admin_spoke.is_none());
+        assert!(p.mattermost_channel_id.is_none());
+        assert!(p.mattermost_channel_name.is_none());
+        assert!(p.orchestrator_agent_id.is_none());
+    }
+
+    #[test]
+    fn project_json_roundtrip_mattermost_fields() {
+        let mut p = Project {
+            mattermost_channel_id: Some("abc123".into()),
+            mattermost_channel_name: Some("team-orch".into()),
+            ..Default::default()
+        };
+        p.normalize_admin_spoke_field();
+        let j = serde_json::to_string(&p).unwrap();
+        let q: Project = serde_json::from_str(&j).unwrap();
+        assert_eq!(q.mattermost_channel_id.as_deref(), Some("abc123"));
+        assert_eq!(q.mattermost_channel_name.as_deref(), Some("team-orch"));
     }
 
     #[test]
@@ -253,9 +458,81 @@ mod tests {
         let partial = ProjectPipelineOverrides {
             max_retries: Some(3),
             model_routing: None,
+            ..Default::default()
         };
         let j = serde_json::to_string(&partial).unwrap();
         assert!(j.contains("max_retries"));
         assert!(!j.contains("model_routing"));
+    }
+
+    #[test]
+    fn project_context_prune_zero_age_keeps_old_decisions() {
+        let old = Utc::now() - chrono::Duration::days(400);
+        let mut ctx = ProjectContext {
+            decision_log: vec![DecisionLogEntry {
+                at: old,
+                summary: "legacy".into(),
+            }],
+            ..Default::default()
+        };
+        ctx.prune(10, 0);
+        assert_eq!(ctx.decision_log.len(), 1);
+    }
+
+    #[test]
+    fn project_context_prune_failures_and_decisions() {
+        let old = Utc::now() - chrono::Duration::days(100);
+        let recent = Utc::now() - chrono::Duration::days(1);
+        let mut ctx = ProjectContext {
+            past_failures: vec![
+                PastFailure {
+                    at: Utc::now(),
+                    task_id: None,
+                    stderr_snippet: "a".into(),
+                },
+                PastFailure {
+                    at: Utc::now(),
+                    task_id: None,
+                    stderr_snippet: "b".into(),
+                },
+                PastFailure {
+                    at: Utc::now(),
+                    task_id: None,
+                    stderr_snippet: "c".into(),
+                },
+            ],
+            decision_log: vec![
+                DecisionLogEntry {
+                    at: old,
+                    summary: "old".into(),
+                },
+                DecisionLogEntry {
+                    at: recent,
+                    summary: "new".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        ctx.prune(2, 30);
+        assert_eq!(ctx.past_failures.len(), 2);
+        assert_eq!(ctx.decision_log.len(), 1);
+        assert_eq!(ctx.decision_log[0].summary, "new");
+    }
+
+    #[test]
+    fn project_context_apply_tool_update_and_prompt_section() {
+        let mut ctx = ProjectContext::default();
+        let v = serde_json::json!({
+            "set_repo_structure_summary": "src/, crates/",
+            "append_decision": { "summary": " use trait X " },
+            "append_past_failure": { "task_id": "TASK-1", "stderr_snippet": "error: failed" }
+        });
+        ctx.apply_tool_update(&v).unwrap();
+        assert!(ctx.repo_structure_summary.contains("crates"));
+        assert_eq!(ctx.decision_log.len(), 1);
+        assert_eq!(ctx.past_failures.len(), 1);
+        let sec = ctx.workflow_prompt_section(10_000);
+        assert!(sec.contains("Accumulated project"));
+        assert!(sec.contains("TASK-1"));
     }
 }

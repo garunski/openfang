@@ -804,6 +804,16 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         }
     }
 
+    async fn resolve_mattermost_project_route(
+        &self,
+        mattermost_channel_id: &str,
+    ) -> Option<(AgentId, String)> {
+        self.kernel
+            .project_store
+            .mattermost_project_route(mattermost_channel_id)
+            .map(|(aid, pid)| (aid, pid.to_string()))
+    }
+
     // ── Budget, Network, A2A ──
 
     async fn budget_text(&self) -> String {

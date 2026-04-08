@@ -182,7 +182,9 @@ fn ensure_project(
         .map_err(map_backlog_err)?;
     if let Some(p) = state.kernel.project_store.get(pid) {
         if let Some(root) = p.admin_backlog_root() {
-            state.backlog_watcher.ensure_watching(pid, root, state.backlog_store.clone());
+            state
+                .backlog_watcher
+                .ensure_watching(pid, root, state.backlog_store.clone());
         }
     }
     Ok(())
@@ -212,11 +214,7 @@ fn task_matches_query(t: &BacklogTask, q: &BacklogTasksListQuery) -> bool {
     }
     if let Some(ref lab) = q.label {
         let l = lab.to_ascii_lowercase();
-        if !t
-            .labels
-            .iter()
-            .any(|x| x.to_ascii_lowercase().contains(&l))
-        {
+        if !t.labels.iter().any(|x| x.to_ascii_lowercase().contains(&l)) {
             return false;
         }
     }
@@ -1474,9 +1472,7 @@ fn wants_kind(kinds: &[String], want: &str) -> bool {
     if kinds.is_empty() {
         return true;
     }
-    kinds
-        .iter()
-        .any(|t| t.trim().eq_ignore_ascii_case(want))
+    kinds.iter().any(|t| t.trim().eq_ignore_ascii_case(want))
 }
 
 fn matches_status_list(value: &str, filters: &[String]) -> bool {
@@ -1484,9 +1480,7 @@ fn matches_status_list(value: &str, filters: &[String]) -> bool {
         return true;
     }
     let v = value.trim();
-    filters
-        .iter()
-        .any(|f| v.eq_ignore_ascii_case(f.trim()))
+    filters.iter().any(|f| v.eq_ignore_ascii_case(f.trim()))
 }
 
 fn task_matches_search_filters(t: &BacklogTask, q: &BacklogSearchQuery) -> bool {
@@ -1533,9 +1527,7 @@ fn decision_matches_search_filters(d: &BacklogDecision, q: &BacklogSearchQuery) 
     if q.priority.is_empty() && q.label.is_empty() {
         return matches_status_list(decision_status_token(d.status), &q.status);
     }
-    if !q.status.is_empty()
-        && !matches_status_list(decision_status_token(d.status), &q.status)
-    {
+    if !q.status.is_empty() && !matches_status_list(decision_status_token(d.status), &q.status) {
         return false;
     }
     !(!q.priority.is_empty() || !q.label.is_empty())
@@ -1594,11 +1586,7 @@ fn score_decision(d: &BacklogDecision, needle: Option<&str>) -> Option<f64> {
         return Some(1.0);
     }
     let title = d.title.to_lowercase();
-    let body = format!(
-        "{}\n{}\n{}",
-        d.context, d.decision, d.consequences
-    )
-    .to_lowercase();
+    let body = format!("{}\n{}\n{}", d.context, d.decision, d.consequences).to_lowercase();
     let mut best = 0.0_f64;
     if title == *n {
         best = best.max(1.0);
@@ -1676,17 +1664,12 @@ fn backlog_search_run(snap: &BacklogSnapshot, q: &BacklogSearchQuery) -> Vec<Bac
     }
 
     scored.sort_by(|a, b| {
-        b.0
-            .partial_cmp(&a.0)
+        b.0.partial_cmp(&a.0)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then_with(|| a.1.cmp(&b.1))
     });
 
-    scored
-        .into_iter()
-        .take(limit)
-        .map(|(_, _, r)| r)
-        .collect()
+    scored.into_iter().take(limit).map(|(_, _, r)| r).collect()
 }
 
 fn backlog_statistics_build(snap: &BacklogSnapshot) -> BacklogStatisticsResponse {

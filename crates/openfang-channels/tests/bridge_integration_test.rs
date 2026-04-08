@@ -109,6 +109,8 @@ struct MockHandle {
     agents: Mutex<Vec<(AgentId, String)>>,
     /// Records all messages sent to agents: (agent_id, message).
     received: Arc<Mutex<Vec<(AgentId, String)>>>,
+    /// Optional Mattermost channel id → orchestrator agent + project id.
+    mm_project: Mutex<Option<(String, AgentId, String)>>,
 }
 
 impl MockHandle {
@@ -116,7 +118,19 @@ impl MockHandle {
         Self {
             agents: Mutex::new(agents),
             received: Arc::new(Mutex::new(Vec::new())),
+            mm_project: Mutex::new(None),
         }
+    }
+
+    fn with_mm_route(
+        self,
+        channel_id: impl Into<String>,
+        orchestrator: AgentId,
+        project_id: impl Into<String>,
+    ) -> Self {
+        *self.mm_project.lock().unwrap() =
+            Some((channel_id.into(), orchestrator, project_id.into()));
+        self
     }
 }
 
@@ -141,6 +155,18 @@ impl ChannelBridgeHandle for MockHandle {
 
     async fn spawn_agent_by_name(&self, _manifest_name: &str) -> Result<AgentId, String> {
         Err("mock: spawn not implemented".to_string())
+    }
+
+    async fn resolve_mattermost_project_route(
+        &self,
+        mattermost_channel_id: &str,
+    ) -> Option<(AgentId, String)> {
+        self.mm_project
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|(ch, _, _)| ch == mattermost_channel_id)
+            .map(|(_, aid, pid)| (*aid, pid.clone()))
     }
 }
 
@@ -214,13 +240,9 @@ async fn test_bridge_dispatch_text_message() {
     manager.start_adapter(adapter.clone()).await.unwrap();
 
     // Inject a text message
-    tx.send(make_text_msg(
-        ChannelType::Signal,
-        "user1",
-        "Hello agent!",
-    ))
-    .await
-    .unwrap();
+    tx.send(make_text_msg(ChannelType::Signal, "user1", "Hello agent!"))
+        .await
+        .unwrap();
 
     // Give the async dispatch loop time to process
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -558,6 +580,75 @@ async fn test_bridge_multiple_adapters() {
         "Expected 'from mattermost' in: {}",
         mm_sent[0].1
     );
+
+    manager.stop().await;
+}
+
+fn make_mattermost_channel_text_msg(
+    channel_id: &str,
+    sender_user: &str,
+    text: &str,
+) -> ChannelMessage {
+    let mut msg = make_text_msg(ChannelType::Mattermost, channel_id, text);
+    msg.metadata.insert(
+        "mattermost_channel_id".to_string(),
+        serde_json::json!(channel_id),
+    );
+    msg.metadata
+        .insert("sender_user_id".to_string(), serde_json::json!(sender_user));
+    msg
+}
+
+#[tokio::test]
+async fn test_mattermost_project_route_overrides_user_default() {
+    let orchestrator = AgentId::new();
+    let fallback = AgentId::new();
+    let handle = Arc::new(
+        MockHandle::new(vec![
+            (orchestrator, "orch".to_string()),
+            (fallback, "fallback".to_string()),
+        ])
+        .with_mm_route(
+            "mm-proj-ch",
+            orchestrator,
+            "550e8400-e29b-41d4-a716-446655440000",
+        ),
+    );
+    let router = Arc::new(AgentRouter::new());
+    router.set_user_default("mm-proj-ch".to_string(), fallback);
+
+    let (adapter, tx) = MockAdapter::new("mm", ChannelType::Mattermost);
+    let adapter_ref = adapter.clone();
+    let mut manager = BridgeManager::new(handle.clone(), router);
+    manager.start_adapter(adapter).await.unwrap();
+
+    tx.send(make_mattermost_channel_text_msg(
+        "mm-proj-ch",
+        "alice",
+        "status?",
+    ))
+    .await
+    .unwrap();
+
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    {
+        let received = handle.received.lock().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0].0, orchestrator);
+        assert!(
+            received[0]
+                .1
+                .contains("550e8400-e29b-41d4-a716-446655440000"),
+            "project context missing: {}",
+            received[0].1
+        );
+        assert!(received[0].1.contains("mm-proj-ch"));
+    }
+
+    let sent = adapter_ref.get_sent();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].0, "mm-proj-ch");
 
     manager.stop().await;
 }

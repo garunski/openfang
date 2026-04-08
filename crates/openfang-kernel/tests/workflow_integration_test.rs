@@ -7,10 +7,11 @@
 //! workflow wiring without making real API calls.
 
 use openfang_kernel::workflow::{
-    ErrorMode, StepAgent, StepMode, Workflow, WorkflowId, WorkflowStep,
+    workflow_from_create_request_json, ErrorMode, StepAgent, StepMode, Workflow, WorkflowEngine,
+    WorkflowId, WorkflowStep, BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME,
 };
 use openfang_kernel::OpenFangKernel;
-use openfang_types::agent::AgentManifest;
+use openfang_types::agent::{AgentId, AgentManifest};
 use openfang_types::config::{DefaultModelConfig, KernelConfig};
 use std::sync::Arc;
 
@@ -405,4 +406,101 @@ async fn test_workflow_e2e_with_groq() {
     assert_eq!(runs.len(), 1);
 
     kernel.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// Doc-2 pipeline-full-cycle template (TASK-46)
+// Canonical JSON: `openfang-kernel/bundled/workflows/pipeline-full-cycle.json`
+// (keep in sync with `openfang-custom/.mise/workflows/pipeline-full-cycle.json`).
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_pipeline_full_cycle_template_parses() {
+    let raw = include_str!("../bundled/workflows/pipeline-full-cycle.json");
+    let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+    let wf = workflow_from_create_request_json(&v).expect("parse template");
+    assert_eq!(wf.name, "pipeline-full-cycle");
+    assert_eq!(wf.steps.len(), 6);
+    assert_eq!(wf.steps[0].name, "resolve_context");
+    assert_eq!(wf.steps[1].name, "backlog_in_progress");
+    assert_eq!(wf.steps[2].name, "explore_cursor");
+    assert_eq!(wf.steps[3].name, "implement_cursor");
+    assert!(matches!(
+        wf.steps[3].error_mode,
+        ErrorMode::Retry { max_retries: 3 }
+    ));
+    assert_eq!(wf.steps[4].name, "quality_gate");
+    assert_eq!(wf.steps[5].name, "finalize_done_git");
+    assert!(wf.project_id.is_none());
+    assert!(matches!(
+        &wf.steps[0].agent,
+        StepAgent::ByName { name } if name == "pipeline-coordinator-hand"
+    ));
+}
+
+#[tokio::test]
+async fn test_pipeline_full_cycle_execute_run_mock() {
+    let raw = include_str!("../bundled/workflows/pipeline-full-cycle.json");
+    let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+    let wf = workflow_from_create_request_json(&v).expect("parse");
+    let engine = WorkflowEngine::new();
+    let wf_id = engine.register(wf).await;
+    let run_id = engine
+        .create_run(
+            wf_id,
+            r#"{"task_id":"TASK-1","repo_spoke_label":"repo:dev"}"#.to_string(),
+        )
+        .await
+        .expect("create_run");
+    let dummy = AgentId::new();
+    let out = engine
+        .execute_run(
+            run_id,
+            |_step_agent| Some((dummy, "pipeline-coordinator-hand".into())),
+            |_agent_id, _prompt| async move { Ok(("ok".into(), 0u64, 0u64)) },
+        )
+        .await
+        .expect("execute_run");
+    assert_eq!(out, "ok");
+    let run = engine.get_run(run_id).await.expect("get_run");
+    assert_eq!(run.step_results.len(), 6);
+    assert_eq!(run.step_results[3].step_name, "implement_cursor");
+}
+
+#[tokio::test]
+async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
+    let config = test_config("ollama", "test-model", "OLLAMA_API_KEY");
+    let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
+    kernel.init_default_workflows().await;
+    let wfs = kernel.workflows.list_workflows().await;
+    assert!(
+        wfs.iter()
+            .any(|w| w.name == BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME),
+        "bundled pipeline should be registered"
+    );
+    let wf_dir = kernel.config.home_dir.join("workflows");
+    assert!(
+        wf_dir.exists(),
+        "workflows dir should exist after bundled install"
+    );
+    let mut found_file = false;
+    for entry in std::fs::read_dir(&wf_dir).unwrap() {
+        let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
+        if text.contains(BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME) {
+            found_file = true;
+            break;
+        }
+    }
+    assert!(
+        found_file,
+        "persisted workflow JSON should mention bundled name"
+    );
+
+    kernel.init_default_workflows().await;
+    let wfs2 = kernel.workflows.list_workflows().await;
+    let n = wfs2
+        .iter()
+        .filter(|w| w.name == BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME)
+        .count();
+    assert_eq!(n, 1, "second init should not duplicate bundled workflow");
 }

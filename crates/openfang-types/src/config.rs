@@ -1139,6 +1139,18 @@ fn default_automation_max_retries() -> u32 {
     2
 }
 
+fn default_project_context_max_failures() -> usize {
+    50
+}
+
+fn default_project_context_decision_max_age_days() -> u32 {
+    30
+}
+
+fn default_project_context_prompt_max_chars() -> usize {
+    8192
+}
+
 fn default_automation_model_routing() -> HashMap<String, String> {
     [
         ("planning".to_string(), "premium".to_string()),
@@ -1174,6 +1186,21 @@ pub struct AutomationConfig {
     /// Pipeline phase → model identifier (e.g. `planning`, `implementation`, `retry`).
     #[serde(default = "default_automation_model_routing")]
     pub model_routing: HashMap<String, String>,
+    /// Max `past_failures` entries kept in per-project `context.json` (oldest dropped).
+    #[serde(default = "default_project_context_max_failures")]
+    pub project_context_max_failures: usize,
+    /// Drop `decision_log` entries older than this many days (`0` = no age pruning).
+    #[serde(default = "default_project_context_decision_max_age_days")]
+    pub project_context_decision_max_age_days: u32,
+    /// Max characters injected into workflow input from [`ProjectContext::workflow_prompt_section`].
+    #[serde(default = "default_project_context_prompt_max_chars")]
+    pub project_context_prompt_max_chars: usize,
+    /// Default env var for GitHub API token used by `git_create_pr` when a project has no override.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub github_token_env: Option<String>,
+    /// Default `{task_id}` branch naming template for `git_create_branch`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_branch_name_template: Option<String>,
 }
 
 impl Default for AutomationConfig {
@@ -1183,6 +1210,11 @@ impl Default for AutomationConfig {
             backlog_roots: Vec::new(),
             max_retries: default_automation_max_retries(),
             model_routing: default_automation_model_routing(),
+            project_context_max_failures: default_project_context_max_failures(),
+            project_context_decision_max_age_days: default_project_context_decision_max_age_days(),
+            project_context_prompt_max_chars: default_project_context_prompt_max_chars(),
+            github_token_env: None,
+            git_branch_name_template: None,
         }
     }
 }
@@ -1211,9 +1243,8 @@ pub fn validate_backlog_root_allowlisted(
                 .to_string(),
         );
     }
-    let canon = std::fs::canonicalize(backlog_root).map_err(|e| {
-        format!("backlog_root does not exist or is not accessible: {e}")
-    })?;
+    let canon = std::fs::canonicalize(backlog_root)
+        .map_err(|e| format!("backlog_root does not exist or is not accessible: {e}"))?;
     for root in allowlisted_roots {
         if !root.is_absolute() {
             continue;
@@ -1258,9 +1289,8 @@ pub fn resolve_automation_backlog_cwd(
                     "backlog_roots entries must be absolute paths in config.toml.".to_string(),
                 );
             }
-            std::fs::canonicalize(root).map_err(|e| {
-                format!("backlog root does not exist or is not accessible: {e}")
-            })
+            std::fs::canonicalize(root)
+                .map_err(|e| format!("backlog root does not exist or is not accessible: {e}"))
         }
     }
 }
@@ -1279,9 +1309,8 @@ pub fn validate_spoke_root_allowlisted(
                 .to_string(),
         );
     }
-    let canon = std::fs::canonicalize(spoke_root).map_err(|e| {
-        format!("spoke_root does not exist or is not accessible: {e}")
-    })?;
+    let canon = std::fs::canonicalize(spoke_root)
+        .map_err(|e| format!("spoke_root does not exist or is not accessible: {e}"))?;
     for root in allowlisted_roots {
         if !root.is_absolute() {
             continue;
@@ -1332,9 +1361,8 @@ pub fn validate_automation_allowlisted_path(
     if !candidate.is_absolute() {
         return Err("path must be an absolute path".to_string());
     }
-    let canon = std::fs::canonicalize(candidate).map_err(|e| {
-        format!("path does not exist or is not accessible: {e}")
-    })?;
+    let canon = std::fs::canonicalize(candidate)
+        .map_err(|e| format!("path does not exist or is not accessible: {e}"))?;
     if path_is_under_any_canonical_root(&canon, spoke_roots)
         || path_is_under_any_canonical_root(&canon, backlog_roots)
     {
@@ -1886,7 +1914,6 @@ pub struct ChannelsConfig {
     pub mattermost: Option<MattermostConfig>,
 }
 
-
 /// Signal channel adapter configuration (via signal-cli REST API).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -2052,6 +2079,21 @@ impl KernelConfig {
             self.web.fetch.timeout_secs = 30;
         } else if self.web.fetch.timeout_secs > 120 {
             self.web.fetch.timeout_secs = 120;
+        }
+
+        if self.automation.project_context_max_failures == 0 {
+            self.automation.project_context_max_failures = default_project_context_max_failures();
+        } else if self.automation.project_context_max_failures > 500 {
+            self.automation.project_context_max_failures = 500;
+        }
+        if self.automation.project_context_decision_max_age_days > 3650 {
+            self.automation.project_context_decision_max_age_days = 3650;
+        }
+        if self.automation.project_context_prompt_max_chars == 0 {
+            self.automation.project_context_prompt_max_chars =
+                default_project_context_prompt_max_chars();
+        } else if self.automation.project_context_prompt_max_chars > 100_000 {
+            self.automation.project_context_prompt_max_chars = 100_000;
         }
     }
 }
@@ -2479,13 +2521,30 @@ mod tests {
     }
 
     #[test]
+    fn test_automation_project_context_toml_overrides() {
+        let toml_str = r#"
+            [automation]
+            project_context_max_failures = 12
+            project_context_decision_max_age_days = 7
+            project_context_prompt_max_chars = 2048
+        "#;
+        let config: KernelConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.automation.project_context_max_failures, 12);
+        assert_eq!(config.automation.project_context_decision_max_age_days, 7);
+        assert_eq!(config.automation.project_context_prompt_max_chars, 2048);
+    }
+
+    #[test]
     fn test_automation_model_routing_defaults() {
         let a = AutomationConfig::default();
         assert_eq!(a.model_for_phase("planning"), "premium");
         assert_eq!(a.model_for_phase("implementation"), "default");
         assert_eq!(a.model_for_phase("retry"), "default");
         assert_eq!(a.model_for_phase("unknown"), "default");
-        assert_eq!(KernelConfig::default().automation_model_for_phase("planning"), "premium");
+        assert_eq!(
+            KernelConfig::default().automation_model_for_phase("planning"),
+            "premium"
+        );
     }
 
     #[test]
@@ -2497,7 +2556,10 @@ mod tests {
         "#;
         let config: KernelConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.automation_model_for_phase("planning"), "claude-opus");
-        assert_eq!(config.automation_model_for_phase("implementation"), "groq-fast");
+        assert_eq!(
+            config.automation_model_for_phase("implementation"),
+            "groq-fast"
+        );
         assert_eq!(config.automation_model_for_phase("retry"), "default");
     }
 
@@ -2525,8 +2587,7 @@ mod tests {
     #[test]
     fn test_validate_spoke_root_allowlisted_empty_list() {
         let dir = tempfile::tempdir().unwrap();
-        let err =
-            validate_spoke_root_allowlisted(&[], dir.path()).unwrap_err();
+        let err = validate_spoke_root_allowlisted(&[], dir.path()).unwrap_err();
         assert!(err.contains("No automation spoke roots"));
     }
 
@@ -2617,8 +2678,12 @@ mod tests {
     fn test_validate_automation_allowlisted_path_requires_absolute() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        let err = validate_automation_allowlisted_path(std::slice::from_ref(&root), &[], Path::new("relative"))
-            .unwrap_err();
+        let err = validate_automation_allowlisted_path(
+            std::slice::from_ref(&root),
+            &[],
+            Path::new("relative"),
+        )
+        .unwrap_err();
         assert!(err.contains("absolute"));
     }
 
