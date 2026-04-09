@@ -988,6 +988,7 @@ fn workflow_run_detail_json(r: &WorkflowRun) -> serde_json::Value {
         "id": r.id.to_string(),
         "workflow_id": r.workflow_id.to_string(),
         "workflow_name": r.workflow_name,
+        "project_id": r.project_id.map(|p| p.to_string()),
         "state": workflow_run_state_str(&r.state),
         "input": r.input,
         "output": r.output,
@@ -1447,9 +1448,44 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "mattermost_team_name": p.mattermost_team_name,
         "mattermost_channel_name": p.mattermost_channel_name,
         "orchestrator_agent_id": p.orchestrator_agent_id,
+        "former_agent_ids": p.former_agent_ids,
         "created_at": p.created_at.to_rfc3339(),
         "updated_at": p.updated_at.to_rfc3339(),
     })
+}
+
+fn historical_project_agent_json(kernel: &OpenFangKernel, agent_id: &str) -> serde_json::Value {
+    let t = agent_id.trim();
+    if t.is_empty() {
+        return serde_json::json!({
+            "agent_id": "",
+            "in_registry": false,
+            "name": null,
+            "state": null,
+        });
+    }
+    let Ok(aid) = t.parse::<AgentId>() else {
+        return serde_json::json!({
+            "agent_id": t,
+            "in_registry": false,
+            "name": null,
+            "state": null,
+        });
+    };
+    match kernel.registry.get(aid) {
+        Some(entry) => serde_json::json!({
+            "agent_id": t,
+            "in_registry": true,
+            "name": entry.name,
+            "state": format!("{:?}", entry.state),
+        }),
+        None => serde_json::json!({
+            "agent_id": t,
+            "in_registry": false,
+            "name": null,
+            "state": null,
+        }),
+    }
 }
 
 fn mattermost_channel_id_taken(
@@ -2406,6 +2442,131 @@ pub async fn list_project_agents(
     Json(rows).into_response()
 }
 
+/// GET /api/projects/:id/agents/management — current + historical assignments and orchestrator id.
+pub async fn list_project_agents_management(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    };
+    let pairs = crate::project_scoped::resolved_spoke_pairs(&project);
+    let mut by_id: HashMap<String, serde_json::Value> = HashMap::new();
+
+    for aid_str in &project.bound_agents {
+        let Ok(aid) = aid_str.parse::<AgentId>() else {
+            continue;
+        };
+        let Some(entry) = state.kernel.registry.get(aid) else {
+            continue;
+        };
+        by_id.insert(
+            entry.id.to_string(),
+            project_agent_row_json(&entry, &pairs, "explicit"),
+        );
+    }
+
+    let explicit_ids: HashSet<String> = by_id.keys().cloned().collect();
+    for entry in state.kernel.registry.list() {
+        let id_str = entry.id.to_string();
+        if explicit_ids.contains(&id_str) {
+            continue;
+        }
+        let Some(ws) = entry.manifest.workspace.as_ref() else {
+            continue;
+        };
+        if crate::project_scoped::workspace_spoke_name(ws, &pairs).is_none() {
+            continue;
+        }
+        by_id.insert(id_str, project_agent_row_json(&entry, &pairs, "implicit"));
+    }
+
+    let mut rows: Vec<serde_json::Value> = by_id.into_values().collect();
+    let orch = project
+        .orchestrator_agent_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    for v in &mut rows {
+        if let Some(obj) = v.as_object_mut() {
+            let aid = obj
+                .get("agent_id")
+                .and_then(|x| x.as_str())
+                .unwrap_or("");
+            obj.insert(
+                "is_orchestrator".to_string(),
+                serde_json::json!(orch.is_some_and(|o| o == aid)),
+            );
+        }
+    }
+    rows.sort_by(|a, b| {
+        let na = a["name"].as_str().unwrap_or("");
+        let nb = b["name"].as_str().unwrap_or("");
+        na.cmp(nb)
+    });
+
+    let current_ids: HashSet<String> = rows
+        .iter()
+        .filter_map(|v| v["agent_id"].as_str().map(String::from))
+        .collect();
+    let mut historical = Vec::new();
+    for aid in project.former_agent_ids.iter().rev() {
+        let t = aid.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if current_ids.contains(t) {
+            continue;
+        }
+        historical.push(historical_project_agent_json(&state.kernel, t));
+    }
+
+    Json(serde_json::json!({
+        "orchestrator_agent_id": project.orchestrator_agent_id,
+        "current": rows,
+        "historical": historical,
+    }))
+    .into_response()
+}
+
+/// POST /api/projects/:id/orchestrator/start — restart or recreate the project workflow coordinator.
+pub async fn start_project_orchestrator(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if state.kernel.project_store.get(pid).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    }
+    let id_str = id.trim().to_string();
+    match state.kernel.revive_project_orchestrator(&id_str) {
+        Ok(body) => (StatusCode::OK, Json(body)).into_response(),
+        Err(msg) => {
+            let code = if msg == "Project not found" {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (code, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct BindProjectAgentRequest {
     pub agent_id: String,
@@ -2562,6 +2723,64 @@ pub async fn list_project_workflows(
     let raw = openfang_runtime::pipeline_audit::recent_pipeline_audit_records(8000);
     let rows = crate::project_scoped::scoped_pipeline_rows(&raw, &spoke_paths, &task_ids, lim);
     Json(rows).into_response()
+}
+
+/// GET /api/projects/:id/workflow-runs — Workflow engine runs started in this project (`?limit=N`, default 50).
+pub async fn list_project_workflow_runs(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Query(q): Query<ListProjectWorkflowsQuery>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if state.kernel.project_store.get(pid).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    }
+    let lim = q.limit.unwrap_or(50).clamp(1, 500) as usize;
+    let runs = state.kernel.workflows.list_runs_for_project(pid, lim).await;
+    let mut step_counts: HashMap<WorkflowId, usize> = HashMap::new();
+    for r in &runs {
+        if step_counts.contains_key(&r.workflow_id) {
+            continue;
+        }
+        if let Some(w) = state.kernel.workflows.get_workflow(r.workflow_id).await {
+            step_counts.insert(r.workflow_id, w.steps.len());
+        }
+    }
+    let now = chrono::Utc::now();
+    let list: Vec<serde_json::Value> = runs
+        .iter()
+        .map(|r| {
+            let step_count = step_counts.get(&r.workflow_id).copied();
+            let end = r.completed_at.unwrap_or(now);
+            let duration_ms = (end - r.started_at).num_milliseconds().max(0) as u64;
+            let input = r.input.as_str();
+            let input_preview = if input.chars().count() > 200 {
+                format!("{}…", input.chars().take(200).collect::<String>())
+            } else {
+                input.to_string()
+            };
+            serde_json::json!({
+                "id": r.id.to_string(),
+                "workflow_id": r.workflow_id.to_string(),
+                "workflow_name": r.workflow_name,
+                "state": workflow_run_state_str(&r.state),
+                "steps_completed": r.step_results.len(),
+                "step_count": step_count,
+                "started_at": r.started_at.to_rfc3339(),
+                "completed_at": r.completed_at.map(|t| t.to_rfc3339()),
+                "duration_ms": duration_ms,
+                "input_preview": input_preview,
+            })
+        })
+        .collect();
+    Json(list).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -6121,7 +6340,8 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 /// GET /api/config — Get kernel configuration (secrets redacted).
 pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Return a redacted view of the kernel config.
-    // Hot-reloaded `default_model` / `orchestrator_default_model` live in RwLock overrides;
+    // Hot-reloaded `default_model` / `orchestrator_default_model` / `memory_default_embedding`
+    // live in RwLock overrides;
     // `kernel.config` is boot snapshot and stays stale until process restart.
     let config = &state.kernel.config;
     let default_model = {
@@ -6144,6 +6364,16 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
             .cloned()
             .unwrap_or_else(|| config.orchestrator_default_model.clone())
     };
+    let memory_default_embedding = {
+        let g = state
+            .kernel
+            .memory_default_embedding_override
+            .read()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        g.as_ref()
+            .cloned()
+            .unwrap_or_else(|| config.memory_default_embedding.clone())
+    };
     Json(serde_json::json!({
         "home_dir": config.home_dir.to_string_lossy(),
         "data_dir": config.data_dir.to_string_lossy(),
@@ -6157,6 +6387,11 @@ pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse
             "provider": orchestrator_default_model.provider,
             "model": orchestrator_default_model.model,
             "api_key_env": state.kernel.resolve_provider_api_key_env(&orchestrator_default_model.provider),
+        },
+        "memory_default_embedding": {
+            "provider": memory_default_embedding.provider,
+            "model": memory_default_embedding.model,
+            "api_key_env": state.kernel.resolve_provider_api_key_env(&memory_default_embedding.provider),
         },
         "memory": {
             "decay_rate": config.memory.decay_rate,
@@ -6839,6 +7074,7 @@ pub async fn security_status(State(state): State<Arc<AppState>>) -> impl IntoRes
 /// - `provider` — filter by provider (e.g. `?provider=anthropic`)
 /// - `tier` — filter by tier (e.g. `?tier=smart`)
 /// - `available` — only show models from configured providers (`?available=true`)
+/// - `dropdown_only` — exclude models the user hid from pickers (`?dropdown_only=true`)
 pub async fn list_models(
     State(state): State<Arc<AppState>>,
     Query(params): Query<HashMap<String, String>>,
@@ -6852,6 +7088,10 @@ pub async fn list_models(
     let tier_filter = params.get("tier").map(|s| s.to_lowercase());
     let available_only = params
         .get("available")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    let dropdown_only = params
+        .get("dropdown_only")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
 
@@ -6883,6 +7123,9 @@ pub async fn list_models(
                     return false;
                 }
             }
+            if dropdown_only && !state.kernel.model_show_in_dropdowns(&m.id) {
+                return false;
+            }
             true
         })
         .map(|m| {
@@ -6890,6 +7133,7 @@ pub async fn list_models(
                 .get_provider(&m.provider)
                 .map(|p| state.kernel.provider_models_usable(p))
                 .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom);
+            let show_in_dropdowns = state.kernel.model_show_in_dropdowns(&m.id);
             serde_json::json!({
                 "id": m.id,
                 "display_name": m.display_name,
@@ -6903,6 +7147,7 @@ pub async fn list_models(
                 "supports_vision": m.supports_vision,
                 "supports_streaming": m.supports_streaming,
                 "available": available,
+                "show_in_dropdowns": show_in_dropdowns,
             })
         })
         .collect();
@@ -6925,6 +7170,60 @@ pub async fn list_models(
             "available": available_count,
         })),
     )
+}
+
+/// GET /api/models/dropdown-disabled — Current list of model IDs hidden from dropdowns.
+pub async fn get_model_dropdown_disabled(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let mut ids: Vec<String> = state
+        .kernel
+        .model_dropdown_disabled_ids
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .cloned()
+        .collect();
+    ids.sort();
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({ "disabled_ids": ids })),
+    )
+}
+
+/// PUT /api/models/dropdown-disabled — Set which catalog models are hidden from dropdowns.
+///
+/// Body: `{ "disabled_ids": ["model-id", ...] }`. Persisted to `model_dropdown_disabled.json`.
+/// Models not listed are shown in pickers (default: all shown).
+pub async fn put_model_dropdown_disabled(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let Some(arr) = body.get("disabled_ids").and_then(|v| v.as_array()) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "JSON body must include \"disabled_ids\" array"})),
+        )
+            .into_response();
+    };
+    let mut set = HashSet::new();
+    for v in arr {
+        if let Some(s) = v.as_str() {
+            if !s.is_empty() {
+                set.insert(s.to_string());
+            }
+        }
+    }
+    match state.kernel.replace_model_dropdown_disabled(set) {
+        Ok(()) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"status": "ok"})),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }
 
 /// GET /api/models/aliases — List all alias-to-model mappings.
@@ -8198,7 +8497,7 @@ fn merge_provider_enabled_into_config_toml(
 /// PUT /api/providers/{name}/enabled — Opt a provider in/out for model catalog usage.
 ///
 /// Body: `{ "enabled": true | false }`. Persisted under `[provider_enabled]` in `config.toml`.
-/// Cloud providers default to enabled when unset; local providers default to disabled.
+/// Providers default to disabled when unset; non-empty env API keys still enable the provider.
 /// OS environment API keys always enable the provider regardless of this flag.
 pub async fn set_provider_enabled(
     State(state): State<Arc<AppState>>,

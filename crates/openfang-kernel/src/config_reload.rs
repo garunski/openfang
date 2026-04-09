@@ -5,7 +5,8 @@
 //!
 //! **No-op** (informational only): log_level, language, mode.
 //!
-//! **Restart required**: api_listen, api_key, network, memory.
+//! **Restart required**: api_listen, api_key, network, `[memory]` substrate fields.
+//! `memory_default_embedding` is hot-reloadable (rebuilds embedding driver).
 
 use openfang_types::config::{KernelConfig, ReloadMode};
 use tracing::{info, warn};
@@ -47,6 +48,8 @@ pub enum HotAction {
     UpdateDefaultModel,
     /// Orchestrator default model changed — picked up when orchestrator agents spawn.
     UpdateOrchestratorDefaultModel,
+    /// Memory embedding default (`memory_default_embedding`) — rebuilds embedding driver.
+    UpdateMemoryDefaultEmbedding,
     /// `[provider_enabled]` toggles (Settings → Providers).
     UpdateProviderEnabled,
 }
@@ -178,6 +181,13 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
     ) {
         plan.hot_actions
             .push(HotAction::UpdateOrchestratorDefaultModel);
+    }
+
+    if field_changed(
+        &old.memory_default_embedding,
+        &new.memory_default_embedding,
+    ) {
+        plan.hot_actions.push(HotAction::UpdateMemoryDefaultEmbedding);
     }
 
     // Home/data directory changes
@@ -437,6 +447,22 @@ mod tests {
             "default_model should be hot-reloadable"
         );
         assert!(plan.hot_actions.contains(&HotAction::UpdateDefaultModel));
+    }
+
+    #[test]
+    fn test_memory_default_embedding_hot_reloadable() {
+        let a = default_cfg();
+        let mut b = default_cfg();
+        b.memory_default_embedding.provider = "openai".to_string();
+        b.memory_default_embedding.model = "text-embedding-3-small".to_string();
+        let plan = build_reload_plan(&a, &b);
+        assert!(
+            !plan.restart_required,
+            "memory_default_embedding should be hot-reloadable"
+        );
+        assert!(plan
+            .hot_actions
+            .contains(&HotAction::UpdateMemoryDefaultEmbedding));
     }
 
     // -----------------------------------------------------------------------

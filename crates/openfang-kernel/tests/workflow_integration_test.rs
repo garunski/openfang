@@ -8,7 +8,8 @@
 
 use openfang_kernel::workflow::{
     workflow_from_create_request_json, ErrorMode, StepAgent, StepMode, Workflow, WorkflowEngine,
-    WorkflowId, WorkflowStep, BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME,
+    WorkflowId, WorkflowStep, BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME,
+    BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME,
 };
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::{AgentId, AgentManifest};
@@ -163,7 +164,7 @@ memory_write = ["self.*"]
     // Verify workflow run can be created
     let run_id = kernel
         .workflows
-        .create_run(wf_id, "test input".to_string())
+        .create_run(wf_id, "test input".to_string(), None)
         .await;
     assert!(run_id.is_some());
 
@@ -224,7 +225,7 @@ memory_write = ["self.*"]
     // Can create run (agent resolution happens at execute time)
     let run_id = kernel
         .workflows
-        .create_run(wf_id, "hello".to_string())
+        .create_run(wf_id, "hello".to_string(), None)
         .await;
     assert!(run_id.is_some());
 
@@ -413,6 +414,10 @@ async fn test_workflow_e2e_with_groq() {
 // Canonical JSON: `openfang-kernel/bundled/workflows/workflow-full-cycle.json`
 // (keep in sync with `openfang-custom/.mise/workflows/workflow-full-cycle.json`).
 // ---------------------------------------------------------------------------
+// Doc-to-tasks template
+// Canonical JSON: `openfang-kernel/bundled/workflows/workflow-doc-to-tasks.json`
+// (keep in sync with `openfang-custom/.mise/workflows/workflow-doc-to-tasks.json`).
+// ---------------------------------------------------------------------------
 
 #[test]
 fn test_pipeline_full_cycle_template_parses() {
@@ -438,6 +443,27 @@ fn test_pipeline_full_cycle_template_parses() {
     ));
 }
 
+#[test]
+fn test_pipeline_doc_to_tasks_template_parses() {
+    let raw = include_str!("../bundled/workflows/workflow-doc-to-tasks.json");
+    let v: serde_json::Value = serde_json::from_str(raw).unwrap();
+    let wf = workflow_from_create_request_json(&v).expect("parse template");
+    assert_eq!(wf.name, "workflow-doc-to-tasks");
+    assert_eq!(wf.steps.len(), 3);
+    assert_eq!(wf.steps[0].name, "resolve_doc_context");
+    assert_eq!(wf.steps[1].name, "cursor_create_tasks_from_doc");
+    assert_eq!(wf.steps[2].name, "confirm_new_and_notify_user");
+    assert!(matches!(
+        wf.steps[1].error_mode,
+        ErrorMode::Retry { max_retries: 2 }
+    ));
+    assert!(wf.project_id.is_none());
+    assert!(matches!(
+        &wf.steps[2].agent,
+        StepAgent::ByName { name } if name == "workflow-coordinator-hand"
+    ));
+}
+
 #[tokio::test]
 async fn test_pipeline_full_cycle_execute_run_mock() {
     let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
@@ -449,6 +475,7 @@ async fn test_pipeline_full_cycle_execute_run_mock() {
         .create_run(
             wf_id,
             r#"{"task_id":"TASK-1","repo_spoke_label":"repo:dev"}"#.to_string(),
+            None,
         )
         .await
         .expect("create_run");
@@ -478,29 +505,42 @@ async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
             .any(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME),
         "bundled pipeline should be registered"
     );
+    assert!(
+        wfs.iter()
+            .any(|w| w.name == BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME),
+        "bundled doc-to-tasks workflow should be registered"
+    );
     let wf_dir = kernel.config.home_dir.join("workflows");
     assert!(
         wf_dir.exists(),
         "workflows dir should exist after bundled install"
     );
-    let mut found_file = false;
+    let mut found_full = false;
+    let mut found_doc = false;
     for entry in std::fs::read_dir(&wf_dir).unwrap() {
         let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
         if text.contains(BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME) {
-            found_file = true;
-            break;
+            found_full = true;
+        }
+        if text.contains(BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME) {
+            found_doc = true;
         }
     }
     assert!(
-        found_file,
-        "persisted workflow JSON should mention bundled name"
+        found_full && found_doc,
+        "persisted workflow JSON should mention both bundled workflow names"
     );
 
     kernel.init_default_workflows().await;
     let wfs2 = kernel.workflows.list_workflows().await;
-    let n = wfs2
+    let n_full = wfs2
         .iter()
         .filter(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME)
         .count();
-    assert_eq!(n, 1, "second init should not duplicate bundled workflow");
+    assert_eq!(n_full, 1, "second init should not duplicate full-cycle workflow");
+    let n_doc = wfs2
+        .iter()
+        .filter(|w| w.name == BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME)
+        .count();
+    assert_eq!(n_doc, 1, "second init should not duplicate doc-to-tasks workflow");
 }

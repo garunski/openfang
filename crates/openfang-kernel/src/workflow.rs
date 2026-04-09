@@ -151,6 +151,9 @@ pub enum ErrorMode {
 /// Workflow name of the bundled doc-2 full-cycle template installed on hub init.
 pub const BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME: &str = "workflow-full-cycle";
 
+/// Bundled workflow: knowledge doc → new backlog tasks (status New).
+pub const BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME: &str = "workflow-doc-to-tasks";
+
 /// Parses the same JSON body shape as `POST /api/workflows` into a new [`Workflow`]
 /// (fresh id and `created_at`). Shared by the API and bundled default workflow install.
 pub fn workflow_from_create_request_json(req: &serde_json::Value) -> Result<Workflow, String> {
@@ -253,6 +256,9 @@ pub struct WorkflowRun {
     pub workflow_id: WorkflowId,
     /// Workflow name (copied for quick access).
     pub workflow_name: String,
+    /// Project context when started (dashboard project run or workflow owned by a project).
+    #[serde(default)]
+    pub project_id: Option<ProjectId>,
     /// Initial input to the workflow.
     pub input: String,
     /// Current state.
@@ -358,6 +364,7 @@ impl WorkflowEngine {
         &self,
         workflow_id: WorkflowId,
         input: String,
+        project_id: Option<ProjectId>,
     ) -> Option<WorkflowRunId> {
         let workflow = self.workflows.read().await.get(&workflow_id)?.clone();
         let run_id = WorkflowRunId::new();
@@ -366,6 +373,7 @@ impl WorkflowEngine {
             id: run_id,
             workflow_id,
             workflow_name: workflow.name,
+            project_id,
             input,
             state: WorkflowRunState::Pending,
             step_results: Vec::new(),
@@ -456,6 +464,26 @@ impl WorkflowEngine {
             .cloned()
             .collect();
         runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
+        runs
+    }
+
+    /// Runs that were started with this project context, newest first.
+    pub async fn list_runs_for_project(
+        &self,
+        project_id: ProjectId,
+        limit: usize,
+    ) -> Vec<WorkflowRun> {
+        let lim = limit.max(1);
+        let mut runs: Vec<WorkflowRun> = self
+            .runs
+            .read()
+            .await
+            .values()
+            .filter(|r| r.project_id == Some(project_id))
+            .cloned()
+            .collect();
+        runs.sort_by_key(|r| std::cmp::Reverse(r.started_at));
+        runs.truncate(lim);
         runs
     }
 
@@ -984,7 +1012,9 @@ mod tests {
         let wf = test_workflow();
         let wf_id = engine.register(wf).await;
 
-        let run_id = engine.create_run(wf_id, "test input".to_string()).await;
+        let run_id = engine
+            .create_run(wf_id, "test input".to_string(), None)
+            .await;
         assert!(run_id.is_some());
 
         let run = engine.get_run(run_id.unwrap()).await.unwrap();
@@ -1018,7 +1048,7 @@ mod tests {
         let wf = test_workflow();
         let wf_id = engine.register(wf).await;
         let run_id = engine
-            .create_run(wf_id, "raw data".to_string())
+            .create_run(wf_id, "raw data".to_string(), None)
             .await
             .unwrap();
 
@@ -1076,7 +1106,7 @@ mod tests {
         };
         let wf_id = engine.register(wf).await;
         let run_id = engine
-            .create_run(wf_id, "all good".to_string())
+            .create_run(wf_id, "all good".to_string(), None)
             .await
             .unwrap();
 
@@ -1128,7 +1158,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "data".to_string(), None)
+            .await
+            .unwrap();
 
         // This sender returns output containing "ERROR"
         let sender = |_id: AgentId, _msg: String| async move {
@@ -1168,7 +1201,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "draft".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "draft".to_string(), None)
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1215,7 +1251,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "data".to_string(), None)
+            .await
+            .unwrap();
 
         let sender = |_id: AgentId, _msg: String| async move {
             Ok(("iteration output".to_string(), 10u64, 5u64))
@@ -1263,7 +1302,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "data".to_string(), None)
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1310,7 +1352,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "data".to_string(), None)
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1379,7 +1424,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "start".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "start".to_string(), None)
+            .await
+            .unwrap();
 
         let call_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
         let cc = call_count.clone();
@@ -1449,7 +1497,10 @@ mod tests {
             created_at: Utc::now(),
         };
         let wf_id = engine.register(wf).await;
-        let run_id = engine.create_run(wf_id, "data".to_string()).await.unwrap();
+        let run_id = engine
+            .create_run(wf_id, "data".to_string(), None)
+            .await
+            .unwrap();
 
         let sender =
             |_id: AgentId, msg: String| async move { Ok((format!("Done: {msg}"), 10u64, 5u64)) };

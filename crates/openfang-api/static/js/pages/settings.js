@@ -18,6 +18,8 @@ function settingsPage() {
     modelsCatalogAvailableOnly: true,
     defaultsOrchestratorProvider: '',
     defaultsOrchestratorModel: '',
+    defaultsMemoryEmbeddingProvider: '',
+    defaultsMemoryEmbeddingModel: '',
     defaultsSaving: false,
     showCustomModelForm: false,
     customModelId: '',
@@ -31,6 +33,8 @@ function settingsPage() {
     providerTesting: {},
     providerTestResults: {},
     providerEnabledSaving: {},
+    modelDropdownSaving: false,
+    modelDropdownSaveTimer: null,
     copilotOAuth: { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 },
     customProviderName: '',
     customProviderUrl: '',
@@ -237,6 +241,9 @@ function settingsPage() {
         var q = this.modelsCatalogAvailableOnly ? '?available=true' : '';
         var data = await OpenFangAPI.get('/api/models' + q);
         this.models = data.models || [];
+        for (var i = 0; i < this.models.length; i++) {
+          if (this.models[i].show_in_dropdowns === undefined) this.models[i].show_in_dropdowns = true;
+        }
       } catch(e) { this.models = []; }
     },
 
@@ -248,7 +255,10 @@ function settingsPage() {
 
     async openDefaultsTab() {
       this.tab = 'defaults';
-      await this.refreshDefaultsOrchestratorForm();
+      await Promise.all([
+        this.refreshDefaultsOrchestratorForm(),
+        this.refreshDefaultsMemoryEmbeddingForm(),
+      ]);
     },
 
     async refreshDefaultsOrchestratorForm() {
@@ -267,6 +277,7 @@ function settingsPage() {
       var p = (this.defaultsOrchestratorProvider || '').trim();
       return (this.models || []).filter(function(m) {
         if (!m.available) return false;
+        if (m.show_in_dropdowns === false) return false;
         return !p || m.provider === p;
       });
     },
@@ -274,7 +285,7 @@ function settingsPage() {
     get uniqueDefaultsOrchestratorProviders() {
       var seen = {};
       (this.models || []).forEach(function(m) {
-        if (m.provider && m.available) seen[m.provider] = true;
+        if (m.provider && m.available && m.show_in_dropdowns !== false) seen[m.provider] = true;
       });
       return Object.keys(seen).sort();
     },
@@ -312,6 +323,61 @@ function settingsPage() {
       await this.saveOrchestratorDefaults();
     },
 
+    async refreshDefaultsMemoryEmbeddingForm() {
+      try {
+        var c = await OpenFangAPI.get('/api/config');
+        var m = c.memory_default_embedding || {};
+        this.defaultsMemoryEmbeddingProvider = m.provider != null ? String(m.provider) : '';
+        this.defaultsMemoryEmbeddingModel = m.model != null ? String(m.model) : '';
+        if (!this.models.length) await this.loadModels();
+        this.onDefaultsMemoryEmbeddingProviderChange();
+      } catch(e) {
+        OpenFangToast.error(e.message || 'Could not load memory embedding defaults');
+      }
+    },
+
+    get defaultsMemoryEmbeddingModels() {
+      var p = (this.defaultsMemoryEmbeddingProvider || '').trim();
+      return (this.models || []).filter(function(m) {
+        if (!m.available) return false;
+        if (m.show_in_dropdowns === false) return false;
+        return !p || m.provider === p;
+      });
+    },
+
+    onDefaultsMemoryEmbeddingProviderChange() {
+      var self = this;
+      var ok = this.defaultsMemoryEmbeddingModels.some(function(m) {
+        return String(m.id) === String(self.defaultsMemoryEmbeddingModel);
+      });
+      if (!ok) this.defaultsMemoryEmbeddingModel = '';
+    },
+
+    async saveMemoryEmbeddingDefaults() {
+      var prov = (this.defaultsMemoryEmbeddingProvider || '').trim();
+      var mod = (this.defaultsMemoryEmbeddingModel || '').trim();
+      if ((prov && !mod) || (!prov && mod)) {
+        OpenFangToast.error('Choose both a provider and a model from the lists, or clear both to use [memory] in config.toml.');
+        return;
+      }
+      this.defaultsSaving = true;
+      try {
+        await OpenFangAPI.post('/api/config/set', { path: 'memory_default_embedding.provider', value: prov });
+        await OpenFangAPI.post('/api/config/set', { path: 'memory_default_embedding.model', value: mod });
+        OpenFangToast.success('Saved. Memory semantic search uses this embedding provider when set.');
+        await this.refreshDefaultsMemoryEmbeddingForm();
+      } catch(e) {
+        OpenFangToast.error(e.message || 'Save failed');
+      }
+      this.defaultsSaving = false;
+    },
+
+    async clearMemoryEmbeddingDefaults() {
+      this.defaultsMemoryEmbeddingProvider = '';
+      this.defaultsMemoryEmbeddingModel = '';
+      await this.saveMemoryEmbeddingDefaults();
+    },
+
     async addCustomModel() {
       var id = this.customModelId.trim();
       if (!id) return;
@@ -330,6 +396,51 @@ function settingsPage() {
       } catch(e) {
         this.customModelStatus = 'Error: ' + (e.message || 'Failed');
       }
+    },
+
+    async saveModelDropdownVisibility(opts) {
+      var silent = opts && opts.silent === true;
+      var merged = {};
+      try {
+        var cur = await OpenFangAPI.get('/api/models/dropdown-disabled');
+        var arr = (cur && cur.disabled_ids) || [];
+        for (var j = 0; j < arr.length; j++) merged[String(arr[j])] = true;
+      } catch (e) {
+        merged = {};
+      }
+      for (var i = 0; i < (this.models || []).length; i++) {
+        var m = this.models[i];
+        var id = String(m.id);
+        if (m.show_in_dropdowns === false) merged[id] = true;
+        else delete merged[id];
+      }
+      var disabled = Object.keys(merged);
+      this.modelDropdownSaving = true;
+      try {
+        await OpenFangAPI.put('/api/models/dropdown-disabled', { disabled_ids: disabled });
+        if (!silent) {
+          OpenFangToast.success('Saved dropdown list (' + disabled.length + ' hidden)');
+        }
+        await this.loadModels();
+      } catch (e) {
+        OpenFangToast.error('Failed to save: ' + (e.message || String(e)));
+      }
+      this.modelDropdownSaving = false;
+    },
+
+    scheduleModelDropdownSave() {
+      var self = this;
+      if (this.modelDropdownSaveTimer) clearTimeout(this.modelDropdownSaveTimer);
+      this.modelDropdownSaveTimer = setTimeout(function() {
+        self.modelDropdownSaveTimer = null;
+        self.saveModelDropdownVisibility({ silent: true });
+      }, 400);
+    },
+
+    toggleModelShowInDropdowns(m) {
+      var on = m.show_in_dropdowns !== false;
+      m.show_in_dropdowns = !on;
+      this.scheduleModelDropdownSave();
     },
 
     async deleteCustomModel(modelId) {
@@ -413,23 +524,28 @@ function settingsPage() {
       return Object.keys(seen).sort();
     },
 
-    providerAuthClass(p) {
-      if (p.models_usable) return 'auth-configured';
-      if (p.env_key_configured) return 'auth-configured';
-      if (p.auth_status === 'configured') return 'auth-configured';
-      if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'auth-not-set';
-      return 'auth-no-key';
+    providerEnabledBadgeText(p) {
+      return p.effective_enabled ? 'Enabled' : 'Not enabled';
     },
 
-    providerAuthText(p) {
-      if (p.models_usable) return 'Active';
-      if (p.env_key_configured) return 'Env key';
-      if (p.auth_status === 'configured') return 'Key saved';
-      if (p.auth_status === 'not_set' || p.auth_status === 'missing') {
-        if (p.id === 'claude-code') return 'Not Installed';
-        return 'Not Set';
-      }
-      return 'No Key Needed';
+    providerEnabledBadgeClass(p) {
+      return p.effective_enabled ? 'badge-success' : 'badge-muted';
+    },
+
+    providerActiveBadgeText(p) {
+      return p.models_usable ? 'Active' : 'Not active';
+    },
+
+    providerActiveBadgeClass(p) {
+      return p.models_usable ? 'badge-success' : 'badge-muted';
+    },
+
+    /** Dashboard key field: only after user turns the provider on (not env-only). */
+    showProviderKeyInput(p) {
+      if (!p.api_key_env || p.key_required === false) return false;
+      if (p.env_key_configured) return false;
+      if (!p.settings_enabled) return false;
+      return p.auth_status !== 'configured';
     },
 
     providerCardClass(p) {
@@ -471,19 +587,27 @@ function settingsPage() {
       return s + 's';
     },
 
-    async setProviderEnabled(provider, ev) {
-      var enabled = ev.target.checked;
-      this.providerEnabledSaving[provider.id] = true;
+    providerToggleActive(p) {
+      return !!(p.settings_enabled || p.env_key_configured);
+    },
+
+    providerToggleDisabled(p) {
+      return !!p.env_key_configured;
+    },
+
+    async toggleProviderEnabled(p) {
+      if (p.env_key_configured || this.providerEnabledSaving[p.id]) return;
+      var enabled = !p.settings_enabled;
+      this.providerEnabledSaving[p.id] = true;
       try {
-        await OpenFangAPI.put('/api/providers/' + encodeURIComponent(provider.id) + '/enabled', { enabled: enabled });
-        OpenFangToast.success((enabled ? 'Enabled ' : 'Disabled ') + provider.display_name);
+        await OpenFangAPI.put('/api/providers/' + encodeURIComponent(p.id) + '/enabled', { enabled: enabled });
+        OpenFangToast.success((enabled ? 'Enabled ' : 'Disabled ') + p.display_name);
         await this.loadProviders();
         await this.loadModels();
       } catch (e) {
-        ev.target.checked = !enabled;
         OpenFangToast.error('Failed to update provider: ' + (e.message || String(e)));
       }
-      this.providerEnabledSaving[provider.id] = false;
+      this.providerEnabledSaving[p.id] = false;
     },
 
     async saveProviderKey(provider) {

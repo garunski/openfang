@@ -134,11 +134,9 @@ impl ModelCatalog {
         }
     }
 
-    /// `[provider_enabled]` entry when set; otherwise defaults (cloud on, local off).
+    /// `[provider_enabled]` entry when set; otherwise **off** until toggled on in Settings.
     pub fn provider_user_enabled_defaulting(p: &ProviderInfo, map: &HashMap<String, bool>) -> bool {
-        map.get(&p.id)
-            .copied()
-            .unwrap_or(p.key_required)
+        map.get(&p.id).copied().unwrap_or(false)
     }
 
     /// User/dashboard intent plus env auto-enable: env key always enables the provider.
@@ -335,8 +333,8 @@ impl ModelCatalog {
     /// List models that are available (from configured + enabled providers).
     ///
     /// `provider_enabled` is `[provider_enabled]` from config: missing keys default to
-    /// enabled for cloud providers and **disabled** for local providers unless env keys
-    /// apply ([`Self::provider_primary_env_configured`]).
+    /// **disabled** until toggled on in Settings; non-empty env API keys still opt a
+    /// provider in ([`Self::provider_primary_env_configured`]).
     pub fn available_models_with_enabled(
         &self,
         provider_enabled: &HashMap<String, bool>,
@@ -4100,7 +4098,7 @@ mod tests {
         let available = catalog.available_models();
         assert!(
             !available.iter().any(|m| m.provider == "ollama"),
-            "local providers default to disabled until [provider_enabled]"
+            "providers default to disabled until [provider_enabled] or env API key"
         );
     }
 

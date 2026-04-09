@@ -242,6 +242,9 @@
 
 .main-content > .agents-hub-chrome {
   flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .nav-icon {
@@ -288,8 +291,10 @@
 
 /* Page wrapper divs (rendered by x-if) must fill the column
    and be flex containers so .page-body can scroll.
-   Exclude #app-boot-splash: absolute overlay + flex/min-height/overflow can break first paint. */
-.main-content > div:not(#app-boot-splash) {
+   Exclude #app-boot-splash: absolute overlay + flex/min-height/overflow can break first paint.
+   Exclude .agents-hub-chrome: thin header+tabs strip only (must not flex-grow — :not(#id) beats
+   .agents-hub-chrome alone in specificity, so we omit it from this rule entirely). */
+.main-content > div:not(#app-boot-splash):not(.agents-hub-chrome) {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -364,20 +369,21 @@
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px 16px;
   width: 100%;
   flex: 1 1 auto;
   min-width: 0;
 }
 
+/* Keep segmented sub-views + actions on the right (same as Tasks / Knowledge), including when the bar wraps. */
 .project-subnav__trailing {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 12px;
   justify-content: flex-end;
-  margin-left: 0;
+  margin-left: auto;
   min-width: 0;
   flex: 0 0 auto;
 }

@@ -1055,10 +1055,19 @@ impl LlmDriver for GeminiDriver {
                 });
             }
 
+            // Gemini often sets finish_reason STOP when the model emits function calls with no
+            // assistant text. Mapping STOP → EndTurn would skip the ToolUse branch in agent_loop
+            // and hit the empty-text guard while discarding executable tool calls.
             let stop_reason = match finish_reason.as_deref() {
-                Some("STOP") => StopReason::EndTurn,
                 Some("MAX_TOKENS") => StopReason::MaxTokens,
                 Some("SAFETY") => StopReason::EndTurn,
+                Some("STOP") | None => {
+                    if !tool_calls.is_empty() {
+                        StopReason::ToolUse
+                    } else {
+                        StopReason::EndTurn
+                    }
+                }
                 _ => {
                     if !tool_calls.is_empty() {
                         StopReason::ToolUse

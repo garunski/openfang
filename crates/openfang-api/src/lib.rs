@@ -47,17 +47,23 @@ mod dashboard_static_tests {
     }
 
     #[test]
-    fn project_workflows_include_run_progress_panel() {
+    fn project_workflow_runs_tab_uses_engine_endpoint() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let html =
             std::fs::read_to_string(root.join("static/index_body.html")).expect("read index_body");
         let js =
             std::fs::read_to_string(root.join("static/js/pages/projects.js")).expect("read projects.js");
-        assert!(html.contains("wfRunsForWorkflow"), "expected runs panel markup");
         assert!(
-            js.contains("openWorkflowRunsPanel"),
-            "expected workflow runs panel opener"
+            html.contains("detailWorkflowRuns"),
+            "expected workflow runs table data source"
         );
-        assert!(js.contains("fetchWorkflowRunDetail"), "expected run detail fetch");
+        assert!(
+            js.contains("workflow-runs?limit="),
+            "expected project workflow-runs API path"
+        );
+        assert!(
+            !js.contains("openWorkflowRunsPanel"),
+            "removed per-project workflow definitions panel"
+        );
     }
 }

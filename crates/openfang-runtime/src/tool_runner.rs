@@ -336,20 +336,6 @@ pub async fn execute_tool(
             };
         }
 
-        "backlog_task_create" => {
-            return match tool_backlog_task_create(input, kernel).await {
-                Ok((content, is_error)) => ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content,
-                    is_error,
-                },
-                Err(e) => ToolResult {
-                    tool_use_id: tool_use_id.to_string(),
-                    content: format!("Error: {e}"),
-                    is_error: true,
-                },
-            };
-        }
         "backlog_task_list" => {
             return match tool_backlog_task_list(input, kernel).await {
                 Ok((content, is_error)) => ToolResult {
@@ -947,20 +933,6 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "rollback_to_status": { "type": "string", "description": "Recorded on failure outcome (e.g. Ready for Dev); does not edit the backlog task" }
                 },
                 "required": ["task_id", "prompt"]
-            }),
-        },
-        ToolDefinition {
-            name: "backlog_task_create".to_string(),
-            description: "Create a Backlog.md task via `backlog task create` in an allowlisted backlog root. Returns structured JSON (exit_code, stdout, stderr, parsed hints).".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "title": { "type": "string", "description": "Task title" },
-                    "labels": { "type": "array", "items": { "type": "string" }, "description": "Label strings" },
-                    "priority": { "type": "string", "enum": ["high", "medium", "low"], "description": "Task priority" },
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
-                },
-                "required": ["title"]
             }),
         },
         ToolDefinition {
@@ -2381,19 +2353,6 @@ pub(crate) fn parse_backlog_doc_list_plain(text: &str) -> serde_json::Value {
     serde_json::json!({ "docs": docs })
 }
 
-fn parse_backlog_created_task_id(text: &str) -> Option<String> {
-    for line in text.lines() {
-        let t = line.trim();
-        if let Some(rest) = t.strip_prefix("Task ") {
-            return rest
-                .split_whitespace()
-                .next()
-                .map(std::string::ToString::to_string);
-        }
-    }
-    None
-}
-
 fn validate_backlog_doc_relative_path(path: &str) -> Result<String, String> {
     let t = path.trim();
     if t.is_empty() {
@@ -2457,14 +2416,6 @@ fn pipeline_tool_actor(caller_agent_id: Option<&str>) -> String {
     caller_agent_id.unwrap_or("unknown").to_string()
 }
 
-fn normalize_backlog_priority(s: &str) -> Result<String, String> {
-    let p = s.to_ascii_lowercase();
-    match p.as_str() {
-        "high" | "medium" | "low" => Ok(p),
-        _ => Err(format!("invalid priority '{s}'; use high, medium, or low")),
-    }
-}
-
 fn backlog_tool_json_response(
     exit_code: i32,
     stdout: &str,
@@ -2479,58 +2430,6 @@ fn backlog_tool_json_response(
     });
     let json = serde_json::to_string(&body).map_err(|e| e.to_string())?;
     Ok((json, exit_code != 0))
-}
-
-async fn tool_backlog_task_create(
-    input: &serde_json::Value,
-    kernel: Option<&Arc<dyn KernelHandle>>,
-) -> Result<(String, bool), String> {
-    let kh = require_kernel(kernel)?;
-    let title = input["title"]
-        .as_str()
-        .ok_or_else(|| "Missing required parameter 'title'".to_string())?;
-    if title.trim().is_empty() {
-        return Err("title must be non-empty".to_string());
-    }
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
-
-    let mut args: Vec<String> = vec![
-        "task".into(),
-        "create".into(),
-        title.to_string(),
-        "--plain".into(),
-    ];
-    if let Some(p) = input.get("priority").and_then(|v| v.as_str()) {
-        let np = normalize_backlog_priority(p)?;
-        args.push("--priority".into());
-        args.push(np);
-    }
-    if let Some(arr) = input.get("labels").and_then(|v| v.as_array()) {
-        if !arr.is_empty() {
-            let joined: Vec<String> = arr
-                .iter()
-                .filter_map(|v| {
-                    v.as_str()
-                        .map(str::trim)
-                        .filter(|s| !s.is_empty())
-                        .map(String::from)
-                })
-                .collect();
-            if !joined.is_empty() {
-                args.push("-l".into());
-                args.push(joined.join(","));
-            }
-        }
-    }
-
-    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
-    let parsed = serde_json::json!({
-        "created_task_id": parse_backlog_created_task_id(&stdout),
-    });
-    backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
 
 async fn tool_backlog_task_list(
@@ -4905,8 +4804,8 @@ mod tests {
     fn test_builtin_tool_definitions() {
         let tools = builtin_tool_definitions();
         assert!(
-            tools.len() >= 40,
-            "Expected at least 40 tools, got {}",
+            tools.len() >= 39,
+            "Expected at least 39 tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -4916,7 +4815,7 @@ mod tests {
         assert!(names.contains(&"enforce_quality_gate"));
         assert!(names.contains(&"trigger_cursor_worker"));
         assert!(names.contains(&"run_workflow_cycle"));
-        assert!(names.contains(&"backlog_task_create"));
+        assert!(!names.contains(&"backlog_task_create"));
         assert!(names.contains(&"backlog_task_list"));
         assert!(names.contains(&"backlog_task_view"));
         assert!(names.contains(&"backlog_task_edit"));

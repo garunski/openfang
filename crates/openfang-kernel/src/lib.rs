@@ -19,6 +19,7 @@ pub mod git_worktree;
 pub mod heartbeat;
 pub mod kernel;
 pub mod metering;
+pub mod model_dropdown;
 pub mod pairing;
 pub mod project_context;
 pub mod project_store;

@@ -62,7 +62,6 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "run_workflow_cycle"
             | "record_git_action"
             | "record_workflow_outcome"
-            | "backlog_task_create"
             | "backlog_task_list"
             | "backlog_task_view"
             | "backlog_task_edit"

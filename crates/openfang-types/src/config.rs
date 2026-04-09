@@ -1008,6 +1008,11 @@ pub struct KernelConfig {
     /// (e.g. Mattermost) spawn with this LLM; otherwise the hand's bundled model applies.
     #[serde(default)]
     pub orchestrator_default_model: DefaultModelConfig,
+    /// Settings default for **memory embeddings** (semantic recall). When both `provider` and
+    /// `model` are non-empty, this overrides `[memory].embedding_provider` / `embedding_model`
+    /// for the embedding driver. When empty, `[memory]` and auto-detect apply.
+    #[serde(default)]
+    pub memory_default_embedding: DefaultModelConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
     /// Network configuration.
@@ -1123,8 +1128,7 @@ pub struct KernelConfig {
     pub provider_api_keys: HashMap<String, String>,
     /// Per-provider opt-in for using models in OpenFang (Settings → Providers).
     ///
-    /// Missing entry uses defaults: cloud providers (`key_required`) default to enabled;
-    /// local providers default to disabled until toggled on. If the provider's API key
+    /// Missing entry defaults to **disabled** until toggled on. If the provider's API key
     /// env var is set in the process environment (non-empty), the provider is always
     /// treated as enabled regardless of this map.
     #[serde(default)]
@@ -1584,6 +1588,12 @@ impl Default for KernelConfig {
                 api_key_env: String::new(),
                 base_url: None,
             },
+            memory_default_embedding: DefaultModelConfig {
+                provider: String::new(),
+                model: String::new(),
+                api_key_env: String::new(),
+                base_url: None,
+            },
             memory: MemoryConfig::default(),
             network: NetworkConfig::default(),
             channels: ChannelsConfig::default(),
@@ -1693,6 +1703,7 @@ impl std::fmt::Debug for KernelConfig {
             .field("network_enabled", &self.network_enabled)
             .field("default_model", &self.default_model)
             .field("orchestrator_default_model", &self.orchestrator_default_model)
+            .field("memory_default_embedding", &self.memory_default_embedding)
             .field("memory", &self.memory)
             .field("network", &self.network)
             .field("channels", &self.channels)
@@ -1834,7 +1845,8 @@ pub struct MemoryConfig {
     pub consolidation_threshold: u64,
     /// Memory decay rate (0.0 = no decay, 1.0 = aggressive decay).
     pub decay_rate: f32,
-    /// Embedding provider (e.g., "openai", "ollama"). None = auto-detect.
+    /// Embedding provider (e.g., "openai", "gemini", "ollama"). None = auto-detect
+    /// (`GOOGLE_API_KEY` / `GEMINI_API_KEY` → Gemini embeddings before probing local Ollama).
     #[serde(default)]
     pub embedding_provider: Option<String>,
     /// Environment variable name for the embedding API key.

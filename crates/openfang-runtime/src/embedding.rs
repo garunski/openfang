@@ -104,11 +104,15 @@ impl OpenAIEmbeddingDriver {
 
 /// Infer embedding dimensions from model name.
 fn infer_dimensions(model: &str) -> usize {
-    match model {
+    let m = model.trim();
+    match m {
         // OpenAI
         "text-embedding-3-small" => 1536,
         "text-embedding-3-large" => 3072,
         "text-embedding-ada-002" => 1536,
+        // Google Generative Language API (Gemini embeddings)
+        "text-embedding-004" => 768,
+        "gemini-embedding-001" => 3072,
         // Sentence Transformers / local models
         "all-MiniLM-L6-v2" => 384,
         "all-MiniLM-L12-v2" => 384,
@@ -117,6 +121,127 @@ fn infer_dimensions(model: &str) -> usize {
         "mxbai-embed-large" => 1024,
         // Default to 1536 (most common)
         _ => 1536,
+    }
+}
+
+fn normalize_gemini_embedding_model_id(model: &str) -> String {
+    let m = model.trim();
+    if let Some(rest) = m.strip_prefix("models/") {
+        rest.to_string()
+    } else {
+        m.to_string()
+    }
+}
+
+/// Google AI Gemini embeddings (`embedContent`); uses `GOOGLE_API_KEY` as query key.
+pub struct GeminiEmbeddingDriver {
+    api_key: Zeroizing<String>,
+    base_url: String,
+    model_id: String,
+    client: reqwest::Client,
+    dims: usize,
+}
+
+#[derive(Serialize)]
+struct GeminiEmbedBody {
+    model: String,
+    content: GeminiContent,
+}
+
+#[derive(Serialize)]
+struct GeminiContent {
+    parts: Vec<GeminiPart>,
+}
+
+#[derive(Serialize)]
+struct GeminiPart {
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct GeminiEmbedResponse {
+    embedding: GeminiEmbedding,
+}
+
+#[derive(Deserialize)]
+struct GeminiEmbedding {
+    values: Vec<f32>,
+}
+
+impl GeminiEmbeddingDriver {
+    fn new(api_key: String, model: &str, base_url: String) -> Result<Self, EmbeddingError> {
+        let model_id = normalize_gemini_embedding_model_id(model);
+        if model_id.is_empty() {
+            return Err(EmbeddingError::Parse(
+                "Gemini embedding model id is empty".into(),
+            ));
+        }
+        let dims = infer_dimensions(model_id.as_str());
+        Ok(Self {
+            api_key: Zeroizing::new(api_key),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            model_id,
+            client: reqwest::Client::new(),
+            dims,
+        })
+    }
+}
+
+#[async_trait]
+impl EmbeddingDriver for GeminiEmbeddingDriver {
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        if texts.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let mut out = Vec::with_capacity(texts.len());
+        let resource_model = format!("models/{}", self.model_id);
+        for text in texts {
+            let url = format!(
+                "{}/models/{}:embedContent",
+                self.base_url, self.model_id
+            );
+            let body = GeminiEmbedBody {
+                model: resource_model.clone(),
+                content: GeminiContent {
+                    parts: vec![GeminiPart {
+                        text: (*text).to_string(),
+                    }],
+                },
+            };
+            let resp = self
+                .client
+                .post(&url)
+                .header("x-goog-api-key", self.api_key.as_str())
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| EmbeddingError::Http(e.to_string()))?;
+            let status = resp.status().as_u16();
+            if status != 200 {
+                let body_text = resp.text().await.unwrap_or_default();
+                return Err(EmbeddingError::Api {
+                    status,
+                    message: body_text,
+                });
+            }
+            let parsed: GeminiEmbedResponse = resp
+                .json()
+                .await
+                .map_err(|e| EmbeddingError::Parse(e.to_string()))?;
+            out.push(parsed.embedding.values);
+        }
+
+        debug!(
+            "Gemini embedded {} texts (dims={})",
+            out.len(),
+            out.first().map(|e| e.len()).unwrap_or(0)
+        );
+        Ok(out)
+    }
+
+    fn dimensions(&self) -> usize {
+        self.dims
     }
 }
 
@@ -186,6 +311,26 @@ pub fn create_embedding_driver(
     } else {
         std::env::var(api_key_env).unwrap_or_default()
     };
+
+    let p = provider.trim().to_ascii_lowercase();
+    if p == "gemini" || p == "google" {
+        if api_key.trim().is_empty() {
+            return Err(EmbeddingError::MissingApiKey(
+                api_key_env.to_string(),
+            ));
+        }
+        let base = custom_base_url
+            .filter(|u| !u.trim().is_empty())
+            .map(|u| u.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta".to_string());
+        warn!(
+            provider = %provider,
+            base_url = %base,
+            "Gemini embedding driver — text content is sent to Google Generative Language API"
+        );
+        let driver = GeminiEmbeddingDriver::new(api_key, model, base)?;
+        return Ok(Box::new(driver));
+    }
 
     let base_url = custom_base_url
         .filter(|u| !u.is_empty())
@@ -368,9 +513,35 @@ mod tests {
     #[test]
     fn test_infer_dimensions() {
         assert_eq!(infer_dimensions("text-embedding-3-small"), 1536);
+        assert_eq!(infer_dimensions("text-embedding-004"), 768);
         assert_eq!(infer_dimensions("all-MiniLM-L6-v2"), 384);
         assert_eq!(infer_dimensions("nomic-embed-text"), 768);
         assert_eq!(infer_dimensions("unknown-model"), 1536); // default
+    }
+
+    #[test]
+    fn test_create_embedding_driver_gemini_requires_key() {
+        let r = create_embedding_driver(
+            "gemini",
+            "text-embedding-004",
+            "OPENFANG_TESTS_NONEXISTENT_GEMINI_KEY_XYZ",
+            None,
+        );
+        match r {
+            Err(EmbeddingError::MissingApiKey(_)) => {}
+            Ok(_) => panic!("expected MissingApiKey"),
+            Err(e) => panic!("expected MissingApiKey, got {e}"),
+        }
+    }
+
+    #[test]
+    fn test_create_embedding_driver_gemini_builds_with_key() {
+        const K: &str = "OPENFANG_TEST_DUMMY_GOOGLE_EMBED";
+        std::env::set_var(K, "dummy-key-not-used-for-network");
+        let res = create_embedding_driver("gemini", "text-embedding-004", K, None);
+        std::env::remove_var(K);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().dimensions(), 768);
     }
 
     #[test]

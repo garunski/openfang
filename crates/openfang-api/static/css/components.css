@@ -2194,6 +2194,26 @@ mark.search-highlight {
   outline-offset: 2px;
 }
 
+.project-overview-orch-card {
+  cursor: pointer;
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.12s ease;
+}
+.project-overview-orch-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  box-shadow: var(--shadow-xs);
+}
+.project-overview-orch-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.project-overview-orch-card[aria-busy="true"] {
+  pointer-events: none;
+  opacity: 0.85;
+}
+
 /* Tool call cards — premium design with category icons */
 .tool-card {
   background: var(--surface);
@@ -2744,6 +2764,12 @@ mark.search-highlight {
 }
 
 .toggle.active::after { transform: translateX(16px); }
+
+.toggle.toggle--disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: none;
+}
 
 /* Search input */
 .search-input {

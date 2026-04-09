@@ -3,7 +3,8 @@
 
 var PROJECT_DETAIL_TAB_SET = {
   overview: true,
-  chat: true,
+  orchestrator: true,
+  agents: true,
   backlog: true,
   board: true,
   pert: true,
@@ -12,16 +13,16 @@ var PROJECT_DETAIL_TAB_SET = {
   milestones: true,
   spokes: true,
   workflow_runs: true,
-  workflows: true,
+  project_agents: true,
   mattermost: true,
 };
 
 /** Primary nav groups (UI); `detailTab` remains the concrete section key for routes + content. */
 var PROJECT_DETAIL_TABS_BY_CATEGORY = {
-  overview: ['overview', 'chat'],
+  overview: ['overview', 'orchestrator', 'agents'],
   tasks: ['backlog', 'board', 'pert', 'milestones'],
   knowledge: ['docs', 'decisions'],
-  automation: ['spokes', 'workflow_runs', 'workflows', 'mattermost'],
+  automation: ['project_agents', 'spokes', 'workflow_runs', 'mattermost'],
 };
 
 function projectDetailCategoryForTab(tab) {
@@ -39,6 +40,7 @@ function projectDetailCategoryForTab(tab) {
 
 function projectDetailDefaultTabForCategory(cat) {
   if (cat === 'tasks') return 'board';
+  if (cat === 'automation') return 'project_agents';
   var list = PROJECT_DETAIL_TABS_BY_CATEGORY[cat];
   return list && list.length ? list[0] : 'overview';
 }
@@ -94,19 +96,11 @@ function projectsPage() {
     topologyPanning: false,
     detailAgents: [],
     detailPipelines: [],
-    projectWorkflows: [],
-    wfRunModal: null,
-    wfRunInput: '',
-    wfRunSubmitting: false,
-    wfRunError: '',
-    wfRunsForWorkflow: null,
-    wfRunsList: [],
-    wfRunSelectedId: null,
-    wfRunDetail: null,
-    wfRunsLoading: false,
-    wfRunDetailLoading: false,
-    wfRunsPanelError: '',
-    _wfRunPollTimer: null,
+    /** Workflow engine runs for this project (`GET .../workflow-runs`). */
+    detailWorkflowRuns: [],
+    /** @type {{ orchestrator_agent_id: string|null, current: any[], historical: any[] } | null} */
+    projectAgentsManagement: null,
+    orchestratorStartSubmitting: false,
     mattermostForm: { team_name: '', channel_name: '' },
     mattermostSaving: false,
     mattermostTestSending: false,
@@ -120,12 +114,12 @@ function projectsPage() {
     projectChatSelectedAgentId: null,
     detailLoading: {
       overview: false,
-      chat: false,
+      agents: false,
       backlog: false,
       pert: false,
       spokes: false,
       workflow_runs: false,
-      workflows: false,
+      project_agents: false,
       mattermost: false,
       docs: false,
       decisions: false,
@@ -133,12 +127,12 @@ function projectsPage() {
     },
     detailErrors: {
       overview: '',
-      chat: '',
+      agents: '',
       backlog: '',
       pert: '',
       spokes: '',
       workflow_runs: '',
-      workflows: '',
+      project_agents: '',
       mattermost: '',
       docs: '',
       decisions: '',
@@ -146,12 +140,12 @@ function projectsPage() {
     },
     _detailLoaded: {
       overview: false,
-      chat: false,
+      agents: false,
       backlog: false,
       pert: false,
       spokes: false,
       workflow_runs: false,
-      workflows: false,
+      project_agents: false,
       mattermost: false,
       docs: false,
       decisions: false,
@@ -168,6 +162,7 @@ function projectsPage() {
     taskDetailHtml: '',
     /** Min ms between WS-driven backlog refreshes (matches server watch debounce; avoids refetch storms). */
     _backlogWsReloadNextAt: 0,
+    _agentKilledBound: false,
 
     init() {
       var self = this;
@@ -184,6 +179,54 @@ function projectsPage() {
       window.addEventListener('hashchange', function () {
         self.syncProjectsFromHash();
       });
+      if (!this._agentKilledBound) {
+        this._agentKilledBound = true;
+        window.addEventListener('openfang-agent-killed', function (ev) {
+          var id = ev.detail && ev.detail.agentId != null ? String(ev.detail.agentId) : '';
+          void self.onAgentKilledFromHub(id);
+        });
+      }
+    },
+
+    /** After DELETE /api/agents/:id — refresh project rows and drop stale orchestrator/chat selection. */
+    async onAgentKilledFromHub(agentId) {
+      if (!agentId) return;
+      await Alpine.store('app').refreshAgents();
+      if (
+        this.projectChatSelectedAgentId &&
+        String(this.projectChatSelectedAgentId) === agentId
+      ) {
+        this.clearProjectChatAgent();
+      }
+      if (
+        this.selectedProject &&
+        this.selectedProject.orchestrator_agent_id != null &&
+        String(this.selectedProject.orchestrator_agent_id) === agentId
+      ) {
+        this.selectedProject.orchestrator_agent_id = null;
+      }
+      this._orchestratorAgentMeta = null;
+      this.setDetailLoaded('overview', false);
+      this.setDetailLoaded('agents', false);
+      this.setDetailLoaded('project_agents', false);
+      this.setDetailLoaded('mattermost', false);
+      try {
+        await this.loadProjects();
+      } catch (e) {
+        /* ignore */
+      }
+      if (this.selectedProject && this.detailTab) {
+        var tab = this.detailTab;
+        if (
+          tab === 'overview' ||
+          tab === 'orchestrator' ||
+          tab === 'agents' ||
+          tab === 'project_agents' ||
+          tab === 'mattermost'
+        ) {
+          await this.loadDetailTab(tab, true);
+        }
+      }
     },
 
     isValidProjectDetailTab(t) {
@@ -197,6 +240,7 @@ function projectsPage() {
       if (seg[0] !== 'projects') return;
       var pid = seg[1];
       var tab = seg[2];
+      if (tab === 'chat') tab = 'agents';
       var extraSeg = seg[3] != null && seg[3] !== '' ? decodeURIComponent(seg[3]) : null;
       var self = this;
       if (!pid) {
@@ -376,10 +420,11 @@ function projectsPage() {
         (cur === 'decisions' && this._detailLoaded.decisions) ||
         (cur === 'milestones' && this._detailLoaded.milestones) ||
         (cur === 'workflow_runs' && this._detailLoaded.workflow_runs) ||
-        (cur === 'workflows' && this._detailLoaded.workflows) ||
+        (cur === 'project_agents' && this._detailLoaded.project_agents) ||
         (cur === 'mattermost' && this._detailLoaded.mattermost) ||
-        (cur === 'chat' && this._detailLoaded.chat);
-      var tabs = ['overview', 'backlog', 'board', 'pert', 'docs', 'decisions', 'milestones'];
+        (cur === 'orchestrator' && this._detailLoaded.overview) ||
+        (cur === 'agents' && this._detailLoaded.agents);
+      var tabs = ['overview', 'agents', 'backlog', 'board', 'pert', 'docs', 'decisions', 'milestones'];
       var i;
       for (i = 0; i < tabs.length; i++) {
         this.setDetailLoaded(tabs[i], false);
@@ -403,12 +448,12 @@ function projectsPage() {
       this.projectOverview = null;
       this._detailLoaded = {
         overview: false,
-        chat: false,
+        agents: false,
         backlog: false,
         pert: false,
         spokes: false,
         workflow_runs: false,
-        workflows: false,
+        project_agents: false,
         mattermost: false,
         docs: false,
         decisions: false,
@@ -418,17 +463,16 @@ function projectsPage() {
       this.detailSpokes = [];
       this.detailAgents = [];
       this.detailPipelines = [];
-      this.projectWorkflows = [];
-      this.wfRunModal = null;
-      this.wfRunInput = '';
-      this.wfRunError = '';
+      this.detailWorkflowRuns = [];
+      this.projectAgentsManagement = null;
+      this.orchestratorStartSubmitting = false;
       this.detailErrors = {
         overview: '',
-        chat: '',
+        agents: '',
         backlog: '',
         spokes: '',
         workflow_runs: '',
-        workflows: '',
+        project_agents: '',
         mattermost: '',
         docs: '',
         decisions: '',
@@ -437,12 +481,12 @@ function projectsPage() {
       };
       this.detailLoading = {
         overview: false,
-        chat: false,
+        agents: false,
         backlog: false,
         pert: false,
         spokes: false,
         workflow_runs: false,
-        workflows: false,
+        project_agents: false,
         mattermost: false,
         docs: false,
         decisions: false,
@@ -455,14 +499,6 @@ function projectsPage() {
       this.projectChatAgents = [];
       this.projectChatAgentsLoading = false;
       this.projectChatSelectedAgentId = null;
-      this.stopWorkflowRunPolling();
-      this.wfRunsForWorkflow = null;
-      this.wfRunsList = [];
-      this.wfRunSelectedId = null;
-      this.wfRunDetail = null;
-      this.wfRunsLoading = false;
-      this.wfRunDetailLoading = false;
-      this.wfRunsPanelError = '';
       if (typeof this.resetBoardCache === 'function') this.resetBoardCache();
       if (typeof this.resetPertCache === 'function') this.resetPertCache();
       if (typeof this.resetListFilters === 'function') this.resetListFilters();
@@ -525,7 +561,11 @@ function projectsPage() {
     },
 
     retryLoad(tab) {
-      this.setDetailLoaded(tab, false);
+      if (tab === 'orchestrator') {
+        this.setDetailLoaded('overview', false);
+      } else {
+        this.setDetailLoaded(tab, false);
+      }
       this.loadDetailTab(tab, true);
     },
 
@@ -540,12 +580,16 @@ function projectsPage() {
 
     async loadDetailTab(tab, force, silent) {
       if (!this.selectedProject) return;
-      if (tab === 'chat') {
-        if (!force && this._detailLoaded.chat) return;
-        var hideCh = !!silent;
-        if (!hideCh) {
-          this.setDetailLoading('chat', true);
-          this.setDetailError('chat', '');
+      if (tab === 'orchestrator') {
+        await this.loadDetailTab('overview', force, silent);
+        return;
+      }
+      if (tab === 'agents') {
+        if (!force && this._detailLoaded.agents) return;
+        var hideAg = !!silent;
+        if (!hideAg) {
+          this.setDetailLoading('agents', true);
+          this.setDetailError('agents', '');
         }
         try {
           var pidCh = this.selectedProject.id;
@@ -553,21 +597,29 @@ function projectsPage() {
             '/api/projects/' + encodeURIComponent(pidCh) + '/agents'
           );
           this.projectChatAgents = Array.isArray(rowsCh) ? rowsCh : [];
-          await this.mergeOrchestratorIntoProjectChatAgents();
+          await this.mergeOrchestratorIntoProjectChatAgents({ skipOrchestratorRow: true });
+          var oid = this.orchestratorAgentIdString();
+          if (
+            oid &&
+            this.projectChatSelectedAgentId &&
+            String(this.projectChatSelectedAgentId) === oid
+          ) {
+            this.clearProjectChatAgent();
+          }
           if (
             this.projectChatSelectedAgentId &&
-            !this.projectChatAgents.some(function (r) {
+            !this.projectChatAgentsExcludingOrchestrator().some(function (r) {
               return String(r.agent_id) === String(this.projectChatSelectedAgentId);
             }, this)
           ) {
             this.projectChatSelectedAgentId = null;
           }
-          this.setDetailLoaded('chat', true);
+          this.setDetailLoaded('agents', true);
         } catch (e) {
-          if (!hideCh) this.setDetailError('chat', e.message || 'Load failed');
+          if (!hideAg) this.setDetailError('agents', e.message || 'Load failed');
           this.projectChatAgents = [];
         }
-        if (!hideCh) this.setDetailLoading('chat', false);
+        if (!hideAg) this.setDetailLoading('agents', false);
         return;
       }
       if (tab === 'overview') {
@@ -591,9 +643,11 @@ function projectsPage() {
           this.detailSpokes = Array.isArray(results[1]) ? results[1] : [];
           this.detailAgents = Array.isArray(results[2]) ? results[2] : [];
           this.detailPipelines = Array.isArray(results[3]) ? results[3] : [];
+          var detailOv = await OpenFangAPI.get(base);
+          this.mergeProjectMattermostFieldsFromDetail(detailOv);
+          await this.refreshOrchestratorMeta();
           this.setDetailLoaded('overview', true);
           this.setDetailLoaded('spokes', true);
-          this.setDetailLoaded('workflow_runs', true);
         } catch (e) {
           if (!hideOv) this.setDetailError('overview', e.message || 'Load failed');
           this.projectOverview = null;
@@ -619,6 +673,39 @@ function projectsPage() {
       }
       if (tab === 'milestones') {
         await this.loadMilestonesTab(!!force, !!silent);
+        return;
+      }
+      if (tab === 'project_agents') {
+        if (!force && this._detailLoaded.project_agents) return;
+        var hidePa = !!silent;
+        if (!hidePa) {
+          this.setDetailLoading('project_agents', true);
+          this.setDetailError('project_agents', '');
+        }
+        try {
+          var pidPa = this.selectedProject.id;
+          var mgmt = await OpenFangAPI.get(
+            '/api/projects/' + encodeURIComponent(pidPa) + '/agents/management'
+          );
+          this.projectAgentsManagement =
+            mgmt && typeof mgmt === 'object'
+              ? mgmt
+              : { orchestrator_agent_id: null, current: [], historical: [] };
+          if (
+            this.selectedProject &&
+            this.projectAgentsManagement &&
+            this.projectAgentsManagement.orchestrator_agent_id != null
+          ) {
+            this.selectedProject.orchestrator_agent_id =
+              this.projectAgentsManagement.orchestrator_agent_id;
+          }
+          await this.refreshOrchestratorMeta();
+          this.setDetailLoaded('project_agents', true);
+        } catch (e) {
+          if (!hidePa) this.setDetailError('project_agents', e.message || 'Load failed');
+          this.projectAgentsManagement = null;
+        }
+        if (!hidePa) this.setDetailLoading('project_agents', false);
         return;
       }
       if (tab === 'mattermost') {
@@ -664,15 +751,10 @@ function projectsPage() {
           this.detailSpokes = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/spokes');
           this.resetTopologyPan();
         } else if (tab === 'workflow_runs') {
-          this.detailPipelines = await OpenFangAPI.get(
-            '/api/projects/' + encodeURIComponent(pid) + '/workflows?limit=50'
+          var wr = await OpenFangAPI.get(
+            '/api/projects/' + encodeURIComponent(pid) + '/workflow-runs?limit=50'
           );
-        } else if (tab === 'workflows') {
-          var allWf = await OpenFangAPI.get('/api/workflows');
-          var pidStr = String(pid);
-          this.projectWorkflows = (Array.isArray(allWf) ? allWf : []).filter(function (w) {
-            return w && String(w.project_id || '') === pidStr;
-          });
+          this.detailWorkflowRuns = Array.isArray(wr) ? wr : [];
         }
         this.setDetailLoaded(tab, true);
       } catch (e) {
@@ -693,9 +775,6 @@ function projectsPage() {
         this.clearSpokeGitPanel();
         this.resetTopologyPan();
       }
-      if (tab !== 'workflows') {
-        this.closeWorkflowRunsPanel();
-      }
       this.detailTab = tab;
       this.detailCategory = projectDetailCategoryForTab(tab);
       await this.loadDetailTab(tab);
@@ -713,8 +792,14 @@ function projectsPage() {
     },
 
     /** @returns {Promise<boolean>} */
+    async openProjectChatFromMgmtRow(row) {
+      var ok = await this.selectProjectChatAgent(row);
+      if (ok) await this.onDetailTabChange('agents');
+    },
+
     async selectProjectChatAgent(row) {
       if (!row || row.agent_id == null) return false;
+      if (this.isRowProjectOrchestrator(row)) return false;
       var id = String(row.agent_id);
       try {
         var raw = await OpenFangAPI.get('/api/agents/' + encodeURIComponent(id));
@@ -747,28 +832,66 @@ function projectsPage() {
       this.projectChatSelectedAgentId = null;
     },
 
-    goToAgentsHub() {
-      if (this.$root && typeof this.$root.navigate === 'function') {
-        this.$root.navigate('agents/sessions');
-      } else {
-        window.location.hash = 'agents/sessions';
-      }
+    projectHasMattermostChannel() {
+      var p = this.selectedProject;
+      return (
+        p &&
+        p.mattermost_channel_id != null &&
+        String(p.mattermost_channel_id).trim() !== ''
+      );
     },
 
-    /** Project overview → Chat tab with no agent selected (agent picker only). */
-    async openProjectChatTab() {
+    orchestratorOverviewStatusText() {
+      if (!this.projectHasMattermostChannel()) return 'Setup required';
+      if (this.orchestratorIsActive()) return 'Running';
+      return 'Not running';
+    },
+
+    async openProjectOrchestratorTab() {
+      await this.onDetailTabChange('orchestrator');
+    },
+
+    /** Overview segment → Agents with no agent selected (orchestrator has its own segment). */
+    async openProjectAgentsTab() {
       this.clearProjectChatAgent();
-      await this.onDetailTabChange('chat');
+      await this.onDetailTabChange('agents');
     },
 
-    /** Overview agent row → select agent and open Overview/Chat with embed focused. */
+    /** Overview agent row → select agent and open Agents tab with embed focused. */
     async openProjectChatWithAgentFromOverview(agent) {
       if (!agent || agent.agent_id == null) return;
       var ok = await this.selectProjectChatAgent(agent);
-      if (ok) await this.onDetailTabChange('chat');
+      if (ok) await this.onDetailTabChange('agents');
     },
 
-    async mergeOrchestratorIntoProjectChatAgents() {
+    orchestratorAgentIdString() {
+      var p = this.selectedProject;
+      if (!p || p.orchestrator_agent_id == null) return '';
+      return String(p.orchestrator_agent_id).trim();
+    },
+
+    isRowProjectOrchestrator(row) {
+      if (!row || row.agent_id == null) return false;
+      var oid = this.orchestratorAgentIdString();
+      return !!oid && String(row.agent_id) === oid;
+    },
+
+    detailAgentsExcludingOrchestrator() {
+      var self = this;
+      return (this.detailAgents || []).filter(function (a) {
+        return !self.isRowProjectOrchestrator(a);
+      });
+    },
+
+    projectChatAgentsExcludingOrchestrator() {
+      var self = this;
+      return (this.projectChatAgents || []).filter(function (a) {
+        return !self.isRowProjectOrchestrator(a);
+      });
+    },
+
+    async mergeOrchestratorIntoProjectChatAgents(opts) {
+      if (opts && opts.skipOrchestratorRow) return;
       var oid =
         this.selectedProject && this.selectedProject.orchestrator_agent_id != null
           ? String(this.selectedProject.orchestrator_agent_id).trim()
@@ -802,7 +925,8 @@ function projectsPage() {
     projectDetailSubtabLabel(tab) {
       var labels = {
         overview: 'Overview',
-        chat: 'Chat',
+        orchestrator: 'Orchestrator',
+        agents: 'Agents',
         backlog: 'List',
         board: 'Board',
         pert: 'PERT',
@@ -811,7 +935,7 @@ function projectsPage() {
         decisions: 'Decisions',
         spokes: 'Spokes',
         workflow_runs: 'Workflow Runs',
-        workflows: 'Workflows',
+        project_agents: 'Agents',
         mattermost: 'Mattermost',
       };
       return labels[tab] || tab;
@@ -820,7 +944,8 @@ function projectsPage() {
     projectDetailSubtabIcon(tab) {
       var icons = {
         overview: 'fa-home',
-        chat: 'fa-commenting',
+        orchestrator: 'fa-sitemap',
+        agents: 'fa-commenting',
         backlog: 'fa-list',
         board: 'fa-th',
         pert: 'fa-share-alt',
@@ -829,7 +954,7 @@ function projectsPage() {
         decisions: 'fa-check-square-o',
         spokes: 'fa-code-fork',
         workflow_runs: 'fa-terminal',
-        workflows: 'fa-sitemap',
+        project_agents: 'fa-users',
         mattermost: 'fa-comments',
       };
       return icons[tab] ? 'fa ' + icons[tab] : 'fa fa-circle-o';
@@ -1561,96 +1686,6 @@ function projectsPage() {
       this.registerSubmitting = false;
     },
 
-    openWfRunModal(wf) {
-      if (!wf || !wf.id) return;
-      this.wfRunModal = { id: wf.id, name: wf.name || wf.id };
-      this.wfRunInput = '';
-      this.wfRunError = '';
-    },
-
-    closeWfRunModal() {
-      this.wfRunModal = null;
-      this.wfRunInput = '';
-      this.wfRunError = '';
-    },
-
-    stopWorkflowRunPolling() {
-      if (this._wfRunPollTimer) {
-        clearInterval(this._wfRunPollTimer);
-        this._wfRunPollTimer = null;
-      }
-    },
-
-    closeWorkflowRunsPanel() {
-      this.stopWorkflowRunPolling();
-      this.wfRunsForWorkflow = null;
-      this.wfRunsList = [];
-      this.wfRunSelectedId = null;
-      this.wfRunDetail = null;
-      this.wfRunsLoading = false;
-      this.wfRunDetailLoading = false;
-      this.wfRunsPanelError = '';
-    },
-
-    async openWorkflowRunsPanel(wf) {
-      if (!wf || !wf.id) return;
-      this.wfRunsForWorkflow = { id: wf.id, name: wf.name || wf.id };
-      this.wfRunSelectedId = null;
-      this.wfRunDetail = null;
-      this.wfRunsPanelError = '';
-      this.stopWorkflowRunPolling();
-      this.wfRunsLoading = true;
-      try {
-        this.wfRunsList = await OpenFangAPI.get(
-          '/api/workflows/' + encodeURIComponent(wf.id) + '/runs'
-        );
-        if (!Array.isArray(this.wfRunsList)) this.wfRunsList = [];
-      } catch (e) {
-        this.wfRunsList = [];
-        this.wfRunsPanelError = e.message || 'Failed to load runs';
-      }
-      this.wfRunsLoading = false;
-    },
-
-    async selectWorkflowRun(run) {
-      if (!run || !run.id || !this.wfRunsForWorkflow) return;
-      this.wfRunSelectedId = run.id;
-      this.stopWorkflowRunPolling();
-      await this.fetchWorkflowRunDetail(false);
-      if (this.wfRunDetail && String(this.wfRunDetail.state || '').toLowerCase() === 'running') {
-        this.startWorkflowRunPolling();
-      }
-    },
-
-    async fetchWorkflowRunDetail(silent) {
-      if (!this.wfRunsForWorkflow || !this.wfRunSelectedId) return;
-      if (!silent) this.wfRunDetailLoading = true;
-      try {
-        this.wfRunDetail = await OpenFangAPI.get(
-          '/api/workflows/' +
-            encodeURIComponent(this.wfRunsForWorkflow.id) +
-            '/runs/' +
-            encodeURIComponent(this.wfRunSelectedId)
-        );
-      } catch (e) {
-        this.wfRunDetail = null;
-        if (!silent) OpenFangToast.error(e.message || 'Run detail failed');
-      }
-      if (!silent) this.wfRunDetailLoading = false;
-    },
-
-    startWorkflowRunPolling() {
-      var self = this;
-      this.stopWorkflowRunPolling();
-      this._wfRunPollTimer = setInterval(function () {
-        void self.fetchWorkflowRunDetail(true).then(function () {
-          if (!self.wfRunDetail || String(self.wfRunDetail.state || '').toLowerCase() !== 'running') {
-            self.stopWorkflowRunPolling();
-          }
-        });
-      }, 3000);
-    },
-
     formatWfDurationMs(ms) {
       if (ms == null || ms === '') return '—';
       var n = Number(ms);
@@ -1667,46 +1702,6 @@ function projectsPage() {
       return 'badge-dim';
     },
 
-    wfRunStepOutputPreview(text, maxLen) {
-      var m = maxLen || 280;
-      var s = text == null ? '' : String(text);
-      if (s.length <= m) return s;
-      return s.slice(0, m) + '\u2026';
-    },
-
-    wfRunLastStepName() {
-      var r = this.wfRunDetail;
-      if (!r || !Array.isArray(r.step_results) || !r.step_results.length) return '';
-      var last = r.step_results[r.step_results.length - 1];
-      return last && last.step_name ? String(last.step_name) : '';
-    },
-
-    async submitProjectWorkflowRun() {
-      if (!this.selectedProject || !this.wfRunModal) return;
-      this.wfRunSubmitting = true;
-      this.wfRunError = '';
-      try {
-        var wid = this.wfRunModal.id;
-        var wname = this.wfRunModal.name;
-        await OpenFangAPI.post(
-          '/api/projects/' +
-            encodeURIComponent(this.selectedProject.id) +
-            '/workflows/' +
-            encodeURIComponent(this.wfRunModal.id) +
-            '/run',
-          { input: this.wfRunInput || '' }
-        );
-        OpenFangToast.success('Workflow finished');
-        this.closeWfRunModal();
-        if (this.wfRunsForWorkflow && String(this.wfRunsForWorkflow.id) === String(wid)) {
-          await this.openWorkflowRunsPanel({ id: wid, name: wname || wid });
-        }
-      } catch (e) {
-        this.wfRunError = e.message || 'Run failed';
-      }
-      this.wfRunSubmitting = false;
-    },
-
     priorityClass(p) {
       if (!p) return 'badge-dim';
       var x = String(p).toLowerCase();
@@ -1719,14 +1714,6 @@ function projectsPage() {
       if (!s) return 'badge-dim';
       var x = String(s).toLowerCase();
       if (x === 'done' || x === 'closed') return 'badge-success';
-      return 'badge-info';
-    },
-
-    workflowOutcomeClass(outcome) {
-      if (!outcome) return 'badge-dim';
-      var s = String(outcome);
-      if (s.indexOf('exit_code=0') !== -1 || s.indexOf('success=true') !== -1) return 'badge-success';
-      if (/exit_code=-?[1-9]\d*/.test(s) || s.indexOf('success=false') !== -1) return 'badge-error';
       return 'badge-info';
     },
 
@@ -1746,6 +1733,7 @@ function projectsPage() {
         mattermost_team_name: detail.mattermost_team_name,
         mattermost_channel_name: detail.mattermost_channel_name,
         orchestrator_agent_id: detail.orchestrator_agent_id,
+        former_agent_ids: detail.former_agent_ids,
         updated_at: detail.updated_at,
       };
       var row = null;
@@ -1798,22 +1786,64 @@ function projectsPage() {
           return;
         }
       }
-      try {
-        var d = await OpenFangAPI.get('/api/agents/' + encodeURIComponent(oid));
-        this._orchestratorAgentMeta = {
-          id: oid,
-          name: d.name != null ? String(d.name) : '',
-          state: d.state != null ? String(d.state) : '',
-        };
-      } catch (e) {
-        this._orchestratorAgentMeta = { id: oid, name: '', state: '', missing: true };
-      }
+      // Not in registry — avoid GET /api/agents/:id (404) for stale project orchestrator ids.
+      this._orchestratorAgentMeta = { id: oid, name: '', state: '', missing: true };
     },
 
     orchestratorIsActive() {
       var m = this._orchestratorAgentMeta;
       if (!m || m.missing) return false;
       return String(m.state || '').toLowerCase().indexOf('running') >= 0;
+    },
+
+    orchestratorStartEligible() {
+      var p = this.selectedProject;
+      if (!p) return false;
+      var mm =
+        p.mattermost_channel_id != null && String(p.mattermost_channel_id).trim() !== '';
+      if (!mm) return false;
+      var oid = p.orchestrator_agent_id != null ? String(p.orchestrator_agent_id).trim() : '';
+      if (!oid) return true;
+      return !this.orchestratorIsActive();
+    },
+
+    async startProjectOrchestratorFromAutomation() {
+      if (!this.selectedProject || this.orchestratorStartSubmitting) return;
+      this.orchestratorStartSubmitting = true;
+      try {
+        await OpenFangAPI.post(
+          '/api/projects/' +
+            encodeURIComponent(this.selectedProject.id) +
+            '/orchestrator/start',
+          {}
+        );
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.success('Orchestrator started');
+        }
+        await this.loadProjects();
+        var d = await OpenFangAPI.get(
+          '/api/projects/' + encodeURIComponent(this.selectedProject.id)
+        );
+        this.mergeProjectMattermostFieldsFromDetail(d);
+        await this.refreshOrchestratorMeta();
+        this.setDetailLoaded('project_agents', false);
+        this.setDetailLoaded('overview', false);
+        this.setDetailLoaded('agents', false);
+        await this.loadDetailTab('project_agents', true);
+        if (
+          this.detailTab === 'overview' ||
+          this.detailTab === 'orchestrator' ||
+          this.detailTab === 'agents'
+        ) {
+          await this.loadDetailTab(this.detailTab, true);
+        }
+        this.setDetailLoaded('mattermost', false);
+      } catch (e) {
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error(e.message || 'Failed to start orchestrator');
+        }
+      }
+      this.orchestratorStartSubmitting = false;
     },
 
     orchestratorDisplayName() {
@@ -1850,7 +1880,13 @@ function projectsPage() {
         this.mergeProjectMattermostFieldsFromDetail(detail);
         this.syncMattermostFormFromProject();
         await this.refreshOrchestratorMeta();
-        if (this.detailTab === 'overview') await this.loadDetailTab('overview', true);
+        if (
+          this.detailTab === 'overview' ||
+          this.detailTab === 'orchestrator' ||
+          this.detailTab === 'agents'
+        ) {
+          await this.loadDetailTab(this.detailTab, true);
+        }
       } catch (e) {
         this.mattermostError = e.message || 'Save failed';
       }
@@ -1888,16 +1924,10 @@ function projectsPage() {
       this.mattermostTestSending = false;
     },
 
-    /** Mattermost orchestrator CTA → same project Chat tab + embed as Overview agent rows. */
+    /** Mattermost / management CTA → project Orchestrator segment (chat + start). */
     async openOrchestratorAgentDetail() {
-      var p = this.selectedProject;
-      if (!p || p.orchestrator_agent_id == null) return;
-      var oid = String(p.orchestrator_agent_id).trim();
-      if (!oid) return;
-      await this.openProjectChatWithAgentFromOverview({
-        agent_id: oid,
-        name: this.orchestratorDisplayName() || oid,
-      });
+      if (!this.selectedProject) return;
+      await this.onDetailTabChange('orchestrator');
     },
 
 

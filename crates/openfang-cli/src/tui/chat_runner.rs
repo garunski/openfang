@@ -382,7 +382,10 @@ impl StandaloneChat {
         let models = match &self.backend {
             Backend::Daemon { base_url } => {
                 let client = crate::daemon_client();
-                match client.get(format!("{base_url}/api/models")).send() {
+                match client
+                    .get(format!("{base_url}/api/models?available=true&dropdown_only=true"))
+                    .send()
+                {
                     Ok(resp) => match resp.json::<serde_json::Value>() {
                         Ok(body) => body["models"]
                             .as_array()

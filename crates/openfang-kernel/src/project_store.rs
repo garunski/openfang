@@ -245,10 +245,56 @@ impl ProjectStore {
             .iter()
             .position(|a| a == needle)
             .ok_or_else(|| OpenFangError::InvalidInput("Agent binding not found".into()))?;
+        project.record_former_agent(needle);
         project.bound_agents.remove(pos);
         project.updated_at = chrono::Utc::now();
         drop(map);
         self.persist()
+    }
+
+    /// Clear [`Project::orchestrator_agent_id`] and remove the id from [`Project::bound_agents`]
+    /// everywhere it appears. Used when an agent is killed so projects do not keep stale UUIDs.
+    ///
+    /// Returns the number of projects that were modified.
+    pub fn detach_agent_from_all_projects(&self, agent_id: &str) -> OpenFangResult<usize> {
+        let needle = agent_id.trim();
+        if needle.is_empty() {
+            return Err(OpenFangError::InvalidInput(
+                "agent_id must be non-empty".into(),
+            ));
+        }
+        let mut map = self
+            .projects
+            .write()
+            .map_err(|_| OpenFangError::Internal("Project store lock poisoned".into()))?;
+        let mut changed = 0usize;
+        for p in map.values_mut() {
+            let mut touched = false;
+            let orch = p
+                .orchestrator_agent_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if orch == Some(needle) {
+                p.record_former_agent(needle);
+                p.orchestrator_agent_id = None;
+                p.bound_agents.retain(|x| x.trim() != needle);
+                touched = true;
+            } else if p.bound_agents.iter().any(|x| x.trim() == needle) {
+                p.record_former_agent(needle);
+                p.bound_agents.retain(|x| x.trim() != needle);
+                touched = true;
+            }
+            if touched {
+                p.updated_at = chrono::Utc::now();
+                changed += 1;
+            }
+        }
+        drop(map);
+        if changed > 0 {
+            self.persist()?;
+        }
+        Ok(changed)
     }
 
     pub fn remove(&self, id: ProjectId) -> OpenFangResult<Project> {
@@ -539,6 +585,31 @@ mod tests {
     }
 
     #[test]
+    fn detach_agent_from_all_projects_clears_orchestrator_and_bindings() {
+        let dir = tempdir().unwrap();
+        let p = dir.path().join("r");
+        std::fs::create_dir_all(&p).unwrap();
+        let store = ProjectStore::new(dir.path());
+        let dead = uuid::Uuid::new_v4().to_string();
+        let other = uuid::Uuid::new_v4().to_string();
+        let id = store
+            .register(Project {
+                name: "p".into(),
+                path: p,
+                mattermost_channel_id: Some("mm-ch".into()),
+                orchestrator_agent_id: Some(dead.clone()),
+                bound_agents: vec![other.clone(), dead.clone()],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(store.detach_agent_from_all_projects(&dead).unwrap(), 1);
+        let loaded = store.get(id).unwrap();
+        assert!(loaded.orchestrator_agent_id.is_none());
+        assert_eq!(loaded.bound_agents, vec![other]);
+        assert!(loaded.former_agent_ids.contains(&dead));
+    }
+
+    #[test]
     fn mattermost_project_route_prefers_orchestrator_agent_id() {
         let dir = tempdir().unwrap();
         let p = dir.path().join("r");
@@ -583,7 +654,9 @@ mod tests {
         let loaded = store.get(id).unwrap();
         assert_eq!(loaded.bound_agents, vec!["a1-uuid".to_string()]);
         store.unbind_agent(id, "a1-uuid").unwrap();
-        assert!(store.get(id).unwrap().bound_agents.is_empty());
+        let u = store.get(id).unwrap();
+        assert!(u.bound_agents.is_empty());
+        assert_eq!(u.former_agent_ids, vec!["a1-uuid".to_string()]);
         store.bind_agent(id, "a1-uuid".into()).unwrap();
         let err2 = store.bind_agent(id, "a1-uuid".into()).unwrap_err();
         assert!(err2.to_string().contains("already bound"), "{err2}");

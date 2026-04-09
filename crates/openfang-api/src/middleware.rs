@@ -104,6 +104,7 @@ pub async fn auth(
         // Dashboard read endpoints — allow unauthenticated so the SPA can
         // render before the user enters their API key.
         || (path == "/api/models" && is_get)
+        || (path == "/api/models/dropdown-disabled" && is_get)
         || (path == "/api/models/aliases" && is_get)
         || (path == "/api/providers" && is_get)
         || (path == "/api/budget" && is_get)

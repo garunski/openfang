@@ -375,6 +375,7 @@ function agentsPage() {
           OpenFangToast.success('Agent "' + agent.name + '" stopped');
           self.showDetailModal = false;
           await Alpine.store('app').refreshAgents();
+          window.dispatchEvent(new CustomEvent('openfang-agent-killed', { detail: { agentId: agent.id } }));
         } catch(e) {
           OpenFangToast.error('Failed to stop agent: ' + e.message);
         }
@@ -389,6 +390,7 @@ function agentsPage() {
         for (var i = 0; i < list.length; i++) {
           try {
             await OpenFangAPI.del('/api/agents/' + list[i].id);
+            window.dispatchEvent(new CustomEvent('openfang-agent-killed', { detail: { agentId: list[i].id } }));
           } catch(e) { errors.push(list[i].name + ': ' + e.message); }
         }
         await Alpine.store('app').refreshAgents();

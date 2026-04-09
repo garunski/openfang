@@ -8,6 +8,8 @@ function chatPage(opts) {
   return {
     /** Suffix for DOM ids when multiple chat UIs exist (e.g. project inline + Agents). */
     _chatUiSuffix: uiSuffix,
+    /** `'orch'` — project overview orchestrator embed (hide back-to-list). */
+    chatEmbedVariant: opts.chatEmbedVariant || 'default',
     chatElId: function (base) {
       return base + this._chatUiSuffix;
     },
@@ -177,9 +179,31 @@ function chatPage(opts) {
         }
       });
 
+      // Bootstrap from agent id (e.g. project overview orchestrator)
+      var bootstrapId =
+        opts.bootstrapAgentId != null ? String(opts.bootstrapAgentId).trim() : '';
+      if (bootstrapId) {
+        OpenFangAPI.get('/api/agents/' + encodeURIComponent(bootstrapId))
+          .then(function (raw) {
+            var m = raw.model || {};
+            self.selectAgent({
+              id: raw.id,
+              name: raw.name,
+              state: raw.state,
+              model_provider:
+                raw.model_provider != null ? raw.model_provider : m.provider || '?',
+              model_name: raw.model_name != null ? raw.model_name : m.model || '?',
+              identity: raw.identity || {},
+              mode: raw.mode,
+              profile: raw.profile,
+            });
+          })
+          .catch(function () {});
+      }
+
       // Check for pending agent from Agents page (set before chat mounted)
       var store = Alpine.store('app');
-      if (store.pendingAgent) {
+      if (!bootstrapId && store.pendingAgent) {
         self.selectAgent(store.pendingAgent);
         store.pendingAgent = null;
       }
@@ -199,7 +223,7 @@ function chatPage(opts) {
           self.showSlashMenu = false;
           self.modelPickerFilter = modelMatch[1].toLowerCase();
           if (!self.modelPickerList.length) {
-            OpenFangAPI.get('/api/models?available=true').then(function(data) {
+            OpenFangAPI.get('/api/models?available=true&dropdown_only=true').then(function(data) {
               self.modelPickerList = data.models || [];
               self.showModelPicker = true;
               self.modelPickerIdx = 0;
@@ -248,7 +272,7 @@ function chatPage(opts) {
         });
         return;
       }
-      OpenFangAPI.get('/api/models?available=true').then(function(data) {
+      OpenFangAPI.get('/api/models?available=true&dropdown_only=true').then(function(data) {
         var models = data.models || [];
         self._modelCache = models;
         self._modelCacheTime = Date.now();
@@ -1060,13 +1084,15 @@ function chatPage(opts) {
       var name = this.currentAgent.name;
       OpenFangToast.confirm('Stop Agent', 'Stop agent "' + name + '"? The agent will be shut down.', async function() {
         try {
-          await OpenFangAPI.del('/api/agents/' + self.currentAgent.id);
+          var killedId = self.currentAgent.id;
+          await OpenFangAPI.del('/api/agents/' + killedId);
           OpenFangAPI.wsDisconnect();
           self._wsAgent = null;
           self.currentAgent = null;
           self.messages = [];
           OpenFangToast.success('Agent "' + name + '" stopped');
           Alpine.store('app').refreshAgents();
+          window.dispatchEvent(new CustomEvent('openfang-agent-killed', { detail: { agentId: killedId } }));
           if (self._chatUiSuffix) window.dispatchEvent(new Event('close-chat'));
         } catch(e) {
           OpenFangToast.error('Failed to stop agent: ' + e.message);
@@ -1275,4 +1301,17 @@ function chatPage(opts) {
 /** Project detail Chat tab — separate DOM ids from Agents → Chat (`chatPage()`). */
 function chatPageProjectEmbed() {
   return chatPage({ uiSuffix: '__pchat' });
+}
+
+/** Project overview — orchestrator embed; `selectedProject` read when Alpine creates x-data. */
+function chatPageProjectOrchestratorFactory(selectedProject) {
+  var id =
+    selectedProject && selectedProject.orchestrator_agent_id != null
+      ? String(selectedProject.orchestrator_agent_id).trim()
+      : '';
+  return chatPage({
+    uiSuffix: '__porch',
+    chatEmbedVariant: 'orch',
+    bootstrapAgentId: id,
+  });
 }

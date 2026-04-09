@@ -32,7 +32,7 @@ use openfang_runtime::sandbox::{SandboxConfig, WasmSandbox};
 use openfang_runtime::tool_runner::{builtin_tool_definitions, parse_backlog_task_list_plain};
 use openfang_types::agent::*;
 use openfang_types::capability::Capability;
-use openfang_types::config::{KernelConfig, OutputFormat};
+use openfang_types::config::{DefaultModelConfig, KernelConfig, OutputFormat};
 use openfang_types::error::OpenFangError;
 use openfang_types::event::*;
 use openfang_types::memory::Memory;
@@ -137,8 +137,9 @@ pub struct OpenFangKernel {
     /// Device pairing manager.
     pub pairing: crate::pairing::PairingManager,
     /// Embedding driver for vector similarity search (None = text fallback).
-    pub embedding_driver:
+    pub embedding_driver: std::sync::RwLock<
         Option<Arc<dyn openfang_runtime::embedding::EmbeddingDriver + Send + Sync>>,
+    >,
     /// Hand registry — curated autonomous capability packages.
     pub hand_registry: openfang_hands::registry::HandRegistry,
     /// Credential resolver — vault → dotenv → env var priority chain.
@@ -184,8 +185,13 @@ pub struct OpenFangKernel {
     /// Hot-reloadable orchestrator default model (read when spawning workflow-coordinator agents).
     pub orchestrator_default_model_override:
         std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
+    /// Hot-reloadable memory embedding default (Settings); rebuilds embedding driver on change.
+    pub memory_default_embedding_override:
+        std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
     /// Hot-reloadable `[provider_enabled]` map (Settings → Providers toggles).
     pub provider_enabled_state: std::sync::RwLock<std::collections::HashMap<String, bool>>,
+    /// Model IDs hidden from dashboard/CLI dropdowns (`model_dropdown_disabled.json`).
+    pub model_dropdown_disabled_ids: std::sync::RwLock<std::collections::HashSet<String>>,
     /// Per-agent message locks — serializes LLM calls for the same agent to prevent
     /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
     /// messages via a channel). Different agents can still run in parallel.
@@ -879,111 +885,10 @@ impl OpenFangKernel {
             ),
         };
 
-        // Auto-detect embedding driver for vector similarity search
-        let embedding_driver: Option<
-            Arc<dyn openfang_runtime::embedding::EmbeddingDriver + Send + Sync>,
-        > = {
-            use openfang_runtime::embedding::create_embedding_driver;
-            let configured_model = &config.memory.embedding_model;
-            if let Some(ref provider) = config.memory.embedding_provider {
-                // Explicit config takes priority — use the configured embedding model.
-                // If the user left embedding_model at the default ("all-MiniLM-L6-v2"),
-                // pick a sensible default for the chosen provider so we don't send a
-                // local model name to a cloud API.
-                let model = if configured_model == "all-MiniLM-L6-v2" {
-                    default_embedding_model_for_provider(provider)
-                } else {
-                    configured_model.as_str()
-                };
-                let api_key_env = config.memory.embedding_api_key_env.as_deref().unwrap_or("");
-                let custom_url = config
-                    .provider_urls
-                    .get(provider.as_str())
-                    .map(|s| s.as_str());
-                match create_embedding_driver(provider, model, api_key_env, custom_url) {
-                    Ok(d) => {
-                        info!(provider = %provider, model = %model, "Embedding driver configured from memory config");
-                        Some(Arc::from(d))
-                    }
-                    Err(e) => {
-                        warn!(provider = %provider, error = %e, "Embedding driver init failed — falling back to text search");
-                        None
-                    }
-                }
-            } else {
-                // Auto-detect embedding provider by checking API key env vars in
-                // priority order.  First match wins.
-                const API_KEY_PROVIDERS: &[(&str, &str)] = &[
-                    ("OPENAI_API_KEY", "openai"),
-                    ("GROQ_API_KEY", "groq"),
-                    ("MISTRAL_API_KEY", "mistral"),
-                    ("TOGETHER_API_KEY", "together"),
-                    ("FIREWORKS_API_KEY", "fireworks"),
-                    ("COHERE_API_KEY", "cohere"),
-                ];
-
-                let detected_from_key = API_KEY_PROVIDERS
-                    .iter()
-                    .find(|(env_var, _)| std::env::var(env_var).is_ok())
-                    .and_then(|(env_var, provider)| {
-                        let model = if configured_model == "all-MiniLM-L6-v2" {
-                            default_embedding_model_for_provider(provider)
-                        } else {
-                            configured_model.as_str()
-                        };
-                        let custom_url = config.provider_urls.get(*provider).map(|s| s.as_str());
-                        match create_embedding_driver(provider, model, env_var, custom_url) {
-                            Ok(d) => {
-                                info!(provider = %provider, model = %model, "Embedding driver auto-detected via {}", env_var);
-                                Some(Arc::from(d))
-                            }
-                            Err(e) => {
-                                warn!(provider = %provider, error = %e, "Embedding auto-detect failed for {}", provider);
-                                None
-                            }
-                        }
-                    });
-
-                if detected_from_key.is_some() {
-                    detected_from_key
-                } else {
-                    // No API key found — try local providers in order:
-                    // Ollama, vLLM, LM Studio (no key needed).
-                    const LOCAL_PROVIDERS: &[&str] = &["ollama", "vllm", "lmstudio"];
-
-                    let mut local_result = None;
-                    for provider in LOCAL_PROVIDERS {
-                        let model = if configured_model == "all-MiniLM-L6-v2" {
-                            default_embedding_model_for_provider(provider)
-                        } else {
-                            configured_model.as_str()
-                        };
-                        let custom_url = config.provider_urls.get(*provider).map(|s| s.as_str());
-                        match create_embedding_driver(provider, model, "", custom_url) {
-                            Ok(d) => {
-                                info!(provider = %provider, model = %model, "Embedding driver auto-detected: {} (local)", provider);
-                                local_result = Some(Arc::from(d));
-                                break;
-                            }
-                            Err(e) => {
-                                debug!(provider = %provider, error = %e, "Local embedding provider {} not available", provider);
-                            }
-                        }
-                    }
-
-                    if local_result.is_none() {
-                        warn!(
-                            "No embedding provider available. Memory recall will use text search only. \
-                             Configure [memory] embedding_provider in config.toml or set an API key \
-                             (OPENAI_API_KEY, GROQ_API_KEY, MISTRAL_API_KEY, TOGETHER_API_KEY, \
-                             FIREWORKS_API_KEY, COHERE_API_KEY)."
-                        );
-                    }
-
-                    local_result
-                }
-            }
-        };
+        let embedding_driver = std::sync::RwLock::new(build_embedding_driver_for_effective_config(
+            &config,
+            &config.memory_default_embedding,
+        ));
 
         let browser_ctx = openfang_runtime::browser::BrowserManager::new(config.browser.clone());
 
@@ -1082,6 +987,9 @@ impl OpenFangKernel {
         let initial_broadcast = config.broadcast.clone();
         let auto_reply_engine = crate::auto_reply::AutoReplyEngine::new(config.auto_reply.clone());
         let provider_enabled_initial = config.provider_enabled.clone();
+        let model_dropdown_disabled_ids = std::sync::RwLock::new(crate::model_dropdown::load(
+            &config.home_dir,
+        ));
 
         let kernel = Self {
             config,
@@ -1133,7 +1041,9 @@ impl OpenFangKernel {
             channel_adapters: dashmap::DashMap::new(),
             default_model_override: std::sync::RwLock::new(None),
             orchestrator_default_model_override: std::sync::RwLock::new(None),
+            memory_default_embedding_override: std::sync::RwLock::new(None),
             provider_enabled_state: std::sync::RwLock::new(provider_enabled_initial),
+            model_dropdown_disabled_ids,
             agent_msg_locks: dashmap::DashMap::new(),
             self_handle: OnceLock::new(),
         };
@@ -1289,33 +1199,6 @@ impl OpenFangKernel {
             }
             Err(e) => {
                 tracing::warn!("Failed to load persisted agents: {e}");
-            }
-        }
-
-        // If no agents exist (fresh install), spawn a default assistant
-        if kernel.registry.list().is_empty() {
-            info!("No agents found — spawning default assistant");
-            let dm = &kernel.config.default_model;
-            let manifest = AgentManifest {
-                name: "assistant".to_string(),
-                description: "General-purpose assistant".to_string(),
-                model: openfang_types::agent::ModelConfig {
-                    provider: dm.provider.clone(),
-                    model: dm.model.clone(),
-                    system_prompt: "You are a helpful AI assistant.".to_string(),
-                    api_key_env: if dm.api_key_env.is_empty() {
-                        None
-                    } else {
-                        Some(dm.api_key_env.clone())
-                    },
-                    base_url: dm.base_url.clone(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            match kernel.spawn_agent(manifest) {
-                Ok(id) => info!(id = %id, "Default assistant spawned"),
-                Err(e) => warn!("Failed to spawn default assistant: {e}"),
             }
         }
 
@@ -2018,6 +1901,11 @@ impl OpenFangKernel {
             message.to_string()
         };
         let kernel_clone = Arc::clone(self);
+        let embedding_for_stream = kernel_clone
+            .embedding_driver
+            .read()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner())
+            .clone();
 
         let handle = tokio::spawn(async move {
             // Auto-compact if the session is large before running the loop
@@ -2075,7 +1963,7 @@ impl OpenFangKernel {
                 Some(&kernel_clone.mcp_connections),
                 Some(&kernel_clone.web_ctx),
                 Some(&kernel_clone.browser_ctx),
-                kernel_clone.embedding_driver.as_deref(),
+                embedding_for_stream.as_deref(),
                 manifest.workspace.as_deref(),
                 Some(&phase_cb),
                 Some(&kernel_clone.media_engine),
@@ -2634,6 +2522,12 @@ impl OpenFangKernel {
             message.to_string()
         };
 
+        let embedding_for_loop = self
+            .embedding_driver
+            .read()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner())
+            .clone();
+
         let result = run_agent_loop(
             &manifest,
             &message_with_links,
@@ -2646,7 +2540,7 @@ impl OpenFangKernel {
             Some(&self.mcp_connections),
             Some(&self.web_ctx),
             Some(&self.browser_ctx),
-            self.embedding_driver.as_deref(),
+            embedding_for_loop.as_deref(),
             manifest.workspace.as_deref(),
             None, // on_phase callback
             Some(&self.media_engine),
@@ -3355,6 +3249,28 @@ impl OpenFangKernel {
             "ok",
         );
 
+        let id_str = agent_id.to_string();
+        if let Err(e) = self
+            .project_store
+            .detach_agent_from_all_projects(id_str.as_str())
+        {
+            warn!(
+                agent_id = %agent_id,
+                error = %e,
+                "Failed to detach killed agent from projects (stale orchestrator/bindings may remain)"
+            );
+        }
+
+        if let Some(inst) = self.hand_registry.find_by_agent(agent_id) {
+            if let Err(e) = self.deactivate_hand(inst.instance_id) {
+                warn!(
+                    agent_id = %agent_id,
+                    error = %e,
+                    "Failed to deactivate hand after agent kill"
+                );
+            }
+        }
+
         info!(agent = %entry.name, id = %agent_id, "Agent killed");
         Ok(())
     }
@@ -3611,9 +3527,11 @@ impl OpenFangKernel {
     /// Kill the per-project orchestrator hand + agent for `project` (in-memory fields updated).
     fn deactivate_project_orchestrator_in_memory(&self, project: &mut Project) -> KernelResult<()> {
         use std::str::FromStr;
-        if let Some(ref s) = project.orchestrator_agent_id {
+        let old_orch = project.orchestrator_agent_id.take();
+        if let Some(s) = old_orch {
             let t = s.trim();
             if !t.is_empty() {
+                project.record_former_agent(t);
                 if let Ok(aid) = AgentId::from_str(t) {
                     if let Some(inst) = self.hand_registry.find_by_agent(aid) {
                         self.deactivate_hand(inst.instance_id)?;
@@ -3624,8 +3542,60 @@ impl OpenFangKernel {
                 }
             }
         }
-        project.orchestrator_agent_id = None;
         Ok(())
+    }
+
+    /// Resume a crashed/suspended orchestrator, or recreate it if missing/terminated (requires Mattermost channel).
+    pub fn revive_project_orchestrator(&self, project_id: &str) -> Result<serde_json::Value, String> {
+        use std::str::FromStr;
+        let pid: ProjectId = project_id
+            .trim()
+            .parse()
+            .map_err(|_| "Invalid project_id".to_string())?;
+        let project = self
+            .project_store
+            .get(pid)
+            .ok_or_else(|| "Project not found".to_string())?;
+        let mm_ok = project
+            .mattermost_channel_id
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false);
+        if !mm_ok {
+            return Err(
+                "Configure a Mattermost channel for this project before starting the orchestrator."
+                    .into(),
+            );
+        }
+        if let Some(ref oid_s) = project.orchestrator_agent_id {
+            let t = oid_s.trim();
+            if !t.is_empty() {
+                if let Ok(aid) = AgentId::from_str(t) {
+                    if let Some(entry) = self.registry.get(aid) {
+                        use openfang_types::agent::AgentState;
+                        if entry.state != AgentState::Terminated {
+                            let was_running = self.stop_agent_run(aid).unwrap_or(false);
+                            let _ = self.registry.set_state(aid, AgentState::Running);
+                            return Ok(serde_json::json!({
+                                "action": "restarted",
+                                "agent_id": t,
+                                "task_cancelled": was_running,
+                            }));
+                        }
+                    }
+                }
+            }
+        }
+        self.sync_project_mattermost_orchestrator(None, &project)
+            .map_err(|e| e.to_string())?;
+        let updated = self
+            .project_store
+            .get(pid)
+            .ok_or_else(|| "Project missing after orchestrator sync".to_string())?;
+        Ok(serde_json::json!({
+            "action": "synced",
+            "orchestrator_agent_id": updated.orchestrator_agent_id,
+        }))
     }
 
     fn resolved_orchestrator_default_model(&self) -> openfang_types::config::DefaultModelConfig {
@@ -3637,6 +3607,24 @@ impl OpenFangKernel {
             .as_ref()
             .cloned()
             .unwrap_or_else(|| self.config.orchestrator_default_model.clone())
+    }
+
+    fn rebuild_embedding_driver(&self, file_config: &KernelConfig) {
+        let eff = {
+            let g = self
+                .memory_default_embedding_override
+                .read()
+                .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+            g.as_ref()
+                .cloned()
+                .unwrap_or_else(|| file_config.memory_default_embedding.clone())
+        };
+        let new_drv = build_embedding_driver_for_effective_config(file_config, &eff);
+        let mut w = self
+            .embedding_driver
+            .write()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        *w = new_drv;
     }
 
     fn provider_api_key_env_from_catalog(
@@ -3664,7 +3652,7 @@ impl OpenFangKernel {
         Self::provider_api_key_env_from_catalog(&self.config, &catalog, provider)
     }
 
-    /// Dashboard / `[provider_enabled]` toggle with defaults (cloud on, local off), ignoring env auto-enable.
+    /// Dashboard / `[provider_enabled]` toggle (defaults off until set); env API key still forces enable.
     pub fn provider_user_enabled_resolved(
         &self,
         p: &openfang_types::model_catalog::ProviderInfo,
@@ -3727,6 +3715,7 @@ impl OpenFangKernel {
     }
 
     /// Catalog models that are enabled and credentialed (for pickers / channel bridge).
+    /// Omits models the user hid from dropdowns in Settings → Models.
     pub fn available_model_catalog_entries_cloned(
         &self,
     ) -> Vec<openfang_types::model_catalog::ModelCatalogEntry> {
@@ -3734,10 +3723,52 @@ impl OpenFangKernel {
             .model_catalog
             .read()
             .unwrap_or_else(|e| e.into_inner());
+        let hidden = self
+            .model_dropdown_disabled_ids
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         cat.available_models_filtered(|p| self.provider_models_usable(p))
             .into_iter()
+            .filter(|m| !hidden.contains(&m.id))
             .cloned()
             .collect()
+    }
+
+    /// Whether this catalog model should appear in dashboard / API dropdown lists.
+    pub fn model_show_in_dropdowns(&self, model_id: &str) -> bool {
+        !self
+            .model_dropdown_disabled_ids
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(model_id)
+    }
+
+    /// Replace the set of models hidden from dropdowns and persist to disk.
+    pub fn replace_model_dropdown_disabled(
+        &self,
+        ids: std::collections::HashSet<String>,
+    ) -> std::io::Result<()> {
+        const MAX: usize = 20_000;
+        if ids.len() > MAX {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("too many disabled model ids (max {MAX})"),
+            ));
+        }
+        for id in &ids {
+            if id.is_empty() || id.len() > 512 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "invalid model id in disabled list",
+                ));
+            }
+        }
+        crate::model_dropdown::save(&self.config.home_dir, &ids)?;
+        *self
+            .model_dropdown_disabled_ids
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = ids;
+        Ok(())
     }
 
     /// Provider/model/credentials for the per-project workflow-coordinator manifest.
@@ -4353,6 +4384,19 @@ impl OpenFangKernel {
                         .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
                     *guard = Some(new_config.orchestrator_default_model.clone());
                 }
+                HotAction::UpdateMemoryDefaultEmbedding => {
+                    info!(
+                        "Hot-reload: updating memory embedding default to {}/{}",
+                        new_config.memory_default_embedding.provider,
+                        new_config.memory_default_embedding.model
+                    );
+                    let mut guard = self
+                        .memory_default_embedding_override
+                        .write()
+                        .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+                    *guard = Some(new_config.memory_default_embedding.clone());
+                    self.rebuild_embedding_driver(new_config);
+                }
                 HotAction::UpdateProviderEnabled => {
                     info!("Hot-reload: updating provider_enabled map");
                     let mut guard = self
@@ -4542,7 +4586,7 @@ impl OpenFangKernel {
 
         let run_id = self
             .workflows
-            .create_run(workflow_id, input)
+            .create_run(workflow_id, input, effective_project)
             .await
             .ok_or_else(|| {
                 KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
@@ -4714,6 +4758,7 @@ impl OpenFangKernel {
             }
         }
         self.ensure_bundled_workflow_full_cycle().await;
+        self.ensure_bundled_workflow_doc_to_tasks().await;
     }
 
     async fn ensure_bundled_workflow_full_cycle(&self) {
@@ -4751,6 +4796,44 @@ impl OpenFangKernel {
             workflow_id = %id,
             name = %wf.name,
             "Installed bundled default workflow"
+        );
+    }
+
+    async fn ensure_bundled_workflow_doc_to_tasks(&self) {
+        use crate::workflow::{
+            workflow_from_create_request_json, BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME,
+        };
+
+        let list = self.workflows.list_workflows().await;
+        if list
+            .iter()
+            .any(|w| w.name == BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME)
+        {
+            return;
+        }
+
+        let v: serde_json::Value = serde_json::from_str(include_str!(
+            "../bundled/workflows/workflow-doc-to-tasks.json"
+        ))
+        .expect("bundled workflow-doc-to-tasks.json must be valid JSON");
+
+        let wf = match workflow_from_create_request_json(&v) {
+            Ok(w) => w,
+            Err(e) => {
+                tracing::error!(
+                    error = %e,
+                    "Invalid bundled workflow-doc-to-tasks workflow template"
+                );
+                return;
+            }
+        };
+
+        let id = self.register_workflow(wf.clone()).await;
+        self.persist_workflow_to_disk(&wf);
+        info!(
+            workflow_id = %id,
+            name = %wf.name,
+            "Installed bundled doc-to-tasks workflow"
         );
     }
 
@@ -6560,12 +6643,191 @@ fn apply_budget_defaults(
     }
 }
 
+fn embedding_explicit_api_key_env_for_provider(provider: &str) -> String {
+    let prov_l = provider.to_ascii_lowercase();
+    if prov_l == "gemini" || prov_l == "google" {
+        if std::env::var("GOOGLE_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return "GOOGLE_API_KEY".to_string();
+        }
+        if std::env::var("GEMINI_API_KEY")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false)
+        {
+            return "GEMINI_API_KEY".to_string();
+        }
+        return "GOOGLE_API_KEY".to_string();
+    }
+    String::new()
+}
+
+/// Build the memory embedding driver: non-empty Settings `memory_default_embedding` wins;
+/// otherwise `[memory]` explicit provider, then API-key auto-detect, then local providers.
+fn build_embedding_driver_for_effective_config(
+    config: &KernelConfig,
+    memory_defaults: &DefaultModelConfig,
+) -> Option<Arc<dyn openfang_runtime::embedding::EmbeddingDriver + Send + Sync>> {
+    use openfang_runtime::embedding::create_embedding_driver;
+    let configured_model = &config.memory.embedding_model;
+
+    let dp = memory_defaults.provider.trim();
+    let dm = memory_defaults.model.trim();
+    if !dp.is_empty() && !dm.is_empty() {
+        let model_resolved = if dm == "all-MiniLM-L6-v2" {
+            default_embedding_model_for_provider(dp)
+        } else {
+            dm
+        };
+        let from_user = memory_defaults.api_key_env.trim();
+        let api_key_env_owned = if !from_user.is_empty() {
+            from_user.to_string()
+        } else {
+            embedding_explicit_api_key_env_for_provider(dp)
+        };
+        let custom_url = memory_defaults
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| config.provider_urls.get(dp).map(|s| s.as_str()));
+        return match create_embedding_driver(
+            dp,
+            model_resolved,
+            api_key_env_owned.as_str(),
+            custom_url,
+        ) {
+            Ok(d) => {
+                info!(
+                    provider = %dp,
+                    model = %model_resolved,
+                    "Embedding driver from memory_default_embedding (Settings / config)"
+                );
+                Some(Arc::from(d))
+            }
+            Err(e) => {
+                warn!(
+                    provider = %dp,
+                    error = %e,
+                    "memory_default_embedding driver init failed — falling back to text search"
+                );
+                None
+            }
+        };
+    }
+
+    if let Some(ref provider) = config.memory.embedding_provider {
+        let model = if configured_model == "all-MiniLM-L6-v2" {
+            default_embedding_model_for_provider(provider)
+        } else {
+            configured_model.as_str()
+        };
+        let from_cfg = config
+            .memory
+            .embedding_api_key_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let api_key_env_owned = if let Some(e) = from_cfg {
+            e.to_string()
+        } else {
+            embedding_explicit_api_key_env_for_provider(provider)
+        };
+        let custom_url = config
+            .provider_urls
+            .get(provider.as_str())
+            .map(|s| s.as_str());
+        match create_embedding_driver(provider, model, api_key_env_owned.as_str(), custom_url) {
+            Ok(d) => {
+                info!(provider = %provider, model = %model, "Embedding driver configured from [memory]");
+                Some(Arc::from(d))
+            }
+            Err(e) => {
+                warn!(provider = %provider, error = %e, "Embedding driver init failed — falling back to text search");
+                None
+            }
+        }
+    } else {
+        const API_KEY_PROVIDERS: &[(&str, &str)] = &[
+            ("OPENAI_API_KEY", "openai"),
+            ("GOOGLE_API_KEY", "gemini"),
+            ("GEMINI_API_KEY", "gemini"),
+            ("GROQ_API_KEY", "groq"),
+            ("MISTRAL_API_KEY", "mistral"),
+            ("TOGETHER_API_KEY", "together"),
+            ("FIREWORKS_API_KEY", "fireworks"),
+            ("COHERE_API_KEY", "cohere"),
+        ];
+
+        let detected_from_key = API_KEY_PROVIDERS
+            .iter()
+            .find(|(env_var, _)| std::env::var(env_var).is_ok())
+            .and_then(|(env_var, provider)| {
+                let model = if configured_model == "all-MiniLM-L6-v2" {
+                    default_embedding_model_for_provider(provider)
+                } else {
+                    configured_model.as_str()
+                };
+                let custom_url = config.provider_urls.get(*provider).map(|s| s.as_str());
+                match create_embedding_driver(provider, model, env_var, custom_url) {
+                    Ok(d) => {
+                        info!(provider = %provider, model = %model, "Embedding driver auto-detected via {}", env_var);
+                        Some(Arc::from(d))
+                    }
+                    Err(e) => {
+                        warn!(provider = %provider, error = %e, "Embedding auto-detect failed for {}", provider);
+                        None
+                    }
+                }
+            });
+
+        if detected_from_key.is_some() {
+            detected_from_key
+        } else {
+            const LOCAL_PROVIDERS: &[&str] = &["ollama", "vllm", "lmstudio"];
+
+            let mut local_result = None;
+            for provider in LOCAL_PROVIDERS {
+                let model = if configured_model == "all-MiniLM-L6-v2" {
+                    default_embedding_model_for_provider(provider)
+                } else {
+                    configured_model.as_str()
+                };
+                let custom_url = config.provider_urls.get(*provider).map(|s| s.as_str());
+                match create_embedding_driver(provider, model, "", custom_url) {
+                    Ok(d) => {
+                        info!(provider = %provider, model = %model, "Embedding driver auto-detected: {} (local)", provider);
+                        local_result = Some(Arc::from(d));
+                        break;
+                    }
+                    Err(e) => {
+                        debug!(provider = %provider, error = %e, "Local embedding provider {} not available", provider);
+                    }
+                }
+            }
+
+            if local_result.is_none() {
+                warn!(
+                    "No embedding provider available. Memory recall will use text search only. \
+                     Set memory_default_embedding in config.toml, configure [memory] embedding_provider, or set an API key \
+                     (OPENAI_API_KEY, GOOGLE_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, \
+                     MISTRAL_API_KEY, TOGETHER_API_KEY, FIREWORKS_API_KEY, COHERE_API_KEY)."
+                );
+            }
+
+            local_result
+        }
+    }
+}
+
 /// Pick a sensible default embedding model for a given provider when the user
 /// configured an explicit `embedding_provider` but left `embedding_model` at the
 /// default value (which is a local model name that cloud APIs wouldn't recognise).
 fn default_embedding_model_for_provider(provider: &str) -> &'static str {
     match provider {
         "openai" => "text-embedding-3-small",
+        "gemini" | "google" => "text-embedding-004",
         "groq" => "nomic-embed-text",
         "mistral" => "mistral-embed",
         "together" => "togethercomputer/m2-bert-80M-8k-retrieval",

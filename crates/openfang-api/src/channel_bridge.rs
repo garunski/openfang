@@ -281,7 +281,7 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         let run_id = match self
             .kernel
             .workflows
-            .create_run(wf.id, input.to_string())
+            .create_run(wf.id, input.to_string(), None)
             .await
         {
             Some(id) => id,

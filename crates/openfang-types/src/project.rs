@@ -119,6 +119,9 @@ pub struct Project {
     /// Agent UUID for the per-project `workflow-coordinator` hand (Mattermost orchestrator).
     #[serde(default)]
     pub orchestrator_agent_id: Option<String>,
+    /// Agent ids that were explicitly unbound or were a previous project orchestrator (capped).
+    #[serde(default)]
+    pub former_agent_ids: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -138,6 +141,7 @@ impl Default for Project {
             mattermost_team_name: None,
             mattermost_channel_name: None,
             orchestrator_agent_id: None,
+            former_agent_ids: Vec::new(),
             created_at: now,
             updated_at: now,
         }
@@ -145,6 +149,22 @@ impl Default for Project {
 }
 
 impl Project {
+    /// Record an agent id for dashboard history (deduped, FIFO-capped).
+    pub fn record_former_agent(&mut self, agent_id: &str) {
+        let t = agent_id.trim();
+        if t.is_empty() {
+            return;
+        }
+        let t = t.to_string();
+        self.former_agent_ids.retain(|x| x != &t);
+        self.former_agent_ids.push(t);
+        const MAX: usize = 100;
+        if self.former_agent_ids.len() > MAX {
+            let drop = self.former_agent_ids.len() - MAX;
+            self.former_agent_ids.drain(0..drop);
+        }
+    }
+
     /// Trim and clear empty `admin_spoke` values.
     pub fn normalize_admin_spoke_field(&mut self) {
         self.admin_spoke = self.admin_spoke.as_ref().and_then(|s| {
@@ -441,6 +461,7 @@ mod tests {
         assert!(p.mattermost_team_name.is_none());
         assert!(p.mattermost_channel_name.is_none());
         assert!(p.orchestrator_agent_id.is_none());
+        assert!(p.former_agent_ids.is_empty());
     }
 
     #[test]

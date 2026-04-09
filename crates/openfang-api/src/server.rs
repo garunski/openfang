@@ -389,8 +389,16 @@ pub async fn build_router(
             axum::routing::get(routes::list_project_agents).post(routes::bind_project_agent),
         )
         .route(
+            "/api/projects/{id}/agents/management",
+            axum::routing::get(routes::list_project_agents_management),
+        )
+        .route(
             "/api/projects/{id}/agents/{agent_id}",
             axum::routing::delete(routes::unbind_project_agent),
+        )
+        .route(
+            "/api/projects/{id}/orchestrator/start",
+            axum::routing::post(routes::start_project_orchestrator),
         )
         .route(
             "/api/projects/{id}/spokes",
@@ -451,6 +459,10 @@ pub async fn build_router(
         .route(
             "/api/projects/{id}/workflows",
             axum::routing::get(routes::list_project_workflows),
+        )
+        .route(
+            "/api/projects/{id}/workflow-runs",
+            axum::routing::get(routes::list_project_workflow_runs),
         )
         .route(
             "/api/projects/{id}/workflows/{workflow_id}/run",
@@ -741,6 +753,11 @@ pub async fn build_router(
         .route("/api/security", axum::routing::get(routes::security_status))
         // Model catalog endpoints
         .route("/api/models", axum::routing::get(routes::list_models))
+        .route(
+            "/api/models/dropdown-disabled",
+            axum::routing::get(routes::get_model_dropdown_disabled)
+                .put(routes::put_model_dropdown_disabled),
+        )
         .route(
             "/api/models/aliases",
             axum::routing::get(routes::list_aliases),
