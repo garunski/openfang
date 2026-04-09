@@ -177,6 +177,10 @@ impl ProjectStore {
             updated.mattermost_channel_id =
                 v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
         }
+        if let Some(v) = patch.mattermost_team_name {
+            updated.mattermost_team_name =
+                v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        }
         if let Some(v) = patch.mattermost_channel_name {
             updated.mattermost_channel_name =
                 v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
@@ -485,12 +489,14 @@ mod tests {
                 id,
                 ProjectPatch {
                     mattermost_channel_id: Some(Some("ch-1".into())),
+                    mattermost_team_name: Some(Some("acme".into())),
                     mattermost_channel_name: Some(Some("town-square".into())),
                     ..Default::default()
                 },
             )
             .unwrap();
         assert_eq!(u.mattermost_channel_id.as_deref(), Some("ch-1"));
+        assert_eq!(u.mattermost_team_name.as_deref(), Some("acme"));
         assert_eq!(u.mattermost_channel_name.as_deref(), Some("town-square"));
 
         let cleared = store

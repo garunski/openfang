@@ -3,6 +3,7 @@
 
 var PROJECT_DETAIL_TAB_SET = {
   overview: true,
+  chat: true,
   backlog: true,
   board: true,
   pert: true,
@@ -10,7 +11,6 @@ var PROJECT_DETAIL_TAB_SET = {
   decisions: true,
   milestones: true,
   spokes: true,
-  agents: true,
   pipelines: true,
   workflows: true,
   mattermost: true,
@@ -18,10 +18,10 @@ var PROJECT_DETAIL_TAB_SET = {
 
 /** Primary nav groups (UI); `detailTab` remains the concrete section key for routes + content. */
 var PROJECT_DETAIL_TABS_BY_CATEGORY = {
-  overview: ['overview'],
+  overview: ['overview', 'chat'],
   tasks: ['backlog', 'board', 'pert', 'milestones'],
   knowledge: ['docs', 'decisions'],
-  automation: ['spokes', 'agents', 'pipelines', 'workflows', 'mattermost'],
+  automation: ['spokes', 'pipelines', 'workflows', 'mattermost'],
 };
 
 function projectDetailCategoryForTab(tab) {
@@ -107,17 +107,23 @@ function projectsPage() {
     wfRunDetailLoading: false,
     wfRunsPanelError: '',
     _wfRunPollTimer: null,
-    mattermostForm: { channel_id: '', channel_name: '' },
+    mattermostForm: { team_name: '', channel_name: '' },
     mattermostSaving: false,
+    mattermostTestSending: false,
     mattermostError: '',
     /** @type {{ id: string, name: string, state: string, missing?: boolean } | null} */
     _orchestratorAgentMeta: null,
+    /** Project-scoped agents for Chat tab (`GET /api/projects/:id/agents`). */
+    projectChatAgents: [],
+    projectChatAgentsLoading: false,
+    /** When set, inline `chatPageProjectEmbed()` is mounted for that agent. */
+    projectChatSelectedAgentId: null,
     detailLoading: {
       overview: false,
+      chat: false,
       backlog: false,
       pert: false,
       spokes: false,
-      agents: false,
       pipelines: false,
       workflows: false,
       mattermost: false,
@@ -127,10 +133,10 @@ function projectsPage() {
     },
     detailErrors: {
       overview: '',
+      chat: '',
       backlog: '',
       pert: '',
       spokes: '',
-      agents: '',
       pipelines: '',
       workflows: '',
       mattermost: '',
@@ -140,10 +146,10 @@ function projectsPage() {
     },
     _detailLoaded: {
       overview: false,
+      chat: false,
       backlog: false,
       pert: false,
       spokes: false,
-      agents: false,
       pipelines: false,
       workflows: false,
       mattermost: false,
@@ -155,9 +161,6 @@ function projectsPage() {
     registerForm: { name: '', path: '', adminSpoke: '' },
     registerSubmitting: false,
     registerError: '',
-    bindAgentForm: { agent_id: '' },
-    bindAgentSubmitting: false,
-    bindAgentError: '',
     taskModalOpen: false,
     taskModalTitle: '',
     taskModalLoading: false,
@@ -372,10 +375,10 @@ function projectsPage() {
         (cur === 'docs' && this._detailLoaded.docs) ||
         (cur === 'decisions' && this._detailLoaded.decisions) ||
         (cur === 'milestones' && this._detailLoaded.milestones) ||
-        (cur === 'agents' && this._detailLoaded.agents) ||
         (cur === 'pipelines' && this._detailLoaded.pipelines) ||
         (cur === 'workflows' && this._detailLoaded.workflows) ||
-        (cur === 'mattermost' && this._detailLoaded.mattermost);
+        (cur === 'mattermost' && this._detailLoaded.mattermost) ||
+        (cur === 'chat' && this._detailLoaded.chat);
       var tabs = ['overview', 'backlog', 'board', 'pert', 'docs', 'decisions', 'milestones'];
       var i;
       for (i = 0; i < tabs.length; i++) {
@@ -400,10 +403,10 @@ function projectsPage() {
       this.projectOverview = null;
       this._detailLoaded = {
         overview: false,
+        chat: false,
         backlog: false,
         pert: false,
         spokes: false,
-        agents: false,
         pipelines: false,
         workflows: false,
         mattermost: false,
@@ -419,13 +422,11 @@ function projectsPage() {
       this.wfRunModal = null;
       this.wfRunInput = '';
       this.wfRunError = '';
-      this.bindAgentForm = { agent_id: '' };
-      this.bindAgentError = '';
       this.detailErrors = {
         overview: '',
+        chat: '',
         backlog: '',
         spokes: '',
-        agents: '',
         pipelines: '',
         workflows: '',
         mattermost: '',
@@ -436,10 +437,10 @@ function projectsPage() {
       };
       this.detailLoading = {
         overview: false,
+        chat: false,
         backlog: false,
         pert: false,
         spokes: false,
-        agents: false,
         pipelines: false,
         workflows: false,
         mattermost: false,
@@ -447,9 +448,13 @@ function projectsPage() {
         decisions: false,
         milestones: false,
       };
-      this.mattermostForm = { channel_id: '', channel_name: '' };
+      this.mattermostForm = { team_name: '', channel_name: '' };
+      this.mattermostTestSending = false;
       this.mattermostError = '';
       this._orchestratorAgentMeta = null;
+      this.projectChatAgents = [];
+      this.projectChatAgentsLoading = false;
+      this.projectChatSelectedAgentId = null;
       this.stopWorkflowRunPolling();
       this.wfRunsForWorkflow = null;
       this.wfRunsList = [];
@@ -535,6 +540,36 @@ function projectsPage() {
 
     async loadDetailTab(tab, force, silent) {
       if (!this.selectedProject) return;
+      if (tab === 'chat') {
+        if (!force && this._detailLoaded.chat) return;
+        var hideCh = !!silent;
+        if (!hideCh) {
+          this.setDetailLoading('chat', true);
+          this.setDetailError('chat', '');
+        }
+        try {
+          var pidCh = this.selectedProject.id;
+          var rowsCh = await OpenFangAPI.get(
+            '/api/projects/' + encodeURIComponent(pidCh) + '/agents'
+          );
+          this.projectChatAgents = Array.isArray(rowsCh) ? rowsCh : [];
+          await this.mergeOrchestratorIntoProjectChatAgents();
+          if (
+            this.projectChatSelectedAgentId &&
+            !this.projectChatAgents.some(function (r) {
+              return String(r.agent_id) === String(this.projectChatSelectedAgentId);
+            }, this)
+          ) {
+            this.projectChatSelectedAgentId = null;
+          }
+          this.setDetailLoaded('chat', true);
+        } catch (e) {
+          if (!hideCh) this.setDetailError('chat', e.message || 'Load failed');
+          this.projectChatAgents = [];
+        }
+        if (!hideCh) this.setDetailLoading('chat', false);
+        return;
+      }
       if (tab === 'overview') {
         if (!force && this._detailLoaded.overview) return;
         // `silent` is only set by onBacklogLiveUpdate; do not consult _detailLoaded here — that map is cleared just before this runs.
@@ -558,7 +593,6 @@ function projectsPage() {
           this.detailPipelines = Array.isArray(results[3]) ? results[3] : [];
           this.setDetailLoaded('overview', true);
           this.setDetailLoaded('spokes', true);
-          this.setDetailLoaded('agents', true);
           this.setDetailLoaded('pipelines', true);
         } catch (e) {
           if (!hideOv) this.setDetailError('overview', e.message || 'Load failed');
@@ -594,6 +628,11 @@ function projectsPage() {
           this.setDetailError('mattermost', '');
         }
         try {
+          var pidMm = this.selectedProject.id;
+          var detailMm = await OpenFangAPI.get(
+            '/api/projects/' + encodeURIComponent(pidMm)
+          );
+          this.mergeProjectMattermostFieldsFromDetail(detailMm);
           this.syncMattermostFormFromProject();
           await this.refreshOrchestratorMeta();
           this.setDetailLoaded('mattermost', true);
@@ -605,8 +644,7 @@ function projectsPage() {
       }
       if (!force && this._detailLoaded[tab]) return;
       var pid = this.selectedProject.id;
-      var hideSpinner =
-        !!silent && (tab === 'backlog' || tab === 'agents' || tab === 'pipelines');
+      var hideSpinner = !!silent && (tab === 'backlog' || tab === 'pipelines');
       if (!hideSpinner) {
         this.setDetailLoading(tab, true);
         this.setDetailError(tab, '');
@@ -625,8 +663,6 @@ function projectsPage() {
         } else if (tab === 'spokes') {
           this.detailSpokes = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/spokes');
           this.resetTopologyPan();
-        } else if (tab === 'agents') {
-          this.detailAgents = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid) + '/agents');
         } else if (tab === 'pipelines') {
           this.detailPipelines = await OpenFangAPI.get(
             '/api/projects/' + encodeURIComponent(pid) + '/pipelines?limit=50'
@@ -676,9 +712,97 @@ function projectsPage() {
       return PROJECT_DETAIL_TABS_BY_CATEGORY[this.detailCategory] || ['overview'];
     },
 
+    /** @returns {Promise<boolean>} */
+    async selectProjectChatAgent(row) {
+      if (!row || row.agent_id == null) return false;
+      var id = String(row.agent_id);
+      try {
+        var raw = await OpenFangAPI.get('/api/agents/' + encodeURIComponent(id));
+        var m = raw.model || {};
+        Alpine.store('app').pendingAgent = {
+          id: raw.id,
+          name: raw.name,
+          state: raw.state,
+          model_provider: raw.model_provider != null ? raw.model_provider : m.provider || '?',
+          model_name: raw.model_name != null ? raw.model_name : m.model || '?',
+          identity: raw.identity || {},
+          mode: raw.mode,
+          profile: raw.profile,
+        };
+        this.projectChatSelectedAgentId = id;
+        return true;
+      } catch (e) {
+        if (typeof OpenFangToast !== 'undefined') {
+          OpenFangToast.error(e.message || 'Could not open agent');
+        }
+        Alpine.store('app').pendingAgent = null;
+        this.projectChatSelectedAgentId = null;
+        return false;
+      }
+    },
+
+    clearProjectChatAgent() {
+      OpenFangAPI.wsDisconnect();
+      Alpine.store('app').pendingAgent = null;
+      this.projectChatSelectedAgentId = null;
+    },
+
+    goToAgentsHub() {
+      if (this.$root && typeof this.$root.navigate === 'function') {
+        this.$root.navigate('agents/sessions');
+      } else {
+        window.location.hash = 'agents/sessions';
+      }
+    },
+
+    /** Project overview → Chat tab with no agent selected (agent picker only). */
+    async openProjectChatTab() {
+      this.clearProjectChatAgent();
+      await this.onDetailTabChange('chat');
+    },
+
+    /** Overview agent row → select agent and open Overview/Chat with embed focused. */
+    async openProjectChatWithAgentFromOverview(agent) {
+      if (!agent || agent.agent_id == null) return;
+      var ok = await this.selectProjectChatAgent(agent);
+      if (ok) await this.onDetailTabChange('chat');
+    },
+
+    async mergeOrchestratorIntoProjectChatAgents() {
+      var oid =
+        this.selectedProject && this.selectedProject.orchestrator_agent_id != null
+          ? String(this.selectedProject.orchestrator_agent_id).trim()
+          : '';
+      if (!oid) return;
+      var exists = this.projectChatAgents.some(function (r) {
+        return String(r.agent_id) === oid;
+      });
+      if (exists) return;
+      try {
+        var d = await OpenFangAPI.get('/api/agents/' + encodeURIComponent(oid));
+        if (!d || !d.id) return;
+        var row = {
+          agent_id: d.id,
+          name: d.name || d.id,
+          state: d.state,
+          spoke_name: null,
+          binding: 'orchestrator',
+        };
+        this.projectChatAgents = this.projectChatAgents.concat([row]);
+        this.projectChatAgents.sort(function (a, b) {
+          var na = (a.name || '').toLowerCase();
+          var nb = (b.name || '').toLowerCase();
+          return na.localeCompare(nb);
+        });
+      } catch (e) {
+        /* orchestrator row optional */
+      }
+    },
+
     projectDetailSubtabLabel(tab) {
       var labels = {
         overview: 'Overview',
+        chat: 'Chat',
         backlog: 'List',
         board: 'Board',
         pert: 'PERT',
@@ -686,7 +810,6 @@ function projectsPage() {
         docs: 'Docs',
         decisions: 'Decisions',
         spokes: 'Spokes',
-        agents: 'Agents',
         pipelines: 'Pipelines',
         workflows: 'Workflows',
         mattermost: 'Mattermost',
@@ -697,6 +820,7 @@ function projectsPage() {
     projectDetailSubtabIcon(tab) {
       var icons = {
         overview: 'fa-home',
+        chat: 'fa-commenting',
         backlog: 'fa-list',
         board: 'fa-th',
         pert: 'fa-share-alt',
@@ -704,7 +828,6 @@ function projectsPage() {
         docs: 'fa-file-text-o',
         decisions: 'fa-check-square-o',
         spokes: 'fa-code-fork',
-        agents: 'fa-cog',
         pipelines: 'fa-terminal',
         workflows: 'fa-sitemap',
         mattermost: 'fa-comments',
@@ -1438,31 +1561,6 @@ function projectsPage() {
       this.registerSubmitting = false;
     },
 
-    async bindProjectAgent() {
-      if (!this.selectedProject) return;
-      var aid = (this.bindAgentForm.agent_id || '').trim();
-      if (!aid) {
-        this.bindAgentError = 'Agent id is required';
-        return;
-      }
-      this.bindAgentSubmitting = true;
-      this.bindAgentError = '';
-      try {
-        await OpenFangAPI.post(
-          '/api/projects/' + encodeURIComponent(this.selectedProject.id) + '/agents',
-          { agent_id: aid }
-        );
-        OpenFangToast.success('Agent bound to project');
-        this.bindAgentForm.agent_id = '';
-        this.setDetailLoaded('agents', false);
-        this.setDetailLoaded('overview', false);
-        await this.loadDetailTab('agents', true);
-      } catch (e) {
-        this.bindAgentError = e.message || 'Bind failed';
-      }
-      this.bindAgentSubmitting = false;
-    },
-
     openWfRunModal(wf) {
       if (!wf || !wf.id) return;
       this.wfRunModal = { id: wf.id, name: wf.name || wf.id };
@@ -1609,28 +1707,6 @@ function projectsPage() {
       this.wfRunSubmitting = false;
     },
 
-    async unbindProjectAgent(agent) {
-      if (!this.selectedProject || !agent || !agent.agent_id) return;
-      if (agent.binding !== 'explicit') return;
-      this.bindAgentSubmitting = true;
-      this.bindAgentError = '';
-      try {
-        await OpenFangAPI.del(
-          '/api/projects/' +
-            encodeURIComponent(this.selectedProject.id) +
-            '/agents/' +
-            encodeURIComponent(agent.agent_id)
-        );
-        OpenFangToast.success('Binding removed');
-        this.setDetailLoaded('agents', false);
-        this.setDetailLoaded('overview', false);
-        await this.loadDetailTab('agents', true);
-      } catch (e) {
-        this.bindAgentError = e.message || 'Unbind failed';
-      }
-      this.bindAgentSubmitting = false;
-    },
-
     priorityClass(p) {
       if (!p) return 'badge-dim';
       var x = String(p).toLowerCase();
@@ -1661,15 +1737,46 @@ function projectsPage() {
       return '\u2026' + path.slice(-(n - 1));
     },
 
+    /** List `GET /api/projects` omits Mattermost fields; merge from `GET /api/projects/:id`. */
+    mergeProjectMattermostFieldsFromDetail(detail) {
+      if (!detail || detail.id == null) return;
+      var pid = String(detail.id);
+      var patch = {
+        mattermost_channel_id: detail.mattermost_channel_id,
+        mattermost_team_name: detail.mattermost_team_name,
+        mattermost_channel_name: detail.mattermost_channel_name,
+        orchestrator_agent_id: detail.orchestrator_agent_id,
+        updated_at: detail.updated_at,
+      };
+      var row = null;
+      var i;
+      for (i = 0; i < this.projects.length; i++) {
+        if (String(this.projects[i].id) === pid) {
+          row = this.projects[i];
+          Object.assign(row, patch);
+          break;
+        }
+      }
+      if (row) {
+        this.selectedProject = row;
+      } else if (this.selectedProject && String(this.selectedProject.id) === pid) {
+        Object.assign(this.selectedProject, patch);
+      }
+    },
+
     syncMattermostFormFromProject() {
       var p = this.selectedProject;
       if (!p) {
-        this.mattermostForm = { channel_id: '', channel_name: '' };
+        this.mattermostForm = { team_name: '', channel_name: '' };
         return;
       }
       this.mattermostForm = {
-        channel_id: p.mattermost_channel_id != null ? String(p.mattermost_channel_id) : '',
-        channel_name: p.mattermost_channel_name != null ? String(p.mattermost_channel_name) : '',
+        team_name:
+          p.mattermost_team_name != null ? String(p.mattermost_team_name) : '',
+        channel_name:
+          p.mattermost_channel_name != null
+            ? String(p.mattermost_channel_name)
+            : '',
       };
     },
 
@@ -1703,20 +1810,6 @@ function projectsPage() {
       }
     },
 
-    mattermostBindingSummary() {
-      var p = this.selectedProject;
-      if (!p) return 'Not configured';
-      var id = p.mattermost_channel_id;
-      var name = p.mattermost_channel_name;
-      var hasId = id != null && String(id).trim() !== '';
-      var hasName = name != null && String(name).trim() !== '';
-      if (!hasId && !hasName) return 'Not configured';
-      var parts = [];
-      if (hasName) parts.push(String(name).trim());
-      if (hasId) parts.push(String(id).trim());
-      return parts.join(' — ');
-    },
-
     orchestratorIsActive() {
       var m = this._orchestratorAgentMeta;
       if (!m || m.missing) return false;
@@ -1735,25 +1828,26 @@ function projectsPage() {
       this.mattermostSaving = true;
       this.mattermostError = '';
       try {
-        var cid = (this.mattermostForm.channel_id || '').trim();
+        var tname = (this.mattermostForm.team_name || '').trim();
         var cname = (this.mattermostForm.channel_name || '').trim();
-        await OpenFangAPI.put('/api/projects/' + encodeURIComponent(this.selectedProject.id), {
-          mattermost_channel_id: cid ? cid : null,
-          mattermost_channel_name: cname ? cname : null,
-        });
+        var body =
+          tname || cname
+            ? {
+                mattermost_team_name: tname ? tname : null,
+                mattermost_channel_name: cname ? cname : null,
+              }
+            : {
+                mattermost_channel_id: null,
+                mattermost_channel_name: null,
+                mattermost_team_name: null,
+              };
+        var pid = this.selectedProject.id;
+        await OpenFangAPI.put('/api/projects/' + encodeURIComponent(pid), body);
         OpenFangToast.success('Mattermost channel saved');
         this.setDetailLoaded('overview', false);
         await this.loadProjects();
-        var pid = this.selectedProject.id;
-        var proj = null;
-        var j;
-        for (j = 0; j < this.projects.length; j++) {
-          if (String(this.projects[j].id) === String(pid)) {
-            proj = this.projects[j];
-            break;
-          }
-        }
-        if (proj) this.selectedProject = proj;
+        var detail = await OpenFangAPI.get('/api/projects/' + encodeURIComponent(pid));
+        this.mergeProjectMattermostFieldsFromDetail(detail);
         this.syncMattermostFormFromProject();
         await this.refreshOrchestratorMeta();
         if (this.detailTab === 'overview') await this.loadDetailTab('overview', true);
@@ -1765,9 +1859,33 @@ function projectsPage() {
 
     async clearMattermostBinding() {
       if (!this.selectedProject || this.mattermostSaving) return;
-      this.mattermostForm.channel_id = '';
+      this.mattermostForm.team_name = '';
       this.mattermostForm.channel_name = '';
       await this.saveMattermostBinding();
+    },
+
+    async sendMattermostTestMessage() {
+      if (!this.selectedProject || this.mattermostTestSending) return;
+      var p = this.selectedProject;
+      var cid = p.mattermost_channel_id;
+      if (cid == null || String(cid).trim() === '') {
+        this.mattermostError = 'Save a channel binding first.';
+        return;
+      }
+      this.mattermostTestSending = true;
+      this.mattermostError = '';
+      try {
+        var r = await OpenFangAPI.post(
+          '/api/projects/' + encodeURIComponent(p.id) + '/mattermost/test-message',
+          {}
+        );
+        OpenFangToast.success(
+          r && r.message ? String(r.message) : 'Test message sent'
+        );
+      } catch (e) {
+        this.mattermostError = e.message || 'Send failed';
+      }
+      this.mattermostTestSending = false;
     },
 
     async openOrchestratorAgentDetail() {

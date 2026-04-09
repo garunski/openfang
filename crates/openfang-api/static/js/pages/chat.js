@@ -1,9 +1,16 @@
 // OpenFang Chat Page — Agent chat with markdown + streaming
 'use strict';
 
-function chatPage() {
+function chatPage(opts) {
+  opts = opts || {};
+  var uiSuffix = opts.uiSuffix || '';
   var msgId = 0;
   return {
+    /** Suffix for DOM ids when multiple chat UIs exist (e.g. project inline + Agents). */
+    _chatUiSuffix: uiSuffix,
+    chatElId: function (base) {
+      return base + this._chatUiSuffix;
+    },
     currentAgent: null,
     messages: [],
     inputText: '',
@@ -147,7 +154,7 @@ function chatPage() {
       document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === '/') {
           e.preventDefault();
-          var input = document.getElementById('msg-input');
+          var input = document.getElementById(self.chatElId('msg-input'));
           if (input) { input.focus(); self.inputText = '/'; }
         }
         // Ctrl+M for model switcher
@@ -236,7 +243,7 @@ function chatPage() {
         this.modelSwitcherIdx = 0;
         this.showModelSwitcher = true;
         this.$nextTick(function() {
-          var el = document.getElementById('model-switcher-search');
+          var el = document.getElementById(self.chatElId('model-switcher-search'));
           if (el) el.focus();
         });
         return;
@@ -251,7 +258,7 @@ function chatPage() {
         self.modelSwitcherIdx = 0;
         self.showModelSwitcher = true;
         self.$nextTick(function() {
-          var el = document.getElementById('model-switcher-search');
+          var el = document.getElementById(self.chatElId('model-switcher-search'));
           if (el) el.focus();
         });
       }).catch(function(e) {
@@ -509,7 +516,7 @@ function chatPage() {
       // Focus input after agent selection
       var self = this;
       this.$nextTick(function() {
-        var el = document.getElementById('msg-input');
+        var el = document.getElementById(self.chatElId('msg-input'));
         if (el) el.focus();
       });
     },
@@ -836,7 +843,7 @@ function chatPage() {
           this.scrollToBottom();
           var self3 = this;
           this.$nextTick(function() {
-            var el = document.getElementById('msg-input'); if (el) el.focus();
+            var el = document.getElementById(self3.chatElId('msg-input')); if (el) el.focus();
             self3._processQueue();
           });
           break;
@@ -861,7 +868,7 @@ function chatPage() {
           this.scrollToBottom();
           var self2 = this;
           this.$nextTick(function() {
-            var el = document.getElementById('msg-input'); if (el) el.focus();
+            var el = document.getElementById(self2.chatElId('msg-input')); if (el) el.focus();
             self2._processQueue();
           });
           break;
@@ -943,7 +950,7 @@ function chatPage() {
       this.inputText = '';
 
       // Reset textarea height to single line
-      var ta = document.getElementById('msg-input');
+      var ta = document.getElementById(this.chatElId('msg-input'));
       if (ta) ta.style.height = '';
 
       // Upload attachments first if any
@@ -1030,7 +1037,7 @@ function chatPage() {
       // Process next queued message
       var self = this;
       this.$nextTick(function() {
-        var el = document.getElementById('msg-input'); if (el) el.focus();
+        var el = document.getElementById(self.chatElId('msg-input')); if (el) el.focus();
         self._processQueue();
       });
     },
@@ -1060,6 +1067,7 @@ function chatPage() {
           self.messages = [];
           OpenFangToast.success('Agent "' + name + '" stopped');
           Alpine.store('app').refreshAgents();
+          if (self._chatUiSuffix) window.dispatchEvent(new Event('close-chat'));
         } catch(e) {
           OpenFangToast.error('Failed to stop agent: ' + e.message);
         }
@@ -1069,7 +1077,7 @@ function chatPage() {
     _latexTimer: null,
     scrollToBottom() {
       var self = this;
-      var el = document.getElementById('messages');
+      var el = document.getElementById(self.chatElId('messages'));
       if (el) self.$nextTick(function() {
         el.scrollTop = el.scrollHeight;
         // Debounce LaTeX rendering to avoid running on every streaming token
@@ -1233,7 +1241,7 @@ function chatPage() {
       if (this.searchOpen) {
         var self = this;
         this.$nextTick(function() {
-          var el = document.getElementById('chat-search-input');
+          var el = document.getElementById(self.chatElId('chat-search-input'));
           if (el) el.focus();
         });
       } else {
@@ -1262,4 +1270,9 @@ function chatPage() {
     renderMarkdown: renderMarkdown,
     escapeHtml: escapeHtml
   };
+}
+
+/** Project detail Chat tab — separate DOM ids from Agents → Chat (`chatPage()`). */
+function chatPageProjectEmbed() {
+  return chatPage({ uiSuffix: '__pchat' });
 }

@@ -208,15 +208,13 @@ function agentsPage() {
       }
       this.loading = false;
 
-      // If a pending agent was set (e.g. from wizard or redirect), open chat inline
       var store = Alpine.store('app');
-      if (store.pendingAgent) {
-        this.activeChatAgent = store.pendingAgent;
+      if (!this.activeChatAgent && store.pendingAgent) {
+        this.activeChatAgent = self.normalizeAgentForChat(store.pendingAgent) || store.pendingAgent;
       }
-      // Watch for future pendingAgent changes
       this.$watch('$store.app.pendingAgent', function(agent) {
         if (agent) {
-          self.activeChatAgent = agent;
+          self.activeChatAgent = self.normalizeAgentForChat(agent) || agent;
         }
       });
     },
@@ -312,9 +310,27 @@ function agentsPage() {
       this.tplLoading = false;
     },
 
+    /** Normalize GET /api/agents/:id (nested `model`) to the list-agent shape chat UI expects. */
+    normalizeAgentForChat(raw) {
+      if (!raw || !raw.id) return raw;
+      var m = raw.model || {};
+      return {
+        id: raw.id,
+        name: raw.name,
+        state: raw.state,
+        model_provider: raw.model_provider != null ? raw.model_provider : m.provider || '?',
+        model_name: raw.model_name != null ? raw.model_name : m.model || '?',
+        mode: raw.mode,
+        profile: raw.profile,
+        identity: raw.identity || {},
+        ready: raw.ready,
+      };
+    },
+
     chatWithAgent(agent) {
-      Alpine.store('app').pendingAgent = agent;
-      this.activeChatAgent = agent;
+      var a = this.normalizeAgentForChat(agent) || agent;
+      Alpine.store('app').pendingAgent = a;
+      this.activeChatAgent = a;
     },
 
     closeChat() {

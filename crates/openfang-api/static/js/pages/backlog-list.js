@@ -1,4 +1,4 @@
-// Task list table (project detail List tab) — merged into projectsPage
+// Task list (project detail List tab) — merged into projectsPage
 'use strict';
 
 function backlogListMixins() {
@@ -149,24 +149,15 @@ function backlogListMixins() {
       this.listUniqueAssignees = Object.keys(assignees).sort();
     },
 
-    listToggleSort(key) {
-      if (this.listSortKey === key) {
-        this.listSortDir = this.listSortDir === 'asc' ? 'desc' : 'asc';
-      } else {
-        this.listSortKey = key;
-        this.listSortDir = key === 'id' ? 'desc' : 'asc';
-      }
+    /** After changing sort field from the list dropdown, reset direction to a sensible default. */
+    listOnSortFieldChange() {
+      this.listSortDir = this.listSortKey === 'id' ? 'desc' : 'asc';
     },
 
     /** Numeric suffix from ids like TASK-36; null if no trailing digits. */
     listTaskIdNumericSuffix(id) {
       var m = String(id || '').match(/-(\d+)$/);
       return m ? parseInt(m[1], 10) : null;
-    },
-
-    listSortIndicator(key) {
-      if (this.listSortKey !== key) return '';
-      return this.listSortDir === 'asc' ? ' \u25B2' : ' \u25BC';
     },
 
     listDepsCount(t) {

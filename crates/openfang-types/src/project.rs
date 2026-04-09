@@ -86,6 +86,8 @@ pub struct ProjectPatch {
     pub admin_spoke: Option<Option<String>>,
     /// Mattermost channel id: same semantics as [`Self::admin_spoke`].
     pub mattermost_channel_id: Option<Option<String>>,
+    /// Team URL slug when disambiguation is required (`fang` in `…/fang/channels/…`).
+    pub mattermost_team_name: Option<Option<String>>,
     pub mattermost_channel_name: Option<Option<String>>,
     /// `None` = no change; `Some(None)` = clear; `Some(Some(id))` = set.
     pub orchestrator_agent_id: Option<Option<String>>,
@@ -109,6 +111,9 @@ pub struct Project {
     /// Mattermost channel id for project-scoped orchestrator traffic.
     #[serde(default)]
     pub mattermost_channel_id: Option<String>,
+    /// Mattermost team URL slug (e.g. `fang`); optional when channel slug alone is enough.
+    #[serde(default)]
+    pub mattermost_team_name: Option<String>,
     #[serde(default)]
     pub mattermost_channel_name: Option<String>,
     /// Agent UUID for the per-project `pipeline-coordinator` hand (Mattermost orchestrator).
@@ -130,6 +135,7 @@ impl Default for Project {
             bound_agents: Vec::new(),
             admin_spoke: None,
             mattermost_channel_id: None,
+            mattermost_team_name: None,
             mattermost_channel_name: None,
             orchestrator_agent_id: None,
             created_at: now,
@@ -432,6 +438,7 @@ mod tests {
         assert!(p.bound_agents.is_empty());
         assert!(p.admin_spoke.is_none());
         assert!(p.mattermost_channel_id.is_none());
+        assert!(p.mattermost_team_name.is_none());
         assert!(p.mattermost_channel_name.is_none());
         assert!(p.orchestrator_agent_id.is_none());
     }
@@ -440,14 +447,16 @@ mod tests {
     fn project_json_roundtrip_mattermost_fields() {
         let mut p = Project {
             mattermost_channel_id: Some("abc123".into()),
-            mattermost_channel_name: Some("team-orch".into()),
+            mattermost_team_name: Some("acme".into()),
+            mattermost_channel_name: Some("town-square".into()),
             ..Default::default()
         };
         p.normalize_admin_spoke_field();
         let j = serde_json::to_string(&p).unwrap();
         let q: Project = serde_json::from_str(&j).unwrap();
         assert_eq!(q.mattermost_channel_id.as_deref(), Some("abc123"));
-        assert_eq!(q.mattermost_channel_name.as_deref(), Some("team-orch"));
+        assert_eq!(q.mattermost_team_name.as_deref(), Some("acme"));
+        assert_eq!(q.mattermost_channel_name.as_deref(), Some("town-square"));
     }
 
     #[test]

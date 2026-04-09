@@ -60,6 +60,27 @@ impl LlmDriver for StubDriver {
     }
 }
 
+/// Human-readable label for a per-project pipeline coordinator agent (no GUID suffix).
+fn pipeline_coordinator_agent_display_name(project: &Project) -> String {
+    let raw = project.name.trim();
+    if raw.is_empty() {
+        return "Pipeline coordinator".to_string();
+    }
+    let mut label = String::new();
+    for ch in raw.chars().take(80) {
+        match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => label.push('-'),
+            '\n' | '\r' | '\t' => label.push(' '),
+            _ => label.push(ch),
+        }
+    }
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return "Pipeline coordinator".to_string();
+    }
+    format!("Pipeline · {label}")
+}
+
 pub struct OpenFangKernel {
     /// Kernel configuration.
     pub config: KernelConfig,
@@ -3597,7 +3618,7 @@ impl OpenFangKernel {
         Ok(())
     }
 
-    /// Spawns a dedicated `pipeline-coordinator` agent for `project` (unique agent name + UUID).
+    /// Spawns a dedicated `pipeline-coordinator` agent for `project` (readable name; workspace dir is unique per project id).
     pub fn activate_pipeline_coordinator_for_project(
         &self,
         project: &Project,
@@ -3644,7 +3665,11 @@ impl OpenFangKernel {
             def.agent.model.clone()
         };
 
-        let agent_name = format!("{}-{}", def.agent.name, project.id);
+        let agent_name = pipeline_coordinator_agent_display_name(project);
+        let workspace_dir = self
+            .config
+            .effective_workspaces_dir()
+            .join(format!("project-{}-pipeline-coordinator", project.id));
 
         let mut manifest = AgentManifest {
             name: agent_name,
@@ -3698,6 +3723,7 @@ impl OpenFangKernel {
             } else {
                 None
             },
+            workspace: Some(workspace_dir),
             ..Default::default()
         };
 
@@ -3760,13 +3786,18 @@ impl OpenFangKernel {
              - **project_root**: {}\n\
              - **admin_backlog_root**: {}\n\
              - **Mattermost channel_id**: {}\n\
-             - **Mattermost channel_name**: {}\n\
+             - **Mattermost team_name** (URL slug): {}\n\
+             - **Mattermost channel_name** (URL slug): {}\n\
              - **Spokes**:\n{}\n",
             project.id,
             project.name,
             project.path.display(),
             admin_bl,
             project.mattermost_channel_id.as_deref().unwrap_or("(none)"),
+            project
+                .mattermost_team_name
+                .as_deref()
+                .unwrap_or("(none)"),
             project
                 .mattermost_channel_name
                 .as_deref()
@@ -3816,6 +3847,7 @@ impl OpenFangKernel {
             None => true,
             Some(b) => {
                 b.mattermost_channel_id != after.mattermost_channel_id
+                    || b.mattermost_team_name != after.mattermost_team_name
                     || b.spokes != after.spokes
                     || b.name != after.name
                     || b.path != after.path

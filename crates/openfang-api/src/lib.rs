@@ -37,6 +37,10 @@ mod dashboard_static_tests {
             "expected Mattermost save handler"
         );
         assert!(
+            js.contains("sendMattermostTestMessage"),
+            "expected Mattermost test message handler"
+        );
+        assert!(
             js.contains("mattermost: true"),
             "expected mattermost tab flag in tab set"
         );

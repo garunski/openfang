@@ -365,6 +365,10 @@ pub async fn build_router(
                 .delete(routes::delete_project),
         )
         .route(
+            "/api/projects/{id}/mattermost/test-message",
+            axum::routing::post(routes::post_project_mattermost_test_message),
+        )
+        .route(
             "/api/projects/{id}/discover",
             axum::routing::post(routes::discover_project_spokes),
         )

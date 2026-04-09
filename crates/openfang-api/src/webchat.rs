@@ -222,11 +222,11 @@ const WEBCHAT_HTML: &str = concat!(
     "\n",
     include_str!("../static/js/pages/backlog-search.js"),
     "\n",
-    include_str!("../static/js/pages/projects.js"),
-    "\n",
     include_str!("../static/js/katex.js"),
     "\n",
     include_str!("../static/js/pages/chat.js"),
+    "\n",
+    include_str!("../static/js/pages/projects.js"),
     "\n",
     include_str!("../static/js/pages/agents.js"),
     "\n",
@@ -310,10 +310,11 @@ mod dashboard_embed_tests {
             "expected PERT chart tab wiring"
         );
         assert!(
-            super::WEBCHAT_HTML.contains("task-list-table")
+            super::WEBCHAT_HTML.contains("task-list-cards")
+                && super::WEBCHAT_HTML.contains("listOnSortFieldChange")
                 && super::WEBCHAT_HTML.contains("openBacklogTaskDetail")
                 && super::WEBCHAT_HTML.contains("openBacklogCleanupModal"),
-            "expected task list + backlog detail modal wiring"
+            "expected task list cards + backlog detail modal wiring"
         );
         assert!(
             super::WEBCHAT_HTML.contains("loadDocsTab")
@@ -350,6 +351,12 @@ mod dashboard_embed_tests {
         assert!(
             super::WEBCHAT_HTML.contains("nonce=\"__NONCE__\">if('serviceWorker'"),
             "expected PWA service worker bootstrap script to carry CSP nonce"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("chatPageProjectEmbed")
+                && super::WEBCHAT_HTML.contains("clearProjectChatAgent")
+                && super::WEBCHAT_HTML.contains("projectChatAgents"),
+            "expected inline project Chat tab (no iframe)"
         );
     }
 }

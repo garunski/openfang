@@ -72,13 +72,20 @@ impl MattermostAdapter {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(format!("Mattermost auth failed {status}: {body}").into());
+        let status = resp.status();
+        let raw = resp.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(format!("Mattermost auth failed {status}: {raw}").into());
         }
 
-        let body: serde_json::Value = resp.json().await?;
+        let body: serde_json::Value = serde_json::from_str(raw.trim()).map_err(|e| {
+            let preview: String = raw.chars().take(240).collect();
+            format!(
+                "Mattermost /users/me returned {status} but the body is not valid JSON ({e}). \
+                 Often this means server_url points at a reverse proxy or non-Mattermost page (HTML) \
+                 instead of the Mattermost API root. Preview: {preview:?}"
+            )
+        })?;
         let user_id = body["id"].as_str().unwrap_or("unknown").to_string();
         let username = body["username"].as_str().unwrap_or("unknown");
         info!("Mattermost authenticated as {username} ({user_id})");
@@ -479,9 +486,377 @@ impl ChannelAdapter for MattermostAdapter {
     }
 }
 
+/// Mattermost channel **handle** (API `name`): lowercase, digits, `-`, `_`.
+pub fn validate_mattermost_channel_handle(name: &str) -> Result<(), String> {
+    let t = name.trim();
+    if t.is_empty() {
+        return Err("Mattermost channel name must not be empty".into());
+    }
+    if t.len() > 64 {
+        return Err("Mattermost channel name is too long (max 64)".into());
+    }
+    if !t
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
+        return Err(
+            "Use the channel handle (lowercase, e.g. town-square), not the display title".into(),
+        );
+    }
+    Ok(())
+}
+
+/// User input for binding: channel handle only, or `team_handle/channel_handle` (matches …/team/channels/channel in the web URL).
+pub fn validate_mattermost_channel_binding_input(raw: &str) -> Result<(), String> {
+    let t = raw.trim();
+    if t.is_empty() {
+        return Err("Mattermost channel binding must not be empty".into());
+    }
+    if t.contains('/') {
+        let Some((team, ch)) = t.split_once('/') else {
+            return Err("Invalid team/channel binding".into());
+        };
+        if team.is_empty() || ch.is_empty() || ch.contains('/') {
+            return Err(
+                "Use team/channel with exactly one slash, e.g. fang/fang (team URL slug, then channel slug)"
+                    .into(),
+            );
+        }
+        validate_mattermost_channel_handle(team)?;
+        validate_mattermost_channel_handle(ch)?;
+        return Ok(());
+    }
+    validate_mattermost_channel_handle(t)
+}
+
+/// Resolve channel id using `GET /teams/name/{team}` then `GET /teams/{id}/channels/name/{channel}`.
+async fn resolve_mattermost_team_channel_named(
+    client: &reqwest::Client,
+    base: &str,
+    token: &str,
+    team_handle: &str,
+    channel_handle: &str,
+) -> Result<(String, String), String> {
+    let team_url = format!("{base}/api/v4/teams/name/{team_handle}");
+    let tr = client
+        .get(&team_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mattermost request failed: {e}"))?;
+    if tr.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "No team named {team_handle:?} (GET /api/v4/teams/name/… returned 404)."
+        ));
+    }
+    if !tr.status().is_success() {
+        let st = tr.status();
+        let b = tr.text().await.unwrap_or_default();
+        return Err(format!("Mattermost team lookup failed {st}: {b}"));
+    }
+    let team: serde_json::Value = tr
+        .json()
+        .await
+        .map_err(|e| format!("Invalid Mattermost team JSON: {e}"))?;
+    let Some(team_id) = team["id"].as_str() else {
+        return Err("Mattermost team response missing id".into());
+    };
+    let ch_url = format!("{base}/api/v4/teams/{team_id}/channels/name/{channel_handle}");
+    let r = client
+        .get(&ch_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mattermost request failed: {e}"))?;
+    if r.status() == reqwest::StatusCode::NOT_FOUND {
+        return Err(format!(
+            "No channel named {channel_handle:?} in team {team_handle:?} (add the bot to private channels)."
+        ));
+    }
+    if !r.status().is_success() {
+        let st = r.status();
+        let b = r.text().await.unwrap_or_default();
+        return Err(format!("Mattermost channel lookup failed {st}: {b}"));
+    }
+    let ch: serde_json::Value = r
+        .json()
+        .await
+        .map_err(|e| format!("Invalid channel JSON: {e}"))?;
+    let id = ch["id"]
+        .as_str()
+        .ok_or_else(|| "Mattermost channel response missing id".to_string())?
+        .to_string();
+    let handle = ch["name"]
+        .as_str()
+        .unwrap_or(channel_handle)
+        .to_string();
+    Ok((id, handle))
+}
+
+/// Resolve channel id from handle by scanning teams the token can access.
+pub async fn resolve_mattermost_channel_id_by_name(
+    server_url: &str,
+    token: &str,
+    channel_name: &str,
+) -> Result<(String, String), String> {
+    validate_mattermost_channel_binding_input(channel_name)?;
+    let base = server_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Mattermost server_url is empty".into());
+    }
+    let client = reqwest::Client::new();
+
+    let trimmed = channel_name.trim();
+    if let Some((team_handle, channel_handle)) = trimmed.split_once('/') {
+        let team_handle = team_handle.trim();
+        let channel_handle = channel_handle.trim();
+        return resolve_mattermost_team_channel_named(
+            &client,
+            base,
+            token,
+            team_handle,
+            channel_handle,
+        )
+        .await;
+    }
+
+    let channel_only = trimmed;
+    let teams_url = format!("{base}/api/v4/users/me/teams");
+    let resp = client
+        .get(&teams_url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mattermost request failed: {e}"))?;
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("Mattermost teams list failed {status}: {body}"));
+    }
+    let teams: Vec<serde_json::Value> = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid Mattermost teams JSON: {e}"))?;
+
+    // System-admin / bot tokens often return an empty `GET /users/me/teams` even when
+    // `GET /teams/name/{slug}` works. Fall back when team slug equals channel slug (e.g. …/fang/channels/fang).
+    if teams.is_empty() {
+        return resolve_mattermost_team_channel_named(
+            &client,
+            base,
+            token,
+            channel_only,
+            channel_only,
+        )
+        .await;
+    }
+
+    let team_count = teams.len();
+    let mut found: Option<(String, String)> = None;
+    for team in teams {
+        let Some(team_id) = team["id"].as_str() else {
+            continue;
+        };
+        let ch_url = format!("{base}/api/v4/teams/{team_id}/channels/name/{channel_only}");
+        let r = client
+            .get(&ch_url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(|e| format!("Mattermost request failed: {e}"))?;
+        if r.status() == reqwest::StatusCode::NOT_FOUND {
+            continue;
+        }
+        if !r.status().is_success() {
+            let st = r.status();
+            let b = r.text().await.unwrap_or_default();
+            return Err(format!("Mattermost channel lookup failed {st}: {b}"));
+        }
+        let ch: serde_json::Value = r
+            .json()
+            .await
+            .map_err(|e| format!("Invalid channel JSON: {e}"))?;
+        let id = ch["id"]
+            .as_str()
+            .ok_or_else(|| "Mattermost channel response missing id".to_string())?
+            .to_string();
+        let handle = ch["name"]
+            .as_str()
+            .unwrap_or(channel_only)
+            .to_string();
+        if found.is_some() {
+            return Err(format!(
+                "Channel name {channel_only:?} exists in more than one team; use team/channel (e.g. fang/fang) or the Mattermost API"
+            ));
+        }
+        found = Some((id, handle));
+    }
+
+    if let Some(pair) = found {
+        return Ok(pair);
+    }
+
+    if let Ok(pair) =
+        resolve_mattermost_team_channel_named(&client, base, token, channel_only, channel_only).await
+    {
+        return Ok(pair);
+    }
+
+    Err(format!(
+        "No channel named {channel_only:?} in any of the {team_count} team(s) from GET /users/me/teams, \
+         and no team/channel match via GET /teams/name/{channel_only}. \
+         Use explicit team/channel (e.g. fang/town-square) if the team slug differs from the channel slug."
+    ))
+}
+
+/// Resolve project binding: optional Mattermost **team** slug + **channel** slug (channel must not contain `/`).
+/// Returns `(channel_id, channel_name, team_slug_for_storage)`.
+pub async fn resolve_mattermost_project_channel_binding(
+    server_url: &str,
+    token: &str,
+    team_slug: Option<&str>,
+    channel_slug: &str,
+) -> Result<(String, String, Option<String>), String> {
+    let channel_slug = channel_slug.trim();
+    validate_mattermost_channel_handle(channel_slug)?;
+    let base = server_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Mattermost server_url is empty".into());
+    }
+    let client = reqwest::Client::new();
+    match team_slug.map(|s| s.trim()).filter(|s| !s.is_empty()) {
+        Some(t) => {
+            validate_mattermost_channel_handle(t)?;
+            let (cid, cname) =
+                resolve_mattermost_team_channel_named(&client, base, token, t, channel_slug).await?;
+            Ok((cid, cname, Some(t.to_string())))
+        }
+        None => {
+            let (cid, cname) =
+                resolve_mattermost_channel_id_by_name(server_url, token, channel_slug).await?;
+            let team_opt = mattermost_team_slug_for_channel_id(server_url, token, &cid).await?;
+            Ok((cid, cname, team_opt))
+        }
+    }
+}
+
+/// Team URL slug for a channel id (`GET /channels/{id}` then `GET /teams/{team_id}`).
+pub async fn mattermost_team_slug_for_channel_id(
+    server_url: &str,
+    token: &str,
+    channel_id: &str,
+) -> Result<Option<String>, String> {
+    let base = server_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Mattermost server_url is empty".into());
+    }
+    let client = reqwest::Client::new();
+    let url = format!("{base}/api/v4/channels/{}", channel_id.trim());
+    let r = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mattermost request failed: {e}"))?;
+    if !r.status().is_success() {
+        return Ok(None);
+    }
+    let ch: serde_json::Value = r
+        .json()
+        .await
+        .map_err(|e| format!("Invalid channel JSON: {e}"))?;
+    let Some(tid) = ch["team_id"].as_str() else {
+        return Ok(None);
+    };
+    let tu = format!("{base}/api/v4/teams/{tid}");
+    let tr = client
+        .get(&tu)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mattermost request failed: {e}"))?;
+    if !tr.status().is_success() {
+        return Ok(None);
+    }
+    let team: serde_json::Value = tr
+        .json()
+        .await
+        .map_err(|e| format!("Invalid Mattermost team JSON: {e}"))?;
+    Ok(team["name"].as_str().map(|s| s.to_string()))
+}
+
+/// Verify a channel id exists and the token can access it; returns (id, channel handle, team slug if known).
+pub async fn validate_mattermost_channel_id(
+    server_url: &str,
+    token: &str,
+    channel_id: &str,
+) -> Result<(String, String, Option<String>), String> {
+    let t = channel_id.trim();
+    if t.is_empty() {
+        return Err("mattermost_channel_id must not be empty".into());
+    }
+    let base = server_url.trim_end_matches('/');
+    if base.is_empty() {
+        return Err("Mattermost server_url is empty".into());
+    }
+    let client = reqwest::Client::new();
+    let url = format!("{base}/api/v4/channels/{t}");
+    let r = client
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Mattermost request failed: {e}"))?;
+    if !r.status().is_success() {
+        return Err(format!(
+            "Unknown or inaccessible Mattermost channel id (HTTP {})",
+            r.status()
+        ));
+    }
+    let ch: serde_json::Value = r
+        .json()
+        .await
+        .map_err(|e| format!("Invalid channel JSON: {e}"))?;
+    let id = ch["id"]
+        .as_str()
+        .ok_or_else(|| "Mattermost channel response missing id".to_string())?
+        .to_string();
+    let handle = ch["name"].as_str().unwrap_or("").trim().to_string();
+    if handle.is_empty() {
+        return Err("Mattermost channel response missing name".into());
+    }
+    let team_slug = if let Some(tid) = ch["team_id"].as_str() {
+        let tu = format!("{base}/api/v4/teams/{tid}");
+        match client.get(&tu).bearer_auth(token).send().await {
+            Ok(tr) if tr.status().is_success() => match tr.json::<serde_json::Value>().await {
+                Ok(tv) => tv["name"].as_str().map(|s| s.to_string()),
+                Err(_) => None,
+            },
+            _ => None,
+        }
+    } else {
+        None
+    };
+    Ok((id, handle, team_slug))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_validate_mattermost_channel_handle() {
+        assert!(validate_mattermost_channel_handle("town-square").is_ok());
+        assert!(validate_mattermost_channel_handle("Town").is_err());
+        assert!(validate_mattermost_channel_handle("").is_err());
+    }
+
+    #[test]
+    fn test_validate_mattermost_channel_binding_input() {
+        assert!(validate_mattermost_channel_binding_input("fang/fang").is_ok());
+        assert!(validate_mattermost_channel_binding_input("town-square").is_ok());
+        assert!(validate_mattermost_channel_binding_input("a/b/c").is_err());
+    }
 
     #[test]
     fn test_mattermost_adapter_creation() {

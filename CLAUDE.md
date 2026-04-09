@@ -115,6 +115,7 @@ taskkill //PID <pid> //F
 - Config fields need: struct field + `#[serde(default)]` + Default impl entry + Serialize/Deserialize derives
 
 ## Common Gotchas
+- **Mattermost project binding:** `server_url` must be the server root only (e.g. `https://chat.example.com`), not a team or channel path. Put the token in `secrets.env` (or the shell) using the **exact** variable name from `[channels.mattermost].token_env` in `config.toml`, then restart the daemon (or POST `/api/channels/reload`) so the process picks it up. Persisted JSON fields: optional `mattermost_team_name` (team URL slug), `mattermost_channel_name` (channel slug), plus resolved `mattermost_channel_id`. You may send **`team/channel`** in `mattermost_channel_name` only; the API splits it into team + channel. When team and channel slugs are the **same**, a single channel slug works even if `GET /api/v4/users/me/teams` is **empty** (common for system-admin bots). **Rustls 0.23:** the CLI installs a default crypto provider at startup; without that, Mattermost WebSocket (TLS) can panic when the bridge starts.
 - `openfang.exe` may be locked if daemon is running — use `--lib` flag or kill daemon first
 - `PeerRegistry` is `Option<PeerRegistry>` on kernel but `Option<Arc<PeerRegistry>>` on `AppState` — wrap with `.as_ref().map(|r| Arc::new(r.clone()))`
 - Config fields added to `KernelConfig` struct MUST also be added to the `Default` impl or build fails

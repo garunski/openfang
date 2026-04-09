@@ -1444,11 +1444,235 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "bound_agents": p.bound_agents,
         "pipeline_overrides": p.pipeline_overrides,
         "mattermost_channel_id": p.mattermost_channel_id,
+        "mattermost_team_name": p.mattermost_team_name,
         "mattermost_channel_name": p.mattermost_channel_name,
         "orchestrator_agent_id": p.orchestrator_agent_id,
         "created_at": p.created_at.to_rfc3339(),
         "updated_at": p.updated_at.to_rfc3339(),
     })
+}
+
+fn mattermost_channel_id_taken(
+    store: &openfang_kernel::project_store::ProjectStore,
+    channel_id: &str,
+    exclude: Option<ProjectId>,
+) -> bool {
+    store.list().into_iter().any(|p| {
+        Some(p.id) != exclude && p.mattermost_channel_id.as_deref() == Some(channel_id)
+    })
+}
+
+/// Split `mattermost_channel_name` `team/channel` and validate slugs (no display titles).
+fn normalize_mattermost_team_channel_inputs(
+    team: &mut Option<String>,
+    channel: &mut Option<String>,
+) -> Result<(), String> {
+    if let Some(ref mut ch) = channel {
+        if ch.contains('/') {
+            let (t, c) = ch.split_once('/').unwrap_or(("", ""));
+            let t = t.trim();
+            let c = c.trim();
+            if t.is_empty() || c.is_empty() || c.contains('/') {
+                return Err(
+                    "mattermost_channel_name: use one slash for team/channel (e.g. fang/town-square)"
+                        .into(),
+                );
+            }
+            if let Some(ref existing) = team {
+                if !existing.is_empty() && existing.as_str() != t {
+                    return Err(
+                        "mattermost_team_name conflicts with the team segment in mattermost_channel_name"
+                            .into(),
+                    );
+                }
+            }
+            *team = Some(t.to_string());
+            *ch = c.to_string();
+        }
+    }
+    if let Some(ref t) = team {
+        openfang_channels::mattermost::validate_mattermost_channel_handle(t)?;
+    }
+    if let Some(ref n) = channel {
+        openfang_channels::mattermost::validate_mattermost_channel_handle(n)?;
+    }
+    Ok(())
+}
+
+/// When binding is requested, resolve name→id and/or validate id against Mattermost API.
+async fn resolve_mattermost_binding_pair(
+    config: &openfang_types::config::KernelConfig,
+    mattermost_team_name: &mut Option<String>,
+    mattermost_channel_id: &mut Option<String>,
+    mattermost_channel_name: &mut Option<String>,
+) -> Result<(), String> {
+    let need = mattermost_channel_id.is_some() || mattermost_channel_name.is_some();
+    if !need {
+        return Ok(());
+    }
+    let Some(ref mm) = config.channels.mattermost else {
+        return Err(
+            "Mattermost is not configured ([channels.mattermost] in config.toml)".to_string(),
+        );
+    };
+    let server = mm.server_url.trim();
+    if server.is_empty() {
+        return Err("Mattermost server_url is empty".into());
+    }
+    let token = std::env::var(&mm.token_env).unwrap_or_default();
+    if token.is_empty() {
+        return Err(format!(
+            "Set {} in the environment to validate Mattermost channel binding",
+            mm.token_env
+        ));
+    }
+
+    let id = mattermost_channel_id.clone();
+    let name = mattermost_channel_name.clone();
+
+    match (&id, &name) {
+        (None, None) => Ok(()),
+        (Some(id_raw), None) => {
+            let (cid, cname, team_opt) =
+                openfang_channels::mattermost::validate_mattermost_channel_id(server, &token, id_raw)
+                    .await?;
+            *mattermost_channel_id = Some(cid);
+            *mattermost_channel_name = Some(cname);
+            if mattermost_team_name.is_none() {
+                *mattermost_team_name = team_opt;
+            } else if let Some(ref got) = team_opt {
+                if mattermost_team_name.as_deref() != Some(got.as_str()) {
+                    return Err(format!(
+                        "mattermost_team_name does not match Mattermost team {got:?} for that channel id"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        (None, Some(n)) => {
+            let (cid, cname, team_opt) = openfang_channels::mattermost::resolve_mattermost_project_channel_binding(
+                server,
+                &token,
+                mattermost_team_name.as_deref(),
+                n,
+            )
+            .await?;
+            *mattermost_channel_id = Some(cid);
+            *mattermost_channel_name = Some(cname);
+            if mattermost_team_name.is_none() {
+                *mattermost_team_name = team_opt;
+            } else if let Some(ref got) = team_opt {
+                if mattermost_team_name.as_deref() != Some(got.as_str()) {
+                    return Err(format!(
+                        "mattermost_team_name does not match resolved Mattermost team {got:?}"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        (Some(id_raw), Some(n)) => {
+            let (cid, cname, team_opt) = openfang_channels::mattermost::resolve_mattermost_project_channel_binding(
+                server,
+                &token,
+                mattermost_team_name.as_deref(),
+                n,
+            )
+            .await?;
+            if cid != *id_raw {
+                return Err(
+                    "mattermost_channel_id does not match mattermost_channel_name (and team) for that channel"
+                        .into(),
+                );
+            }
+            *mattermost_channel_id = Some(cid);
+            *mattermost_channel_name = Some(cname);
+            if mattermost_team_name.is_none() {
+                *mattermost_team_name = team_opt;
+            } else if let Some(ref got) = team_opt {
+                if mattermost_team_name.as_deref() != Some(got.as_str()) {
+                    return Err(format!(
+                        "mattermost_team_name does not match resolved Mattermost team {got:?}"
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Apply Mattermost fields from JSON body: clear, resolve name, or validate id.
+async fn finalize_mattermost_patch_from_request(
+    config: &openfang_types::config::KernelConfig,
+    existing: &Project,
+    req: &serde_json::Value,
+    patch: &mut ProjectPatch,
+) -> Result<(), String> {
+    let id_key = req.get("mattermost_channel_id");
+    let name_key = req.get("mattermost_channel_name");
+    let team_key = req.get("mattermost_team_name");
+    if id_key.is_none() && name_key.is_none() && team_key.is_none() {
+        return Ok(());
+    }
+
+    if id_key.map(|v| v.is_null()).unwrap_or(false)
+        && name_key.map(|v| v.is_null()).unwrap_or(false)
+    {
+        patch.mattermost_channel_id = Some(None);
+        patch.mattermost_channel_name = Some(None);
+        patch.mattermost_team_name = Some(None);
+        return Ok(());
+    }
+
+    let mut id = if let Some(v) = id_key {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        }
+    } else {
+        existing.mattermost_channel_id.clone()
+    };
+
+    let mut team = if let Some(v) = team_key {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        }
+    } else {
+        existing.mattermost_team_name.clone()
+    };
+
+    let mut name = if let Some(v) = name_key {
+        if v.is_null() {
+            None
+        } else {
+            v.as_str()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        }
+    } else {
+        existing.mattermost_channel_name.clone()
+    };
+
+    if id.is_none() && name.is_none() {
+        patch.mattermost_channel_id = Some(None);
+        patch.mattermost_channel_name = Some(None);
+        patch.mattermost_team_name = Some(None);
+        return Ok(());
+    }
+
+    normalize_mattermost_team_channel_inputs(&mut team, &mut name)?;
+
+    resolve_mattermost_binding_pair(config, &mut team, &mut id, &mut name).await?;
+    patch.mattermost_channel_id = Some(id);
+    patch.mattermost_channel_name = Some(name);
+    patch.mattermost_team_name = Some(team);
+    Ok(())
 }
 
 /// GET /api/projects — List registered projects (summary).
@@ -1549,6 +1773,29 @@ pub async fn create_project(
         },
     };
 
+    let mattermost_team_name: Option<String> = match req.get("mattermost_team_name") {
+        None => None,
+        Some(v) if v.is_null() => None,
+        Some(v) => match v.as_str() {
+            Some(s) => {
+                let t = s.trim();
+                if t.is_empty() {
+                    None
+                } else {
+                    Some(t.to_string())
+                }
+            }
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(
+                        serde_json::json!({"error": "Invalid 'mattermost_team_name': expected string or null"}),
+                    ),
+                );
+            }
+        },
+    };
+
     let mattermost_channel_id: Option<String> = match req.get("mattermost_channel_id") {
         None => None,
         Some(v) if v.is_null() => None,
@@ -1595,6 +1842,42 @@ pub async fn create_project(
         },
     };
 
+    let mut mattermost_team_name = mattermost_team_name;
+    let mut mattermost_channel_id = mattermost_channel_id;
+    let mut mattermost_channel_name = mattermost_channel_name;
+    if mattermost_channel_id.is_some() || mattermost_channel_name.is_some() {
+        if let Err(e) = normalize_mattermost_team_channel_inputs(
+            &mut mattermost_team_name,
+            &mut mattermost_channel_name,
+        ) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            );
+        }
+        if let Err(e) = resolve_mattermost_binding_pair(
+            &state.kernel.config,
+            &mut mattermost_team_name,
+            &mut mattermost_channel_id,
+            &mut mattermost_channel_name,
+        )
+        .await
+        {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            );
+        }
+        if let Some(ref cid) = mattermost_channel_id {
+            if mattermost_channel_id_taken(&state.kernel.project_store, cid, None) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"error": "Another project is already bound to this Mattermost channel"})),
+                );
+            }
+        }
+    }
+
     let project = Project {
         name,
         path: PathBuf::from(path_str),
@@ -1602,6 +1885,7 @@ pub async fn create_project(
         pipeline_overrides,
         admin_spoke,
         mattermost_channel_id,
+        mattermost_team_name,
         mattermost_channel_name,
         ..Default::default()
     };
@@ -1664,6 +1948,13 @@ pub async fn update_project(
         Err(tup) => return tup,
     };
 
+    let Some(existing) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        );
+    };
+
     let mut patch = ProjectPatch::default();
     if let Some(v) = req.get("name") {
         if !v.is_null() {
@@ -1719,41 +2010,24 @@ pub async fn update_project(
             );
         }
     }
-    if let Some(v) = req.get("mattermost_channel_id") {
-        if v.is_null() {
-            patch.mattermost_channel_id = Some(None);
-        } else if let Some(s) = v.as_str() {
-            let t = s.trim();
-            patch.mattermost_channel_id = Some(if t.is_empty() {
-                None
-            } else {
-                Some(t.to_string())
-            });
-        } else {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": "Invalid 'mattermost_channel_id': expected string or null"}),
-                ),
-            );
-        }
+    if let Err(e) = finalize_mattermost_patch_from_request(
+        &state.kernel.config,
+        &existing,
+        &req,
+        &mut patch,
+    )
+    .await
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        );
     }
-    if let Some(v) = req.get("mattermost_channel_name") {
-        if v.is_null() {
-            patch.mattermost_channel_name = Some(None);
-        } else if let Some(s) = v.as_str() {
-            let t = s.trim();
-            patch.mattermost_channel_name = Some(if t.is_empty() {
-                None
-            } else {
-                Some(t.to_string())
-            });
-        } else {
+    if let Some(Some(ref cid)) = patch.mattermost_channel_id.as_ref() {
+        if mattermost_channel_id_taken(&state.kernel.project_store, cid, Some(pid)) {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"error": "Invalid 'mattermost_channel_name': expected string or null"}),
-                ),
+                Json(serde_json::json!({"error": "Another project is already bound to this Mattermost channel"})),
             );
         }
     }
@@ -1810,6 +2084,54 @@ pub async fn delete_project(
             (StatusCode::OK, Json(project_detail_json(&removed)))
         }
         Err(e) => project_store_error_response(e),
+    }
+}
+
+/// POST /api/projects/:id/mattermost/test-message — Post a short test message to the bound channel.
+pub async fn post_project_mattermost_test_message(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup,
+    };
+    let Some(project) = state.kernel.project_store.get(pid) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        );
+    };
+    let Some(channel_id) = project
+        .mattermost_channel_id
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Project has no Mattermost channel binding; save a channel handle first."})),
+        );
+    };
+    let channels = state.channels_config.read().await.clone();
+    match send_channel_test_message("mattermost", channel_id, &channels).await {
+        Ok(()) => {
+            let label = project
+                .mattermost_channel_name
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or(channel_id);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "message": format!("Test message sent to Mattermost channel #{label}.")
+                })),
+            )
+        }
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!("Could not send test message: {e}")})),
+        ),
     }
 }
 

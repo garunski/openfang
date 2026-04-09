@@ -872,9 +872,20 @@ fn write_stdout_safe(msg: &str) {
     }
 }
 
+fn install_rustls_crypto_provider() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        rustls::crypto::ring::default_provider()
+            .install_default()
+            .expect("rustls ring CryptoProvider::install_default");
+    });
+}
+
 fn main() {
     // Load ~/.openfang/.env into process environment (system env takes priority).
     dotenv::load_dotenv();
+
+    install_rustls_crypto_provider();
 
     let cli = Cli::parse();
 

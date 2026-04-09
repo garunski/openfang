@@ -402,13 +402,13 @@
             <!-- Search bar -->
             <div class="chat-search-bar" x-show="searchOpen" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 transform -translate-y-2" x-transition:enter-end="opacity-100 transform translate-y-0">
               <i class="fa fa-search chat-search-bar-icon" aria-hidden="true"></i>
-              <input type="text" id="chat-search-input" x-model="searchQuery" x-ref="searchInput" placeholder="Search messages..." class="chat-search-input" @keydown.escape="toggleSearch()">
+              <input type="text" :id="chatElId('chat-search-input')" x-model="searchQuery" x-ref="searchInput" placeholder="Search messages..." class="chat-search-input" @keydown.escape="toggleSearch()">
               <span class="text-xs text-dim" x-show="searchQuery.trim()" x-text="filteredMessages.length + ' of ' + messages.length"></span>
               <button class="button is-ghost is-small" @click="toggleSearch()" style="padding:2px 6px">&times;</button>
             </div>
 
             <!-- Messages area -->
-            <div class="messages" id="messages" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event); dragOver = false">
+            <div class="messages" :id="chatElId('messages')" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event); dragOver = false">
               <!-- Empty state: no agent selected -->
               <template x-if="!currentAgent">
                 <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:32px;opacity:0.8">
@@ -554,7 +554,7 @@
                   <span class="recording-dot"></span>
                   <span class="text-xs" style="color:var(--danger)" x-text="formatRecordingTime()"></span>
                 </div>
-                <textarea id="msg-input" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message OpenFang... (/ for commands)'"
+                <textarea :id="chatElId('msg-input')" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message OpenFang... (/ for commands)'"
                           @keydown.enter.prevent="if(!$event.isComposing && $event.keyCode !== 229 && !$event.shiftKey){if(showModelPicker && filteredModelPicker.length){pickModel(filteredModelPicker[modelPickerIdx].id)}else if(showSlashMenu && filteredSlashCommands.length){executeSlashCommand(filteredSlashCommands[slashIdx].cmd)}else{sendMessage()}}"
                           @keydown.escape="showSlashMenu = false; showModelPicker = false"
                           @keydown.arrow-up.prevent="if(showModelPicker){modelPickerIdx = Math.max(0, modelPickerIdx - 1)}else if(showSlashMenu){slashIdx = Math.max(0, slashIdx - 1)}"
@@ -588,7 +588,7 @@
                     <div class="model-switcher-dropdown" x-show="showModelSwitcher" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 transform translate-y-1" x-transition:enter-end="opacity-100 transform translate-y-0" x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
                       <div class="model-switcher-search">
                         <i class="fa fa-search model-switcher-search-icon" aria-hidden="true"></i>
-                        <input id="model-switcher-search" type="text" x-model="modelSwitcherFilter" placeholder="Search models..." @keydown.escape.stop="showModelSwitcher = false" @keydown.arrow-down.prevent="modelSwitcherIdx = Math.min(modelSwitcherIdx + 1, filteredSwitcherModels.length - 1)" @keydown.arrow-up.prevent="modelSwitcherIdx = Math.max(modelSwitcherIdx - 1, 0)" @keydown.enter.prevent="!$event.isComposing && $event.keyCode !== 229 && filteredSwitcherModels[modelSwitcherIdx] && switchModel(filteredSwitcherModels[modelSwitcherIdx])">
+                        <input :id="chatElId('model-switcher-search')" type="text" x-model="modelSwitcherFilter" placeholder="Search models..." @keydown.escape.stop="showModelSwitcher = false" @keydown.arrow-down.prevent="modelSwitcherIdx = Math.min(modelSwitcherIdx + 1, filteredSwitcherModels.length - 1)" @keydown.arrow-up.prevent="modelSwitcherIdx = Math.max(modelSwitcherIdx - 1, 0)" @keydown.enter.prevent="!$event.isComposing && $event.keyCode !== 229 && filteredSwitcherModels[modelSwitcherIdx] && switchModel(filteredSwitcherModels[modelSwitcherIdx])">
                         <select x-model="modelSwitcherProviderFilter" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text-dim);font-size:11px;padding:2px 6px;cursor:pointer;font-family:var(--font-mono);flex-shrink:0">
                           <option value="">All</option>
                           <template x-for="pn in switcherProviders" :key="pn">
@@ -650,7 +650,7 @@
             <button type="button" class="button is-danger is-light is-small" x-show="agents.length > 1" @click="killAllAgents()"><i class="fa fa-stop" aria-hidden="true"></i><span>Stop all</span></button>
           </div>
         </div>
-        <div class="page-body" style="overflow-y:auto;padding:24px">
+        <div class="page-body page-body--agents-chat" style="overflow-y:auto;padding:24px">
 
           <!-- Running agents — click to chat -->
           <div x-show="agents.length" style="margin-bottom:28px">
@@ -1784,9 +1784,9 @@
           </div>
 
           <!-- Search bar -->
-          <div class="mb-4">
+          <div class="mb-4 channels-page__search">
             <input class="form-input" type="text" placeholder="Search channels..."
-                   x-model="searchQuery" style="max-width:400px">
+                   x-model="searchQuery">
           </div>
 
           <!-- Channel card grid -->
@@ -2322,10 +2322,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               <button class="button is-primary is-small" @click="openRegisterModal()">Register Project</button>
             </div>
             <div class="page-body">
-              <div class="info-card">
-                <h4>Multi-repo backlog</h4>
-                <p>Register a project root; pick one folder as the <strong>Hub</strong> — its <code style="color:var(--accent)">backlog/</code> holds tasks, docs, and knowledge. <strong>Discover</strong> finds immediate child folders that are <strong>Git work trees</strong> (same check as <code>git rev-parse --is-inside-work-tree</code>). Optional <code>mise.toml</code> is shown as a badge when present. Open a spoke and use <strong>Set as Hub</strong> on its detail view.</p>
-              </div>
               <div x-show="projectsLoading" class="loading-state"><div class="spinner"></div><span>Loading projects...</span></div>
               <div x-show="!projectsLoading && projectsError" class="error-state">
                 <span class="error-icon">!</span>
@@ -2412,10 +2408,11 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
             </div>
             <div class="project-subnav" role="navigation" aria-label="Project sections">
               <div class="project-subnav__mobile">
-                <label class="text-xs text-dim font-semibold" for="project-section-select" style="letter-spacing:0.02em">Section</label>
-                <select id="project-section-select" class="form-input project-subnav__select" :value="detailTab" @change="onDetailTabChange($event.target.value)">
+                <label class="text-xs text-dim font-semibold project-subnav__section-label" for="project-section-select" style="letter-spacing:0.02em">Section</label>
+                <select id="project-section-select" class="form-input project-subnav__select" aria-label="Project section" :value="detailTab" @change="onDetailTabChange($event.target.value)">
                   <optgroup label="Overview">
                     <option value="overview">Overview</option>
+                    <option value="chat">Chat</option>
                   </optgroup>
                   <optgroup label="Tasks">
                     <option value="backlog">List</option>
@@ -2429,7 +2426,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </optgroup>
                   <optgroup label="Automation">
                     <option value="spokes">Spokes</option>
-                    <option value="agents">Agents</option>
                     <option value="pipelines">Pipelines</option>
                     <option value="workflows">Workflows</option>
                     <option value="mattermost">Mattermost</option>
@@ -2469,7 +2465,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <div class="of-tab" :class="{ active: detailCategory === 'automation' }" @click="onDetailCategoryChange('automation')">Automation</div>
                 </nav>
                 <div class="project-subnav__trailing">
-                  <div class="project-segment" role="tablist" aria-label="Section view" x-show="detailCategory !== 'overview'">
+                  <div class="project-segment" role="tablist" aria-label="Section view" x-show="projectDetailSubtabs().length > 1">
                     <template x-for="st in projectDetailSubtabs()" :key="st">
                       <button
                         type="button"
@@ -2522,15 +2518,23 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('overview')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.overview && !detailErrors.overview && projectOverview">
-                  <p class="text-xs text-dim mb-4">Summary of backlog, docs, decisions, spokes, agents, and pipelines for this project.</p>
-                  <div class="of-card-grid mb-6" style="grid-template-columns:repeat(auto-fill,minmax(120px,1fr))">
+                  <div class="of-card-grid mb-6 project-overview-kpi-grid">
                     <div class="of-card p-3 text-center">
                       <div class="text-xl font-semibold" x-text="detailSpokes.length"></div>
                       <div class="text-xs text-dim mt-1">Spokes</div>
                     </div>
-                    <div class="of-card p-3 text-center">
+                    <div
+                      class="of-card p-3 text-center project-overview-stat-card--clickable"
+                      role="button"
+                      tabindex="0"
+                      title="Open project chat"
+                      aria-label="Open project chat"
+                      @click="openProjectChatTab()"
+                      @keydown.enter.prevent="openProjectChatTab()"
+                    >
                       <div class="text-xl font-semibold" x-text="detailAgents.length"></div>
                       <div class="text-xs text-dim mt-1">Agents</div>
+                      <div class="text-xs mt-1" style="color:var(--accent)">Chat →</div>
                     </div>
                     <div class="of-card p-3 text-center">
                       <div class="text-xl font-semibold" x-text="detailPipelines.length"></div>
@@ -2592,7 +2596,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     </div>
                   </div>
                   <div class="grid gap-4" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))">
-                    <div>
+                    <div class="project-overview-column">
                       <div class="flex justify-between items-center mb-2">
                         <h3 class="text-sm font-semibold">Spokes</h3>
                         <button type="button" class="button is-ghost is-small" @click="onDetailTabChange('spokes')">Open tab</button>
@@ -2608,29 +2612,34 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       </div>
                       <p class="text-dim text-sm py-4" x-show="!detailSpokes.length">No spokes configured.</p>
                     </div>
-                    <div>
-                      <div class="flex justify-between items-center mb-2">
+                    <div class="project-overview-column">
+                      <div class="flex justify-between items-center mb-2 flex-wrap gap-2">
                         <h3 class="text-sm font-semibold">Agents</h3>
-                        <button type="button" class="button is-ghost is-small" @click="onDetailTabChange('agents')">Open tab</button>
+                        <button type="button" class="button is-ghost is-small" @click="openProjectChatTab()">Open chat</button>
                       </div>
-                      <div class="table-wrap" x-show="detailAgents.length">
-                        <table>
-                          <thead><tr><th>Name</th><th>State</th><th>Binding</th></tr></thead>
-                          <tbody>
-                            <template x-for="a in detailAgents.slice(0, 10)" :key="a.agent_id">
-                              <tr>
-                                <td class="text-sm" x-text="a.name || a.agent_id"></td>
-                                <td><span class="badge badge-info text-xs" x-text="String(a.state)"></span></td>
-                                <td><span class="badge text-xs" :class="a.binding === 'explicit' ? 'badge-warn' : 'badge-dim'" x-text="a.binding || '—'"></span></td>
-                              </tr>
-                            </template>
-                          </tbody>
-                        </table>
-                        <p class="text-xs text-dim p-2" x-show="detailAgents.length > 10" x-text="'+' + (detailAgents.length - 10) + ' more…'"></p>
+                      <div class="of-card p-3 project-overview-agents-list" x-show="detailAgents.length">
+                        <template x-for="a in detailAgents.slice(0, 10)" :key="a.agent_id">
+                          <div
+                            class="project-overview-agent-row"
+                            role="button"
+                            tabindex="0"
+                            :aria-label="'Open chat with ' + (a.name || a.agent_id)"
+                            @click="openProjectChatWithAgentFromOverview(a)"
+                            @keydown.enter.prevent="openProjectChatWithAgentFromOverview(a)"
+                          >
+                            <div style="min-width:0;flex:1">
+                              <div class="text-sm" style="font-weight:600" x-text="a.name || a.agent_id"></div>
+                              <div class="text-xs text-dim font-mono mt-1" x-show="a.spoke_name" x-text="'Spoke: ' + a.spoke_name"></div>
+                            </div>
+                            <span class="badge badge-info text-xs" x-text="String(a.state)"></span>
+                            <span class="badge text-xs" :class="a.binding === 'explicit' ? 'badge-warn' : 'badge-dim'" x-text="a.binding || '—'"></span>
+                          </div>
+                        </template>
+                        <p class="text-xs text-dim mt-2 mb-0" x-show="detailAgents.length > 10" x-text="'+' + (detailAgents.length - 10) + ' more…'"></p>
                       </div>
                       <p class="text-dim text-sm py-4" x-show="!detailAgents.length">No agents in project scope.</p>
                     </div>
-                    <div>
+                    <div class="project-overview-column">
                       <div class="flex justify-between items-center mb-2">
                         <h3 class="text-sm font-semibold">Pipelines</h3>
                         <button type="button" class="button is-ghost is-small" @click="onDetailTabChange('pipelines')">Open tab</button>
@@ -2652,7 +2661,350 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
               </div>
               </template>
 
-              <!-- task list table (TASK-33) -->
+              <template x-if="detailTab === 'chat'">
+                <div class="project-chat-embed mt-4">
+                  <div x-show="detailLoading.chat" class="loading-state"><div class="spinner"></div><span>Loading project agents…</span></div>
+                  <div x-show="detailErrors.chat && !detailLoading.chat" class="error-state">
+                    <span class="error-icon">!</span>
+                    <p x-text="detailErrors.chat"></p>
+                    <button type="button" class="button is-ghost is-small" @click="retryLoad('chat')">Retry</button>
+                  </div>
+                  <template x-if="!detailLoading.chat && !detailErrors.chat">
+                    <div style="display:flex;flex-direction:column;gap:12px;flex:1;min-height:0">
+                      <div class="project-chat-agent-strip">
+                        <div class="text-xs font-bold mb-2" style="color:var(--text-dim);letter-spacing:0.5px;text-transform:uppercase">Agents in this project</div>
+                        <div x-show="!projectChatAgents.length" class="text-sm text-dim py-2">
+                          No agents in project scope.
+                          <button type="button" class="button is-ghost is-small" @click="goToAgentsHub()">Agents hub</button>
+                        </div>
+                        <div x-show="projectChatAgents.length" class="project-chat-agent-grid">
+                          <template x-for="pa in projectChatAgents" :key="pa.agent_id">
+                            <button
+                              type="button"
+                              class="project-chat-agent-card agent-chip"
+                              @click="selectProjectChatAgent(pa)"
+                              :class="{ 'is-selected': String(projectChatSelectedAgentId) === String(pa.agent_id) }"
+                            >
+                              <div style="width:36px;height:36px;border-radius:50%;background:var(--accent-subtle);display:flex;align-items:center;justify-content:center;flex-shrink:0">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                              </div>
+                              <div style="min-width:0;flex:1">
+                                <div class="font-bold" style="font-size:13px" x-text="pa.name || pa.agent_id"></div>
+                                <div class="text-xs text-dim font-mono" style="font-size:11px" x-show="pa.spoke_name" x-text="'Spoke: ' + pa.spoke_name"></div>
+                                <div class="text-xs text-dim" style="font-size:11px" x-show="pa.binding" x-text="'Binding: ' + pa.binding"></div>
+                              </div>
+                              <span class="badge text-xs" style="font-size:10px;text-transform:capitalize" :class="'badge-' + String((pa.state || '').toLowerCase())" x-text="String(pa.state || '—')"></span>
+                            </button>
+                          </template>
+                        </div>
+                      </div>
+                      <template x-if="projectChatSelectedAgentId" :key="projectChatSelectedAgentId">
+                        <div @close-chat.window="clearProjectChatAgent()">
+                          <div x-data="chatPageProjectEmbed()" class="chat-wrapper" style="flex:1;min-height:min(64vh,720px);display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg);overflow:hidden">
+            <!-- Chat header with back button -->
+            <div class="page-header" x-show="currentAgent">
+              <div class="flex items-center gap-2" style="min-width:0">
+                <button type="button" class="button is-ghost is-small" @click="$dispatch('close-chat')" title="Back to agent list" style="padding:4px 8px;margin-right:4px" aria-label="Back to agent list">
+                  <i class="fa fa-arrow-left" aria-hidden="true"></i>
+                </button>
+                <span x-show="currentAgent && currentAgent.identity && currentAgent.identity.emoji" x-text="currentAgent && currentAgent.identity && currentAgent.identity.emoji" style="font-size:20px;line-height:1"></span>
+                <div style="min-width:0">
+                  <div class="font-bold" x-text="currentAgent ? currentAgent.name : ''"></div>
+                  <div class="text-xs text-dim truncate" style="font-family:var(--font-mono);font-size:11px" x-text="currentAgent ? currentAgent.model_provider + ':' + currentAgent.model_name : ''"></div>
+                </div>
+              </div>
+              <div class="flex gap-2 items-center">
+                <span class="badge badge-running" x-show="currentAgent && !sending" style="animation:fadeIn 0.2s">
+                  <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--success);margin-right:2px"></span> Ready
+                </span>
+                <span class="badge badge-suspended" x-show="sending" style="animation:fadeIn 0.2s">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                  Generating...
+                </span>
+                <span class="queue-badge" x-show="messageQueue.length > 0" x-text="'+' + messageQueue.length + ' queued'"></span>
+                <!-- Session switcher -->
+                <div style="position:relative">
+                  <button type="button" class="button is-ghost is-small" @click="sessionsOpen = !sessionsOpen" title="Sessions" style="position:relative" aria-label="Sessions">
+                    <i class="fa fa-desktop" aria-hidden="true"></i>
+                    <span class="session-count-badge" x-show="sessions.length > 1" x-text="sessions.length"></span>
+                  </button>
+                  <div class="session-dropdown" x-show="sessionsOpen" @click.outside="sessionsOpen = false" x-transition>
+                    <div class="session-dropdown-header">
+                      <span class="text-xs font-bold">Sessions</span>
+                      <button class="button is-ghost is-small" @click="createSession()" style="padding:2px 6px;font-size:11px">+ New</button>
+                    </div>
+                    <template x-for="s in sessions" :key="s.session_id">
+                      <div class="session-item" :class="{ active: s.active }" @click="if (!s.active) { switchSession(s.session_id); sessionsOpen = false; }">
+                        <span class="session-dot" :class="s.active ? 'active' : ''"></span>
+                        <div style="flex:1;min-width:0">
+                          <div class="text-xs font-bold truncate" x-text="s.label || 'Session ' + s.session_id.substring(0, 8)"></div>
+                          <div class="text-xs text-dim" x-text="s.message_count + ' messages'"></div>
+                        </div>
+                      </div>
+                    </template>
+                    <div class="text-xs text-dim" style="padding:8px 12px;text-align:center" x-show="!sessions.length">No sessions</div>
+                  </div>
+                </div>
+                <button type="button" class="button is-ghost is-small" @click="toggleSearch()" title="Search messages (Ctrl+F)" aria-label="Search messages">
+                  <i class="fa fa-search" aria-hidden="true"></i>
+                </button>
+                <button type="button" class="button is-ghost is-small" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F" aria-label="Toggle focus mode">
+                  <i class="fa fa-expand" aria-hidden="true" x-show="!$store.app.focusMode"></i>
+                  <i class="fa fa-compress" aria-hidden="true" x-show="$store.app.focusMode"></i>
+                </button>
+                <button type="button" class="button is-danger is-light is-small" @click="killAgent()"><i class="fa fa-stop" aria-hidden="true"></i><span>Stop</span></button>
+              </div>
+            </div>
+
+            <!-- Search bar -->
+            <div class="chat-search-bar" x-show="searchOpen" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 transform -translate-y-2" x-transition:enter-end="opacity-100 transform translate-y-0">
+              <i class="fa fa-search chat-search-bar-icon" aria-hidden="true"></i>
+              <input type="text" :id="chatElId('chat-search-input')" x-model="searchQuery" x-ref="searchInput" placeholder="Search messages..." class="chat-search-input" @keydown.escape="toggleSearch()">
+              <span class="text-xs text-dim" x-show="searchQuery.trim()" x-text="filteredMessages.length + ' of ' + messages.length"></span>
+              <button class="button is-ghost is-small" @click="toggleSearch()" style="padding:2px 6px">&times;</button>
+            </div>
+
+            <!-- Messages area -->
+            <div class="messages" :id="chatElId('messages')" @dragover.prevent="dragOver = true" @dragleave="dragOver = false" @drop.prevent="handleDrop($event); dragOver = false">
+              <!-- Empty state: no agent selected -->
+              <template x-if="!currentAgent">
+                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center;padding:32px;opacity:0.8">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--text-dim)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:16px;opacity:0.5"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                  <h3 style="margin:0 0 8px;font-size:16px;font-weight:600">Select an agent to start chatting</h3>
+                  <p class="text-dim" style="font-size:13px;max-width:320px">Choose an agent from the sidebar or go to the Agents tab to create a new one.</p>
+                </div>
+              </template>
+              <!-- Message list -->
+              <template x-if="currentAgent">
+                <div>
+                  <template x-for="(msg, $index) in filteredMessages" :key="msg.id">
+                    <div class="message" :class="msg.role + (msg.thinking ? ' thinking' : '') + (msg.streaming ? ' streaming' : '') + (isGrouped($index) ? ' grouped' : '')">
+                      <div class="message-avatar" x-show="msg.role === 'agent'">
+                        <img src="/logo.png" alt="OpenFang">
+                      </div>
+                      <div class="message-body">
+                        <!-- Copy button on hover -->
+                        <div class="message-actions" x-show="msg.text && msg.text.trim() && !msg.thinking && !msg.streaming">
+                          <button type="button" class="message-action-btn" :class="{ copied: msg._copied }" @click="copyMessage(msg)" :title="msg._copied ? 'Copied!' : 'Copy message'" :aria-label="msg._copied ? 'Copied' : 'Copy message'">
+                            <i class="fa fa-copy" aria-hidden="true" x-show="!msg._copied"></i>
+                            <i class="fa fa-check" aria-hidden="true" x-show="msg._copied"></i>
+                          </button>
+                        </div>
+                        <!-- Thinking indicator with animated dots -->
+                        <div class="message-bubble" x-show="msg.thinking" style="background:transparent;border:none;padding:4px 0">
+                          <div class="typing-dots"><span></span><span></span><span></span></div>
+                        </div>
+                        <!-- Normal message content -->
+                        <div class="message-bubble" :class="{ 'markdown-body': (msg.role === 'agent' || msg.role === 'system') && !msg.thinking && !msg.isHtml }" x-show="msg.text && msg.text.trim() && !msg.thinking" x-html="highlightSearch(msg.isHtml ? msg.text : ((msg.role === 'agent' || msg.role === 'system') && !msg.thinking ? renderMarkdown(msg.text) : escapeHtml(msg.text)))"></div>
+                        <!-- Inline images from uploads (shown above tool cards) -->
+                        <template x-if="msg.images && msg.images.length">
+                          <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0">
+                            <template x-for="img in msg.images" :key="img.file_id">
+                              <a :href="'/api/uploads/' + img.file_id" target="_blank" style="display:block">
+                                <img :src="'/api/uploads/' + img.file_id" :alt="img.filename || 'uploaded image'" style="max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:pointer" loading="lazy">
+                              </a>
+                            </template>
+                          </div>
+                        </template>
+                        <template x-for="tool in (msg.tools || [])" :key="tool.id">
+                          <div class="tool-card" :class="{ 'tool-card-error': tool.is_error }" :data-tool="tool.name">
+                            <div class="tool-card-header" @click="tool.expanded = !tool.expanded">
+                              <template x-if="tool.running"><div class="tool-card-spinner"></div></template>
+                              <template x-if="!tool.running && !tool.is_error"><span class="tool-icon-ok">&#10003;</span></template>
+                              <template x-if="!tool.running && tool.is_error"><span class="tool-icon-err">&#10007;</span></template>
+                              <span class="tool-card-icon" x-html="toolIcon(tool.name)"></span>
+                              <span class="tool-card-name" x-text="tool.name"></span>
+                              <span class="text-xs text-dim" x-text="tool.running ? 'running...' : (tool.is_error ? 'error' : (tool.result ? (tool.result.length > 500 ? Math.round(tool.result.length/1024) + 'KB' : 'done') : 'done'))" style="margin-left:auto"></span>
+                              <span class="tool-expand-chevron" :style="tool.expanded ? 'transform:rotate(90deg)' : ''" style="transition:transform 0.15s">&#9654;</span>
+                            </div>
+                            <!-- Render generated images above the raw result -->
+                            <div x-show="tool._imageUrls && tool._imageUrls.length" style="padding:8px 12px;display:flex;flex-wrap:wrap;gap:8px">
+                              <template x-for="iurl in (tool._imageUrls || [])" :key="iurl">
+                                <a :href="iurl" target="_blank" style="display:block">
+                                  <img :src="iurl" alt="Generated image" style="max-width:320px;max-height:320px;border-radius:8px;border:1px solid var(--border);cursor:pointer" loading="lazy">
+                                </a>
+                              </template>
+                            </div>
+                            <!-- Audio player for TTS results -->
+                            <div x-show="tool._audioFile" style="padding:8px 12px">
+                              <div class="audio-player">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
+                                <span class="text-xs" x-text="'Audio: ' + tool._audioFile.split('/').pop()"></span>
+                                <span class="text-xs text-dim" x-show="tool._audioDuration" x-text="'~' + Math.round((tool._audioDuration || 0) / 1000) + 's'"></span>
+                              </div>
+                            </div>
+                            <div class="tool-card-body" x-show="tool.expanded" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100">
+                              <div x-show="tool.input" style="margin-bottom:6px">
+                                <div class="tool-section-label">Input</div>
+                                <pre class="tool-pre" x-text="formatToolJson(tool.input)"></pre>
+                              </div>
+                              <div x-show="tool.result">
+                                <div class="tool-section-label">Result <span class="text-xs text-muted" x-show="tool.result && tool.result.length > 200" x-text="'(' + tool.result.length + ' chars)'"></span></div>
+                                <pre class="tool-pre" :class="{ 'tool-pre-error': tool.is_error, 'tool-pre-short': !tool.is_error && tool.result && tool.result.length < 100, 'tool-pre-medium': !tool.is_error && tool.result && tool.result.length >= 100 && tool.result.length < 500 }" x-text="formatToolJson(tool.result)"></pre>
+                              </div>
+                            </div>
+                          </div>
+                        </template>
+                        <!-- Timestamp + meta row -->
+                        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                          <div class="message-time" x-text="formatTime(msg.ts)" x-show="msg.ts && !msg.thinking"></div>
+                          <div class="message-meta" x-text="msg.meta" x-show="msg.meta"></div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- Drop zone overlay -->
+              <div x-show="dragOver" style="position:absolute;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;background:var(--surface);opacity:0.92;border:2px dashed var(--accent);border-radius:8px;pointer-events:none">
+                <span style="font-size:16px;color:var(--accent);font-weight:600">Drop files here</span>
+              </div>
+            </div>
+
+            <!-- Input area -->
+            <div class="input-area" x-show="currentAgent" style="position:relative">
+              <!-- Attachment previews -->
+              <div x-show="attachments.length > 0" style="display:flex;gap:8px;flex-wrap:wrap;padding:0 0 8px 0">
+                <template x-for="(att, aidx) in attachments" :key="aidx">
+                  <div style="position:relative;border:1px solid var(--border);border-radius:6px;padding:4px;display:flex;align-items:center;gap:6px;background:var(--surface2);max-width:180px">
+                    <img x-show="att.preview" :src="att.preview" style="width:32px;height:32px;object-fit:cover;border-radius:4px">
+                    <span x-show="!att.preview" style="font-size:18px;width:32px;text-align:center">&#128196;</span>
+                    <span class="text-xs truncate" style="max-width:100px" x-text="att.file.name"></span>
+                    <span x-show="att.uploading" class="spinner" style="width:12px;height:12px;border-width:2px"></span>
+                    <button @click="removeAttachment(aidx)" style="position:absolute;top:-6px;right:-6px;width:18px;height:18px;border-radius:50%;background:var(--danger);color:#fff;border:none;cursor:pointer;font-size:11px;display:flex;align-items:center;justify-content:center;line-height:1">&times;</button>
+                  </div>
+                </template>
+              </div>
+              <!-- Slash command menu -->
+              <div x-show="showSlashMenu && filteredSlashCommands.length" class="slash-menu">
+                <template x-for="(cmd, idx) in filteredSlashCommands" :key="cmd.cmd">
+                  <div class="slash-menu-item" :class="{ 'slash-active': idx === slashIdx }" @click="executeSlashCommand(cmd.cmd)" @mouseenter="slashIdx = idx">
+                    <span class="font-bold" style="font-size:13px" x-text="cmd.cmd"></span>
+                    <span class="text-xs text-dim" x-text="cmd.desc"></span>
+                  </div>
+                </template>
+              </div>
+              <!-- Model autocomplete picker -->
+              <div x-show="showModelPicker && filteredModelPicker.length" class="slash-menu" style="max-height:280px;overflow-y:auto">
+                <div class="text-xs text-dim" style="padding:4px 10px;border-bottom:1px solid var(--border)">Available models — pick one or keep typing</div>
+                <template x-for="(m, idx) in filteredModelPicker" :key="m.id">
+                  <div class="slash-menu-item" :class="{ 'slash-active': idx === modelPickerIdx }" @click="pickModel(m.id)" @mouseenter="modelPickerIdx = idx">
+                    <span class="font-bold" style="font-size:12px;font-family:var(--font-mono)" x-text="m.id"></span>
+                    <span class="text-xs text-dim" x-text="m.provider + (m.display_name && m.display_name !== m.id ? ' · ' + m.display_name : '')"></span>
+                  </div>
+                </template>
+              </div>
+              <!-- Input row -->
+              <div class="input-row">
+                <button type="button" class="button is-ghost is-small" @click="$refs.fileInput.click()" title="Attach file" style="padding:6px 8px;flex-shrink:0" aria-label="Attach file">
+                  <i class="fa fa-paperclip" aria-hidden="true"></i>
+                </button>
+                <input type="file" x-ref="fileInput" multiple accept="image/*,.txt,.pdf,.md,.json,.csv,.mp3,.wav,.ogg,.webm,.m4a,.flac" @change="addFiles($event.target.files); $event.target.value = ''" style="display:none">
+                <!-- Mic button -->
+                <button type="button" class="button is-ghost is-small" :class="{ 'of-voice-recording': recording }" @mousedown="startRecording()" @mouseup="stopRecording()" @mouseleave="if(recording) stopRecording()" title="Hold to record voice" style="padding:6px 8px;flex-shrink:0" aria-label="Record voice">
+                  <i class="fa fa-microphone" aria-hidden="true" x-show="!recording"></i>
+                  <span x-show="recording" class="recording-dot"></span>
+                </button>
+                <!-- Recording indicator -->
+                <div class="recording-indicator" x-show="recording" x-transition>
+                  <span class="recording-dot"></span>
+                  <span class="text-xs" style="color:var(--danger)" x-text="formatRecordingTime()"></span>
+                </div>
+                <textarea :id="chatElId('msg-input')" rows="1" :placeholder="recording ? 'Recording... release to send' : 'Message OpenFang... (/ for commands)'"
+                          @keydown.enter.prevent="if(!$event.isComposing && $event.keyCode !== 229 && !$event.shiftKey){if(showModelPicker && filteredModelPicker.length){pickModel(filteredModelPicker[modelPickerIdx].id)}else if(showSlashMenu && filteredSlashCommands.length){executeSlashCommand(filteredSlashCommands[slashIdx].cmd)}else{sendMessage()}}"
+                          @keydown.escape="showSlashMenu = false; showModelPicker = false"
+                          @keydown.arrow-up.prevent="if(showModelPicker){modelPickerIdx = Math.max(0, modelPickerIdx - 1)}else if(showSlashMenu){slashIdx = Math.max(0, slashIdx - 1)}"
+                          @keydown.arrow-down.prevent="if(showModelPicker){modelPickerIdx = Math.min(filteredModelPicker.length - 1, modelPickerIdx + 1)}else if(showSlashMenu){slashIdx = Math.min(filteredSlashCommands.length - 1, slashIdx + 1)}"
+                          @input="$el.style.height='auto';$el.style.height=Math.min($el.scrollHeight,150)+'px'"
+                          x-model="inputText"
+                          :class="{ 'streaming-active': sending }"></textarea>
+                <!-- Send button (normal) or Stop button (during streaming) -->
+                <template x-if="!sending">
+                  <button type="button" class="of-chat-send" @click="sendMessage()" :disabled="!inputText.trim() && !attachments.length" aria-label="Send message">
+                    <i class="fa fa-send" aria-hidden="true"></i>
+                  </button>
+                </template>
+                <template x-if="sending">
+                  <button type="button" class="of-chat-stop" @click="stopAgent()" title="Stop generating" aria-label="Stop generating">
+                    <i class="fa fa-stop" aria-hidden="true"></i>
+                  </button>
+                </template>
+              </div>
+              <!-- Footer: model switcher + tokens + queue + tips -->
+              <div class="input-footer">
+                <div class="flex items-center gap-2">
+                  <!-- Model Switcher -->
+                  <div style="position:relative" x-show="currentAgent" @click.outside="showModelSwitcher = false" @keydown.escape.window="showModelSwitcher = false">
+                    <button type="button" class="model-switcher-btn" @click="toggleModelSwitcher()" :disabled="sending" title="Switch model (Ctrl+M)" aria-label="Switch model">
+                      <i class="fa fa-cube" aria-hidden="true"></i>
+                      <span class="model-switcher-label" x-text="modelDisplayName || 'Model'"></span>
+                      <i class="fa fa-chevron-down model-switcher-chevron" :class="{'open': showModelSwitcher}" aria-hidden="true"></i>
+                    </button>
+                    <!-- Dropdown -->
+                    <div class="model-switcher-dropdown" x-show="showModelSwitcher" x-transition:enter="transition ease-out duration-150" x-transition:enter-start="opacity-0 transform translate-y-1" x-transition:enter-end="opacity-100 transform translate-y-0" x-transition:leave="transition ease-in duration-100" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0">
+                      <div class="model-switcher-search">
+                        <i class="fa fa-search model-switcher-search-icon" aria-hidden="true"></i>
+                        <input :id="chatElId('model-switcher-search')" type="text" x-model="modelSwitcherFilter" placeholder="Search models..." @keydown.escape.stop="showModelSwitcher = false" @keydown.arrow-down.prevent="modelSwitcherIdx = Math.min(modelSwitcherIdx + 1, filteredSwitcherModels.length - 1)" @keydown.arrow-up.prevent="modelSwitcherIdx = Math.max(modelSwitcherIdx - 1, 0)" @keydown.enter.prevent="!$event.isComposing && $event.keyCode !== 229 && filteredSwitcherModels[modelSwitcherIdx] && switchModel(filteredSwitcherModels[modelSwitcherIdx])">
+                        <select x-model="modelSwitcherProviderFilter" style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;color:var(--text-dim);font-size:11px;padding:2px 6px;cursor:pointer;font-family:var(--font-mono);flex-shrink:0">
+                          <option value="">All</option>
+                          <template x-for="pn in switcherProviders" :key="pn">
+                            <option :value="pn" x-text="pn"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <div x-show="modelSwitching" style="display:flex;align-items:center;justify-content:center;padding:12px;gap:8px">
+                        <div class="tool-card-spinner"></div>
+                        <span class="text-xs text-dim">Switching...</span>
+                      </div>
+                      <div class="model-switcher-list" x-show="!modelSwitching">
+                        <template x-if="groupedSwitcherModels.length === 0">
+                          <div style="padding:16px;text-align:center" class="text-xs text-dim">No models found</div>
+                        </template>
+                        <template x-for="group in groupedSwitcherModels" :key="group.provider">
+                          <div>
+                            <div class="model-switcher-group-header" x-text="group.provider"></div>
+                            <template x-for="(m, mi) in group.models" :key="m.id">
+                              <div class="model-switcher-item" :class="{'active': currentAgent && m.id === currentAgent.model_name}" @click="switchModel(m)" @mouseenter="modelSwitcherIdx = filteredSwitcherModels.indexOf(m)">
+                                <div style="flex:1;min-width:0">
+                                  <div style="display:flex;align-items:center;gap:6px">
+                                    <span class="model-switcher-item-name" x-text="m.provider + ':' + (m.display_name || m.id)"></span>
+                                    <span class="model-switcher-tier" :class="'tier-' + (m.tier || 'balanced').toLowerCase()" x-text="m.tier || 'Balanced'"></span>
+                                  </div>
+                                  <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
+                                    <span class="text-xs text-dim" x-text="m.id" style="font-family:var(--font-mono)"></span>
+                                    <span class="text-xs text-dim" x-show="m.context_window" x-text="m.context_window >= 1000000 ? (m.context_window/1000000).toFixed(1)+'M' : Math.round(m.context_window/1000)+'K'"></span>
+                                    <svg x-show="m.supports_vision" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5" title="Vision"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                                    <svg x-show="m.supports_tools" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="opacity:0.5" title="Tools"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+                                  </div>
+                                </div>
+                                <svg x-show="currentAgent && m.id === currentAgent.model_name" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                              </div>
+                            </template>
+                          </div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
+                  <span class="text-xs text-dim" x-text="tokenCount > 0 ? '~' + tokenCount + ' tokens' : (attachments.length ? attachments.length + ' file(s)' : '')"></span>
+                  <span class="queue-badge" x-show="messageQueue.length > 0" x-text="messageQueue.length + ' queued'"></span>
+                </div>
+                <div class="tip-bar" x-show="currentTip && !sending">
+                  <span class="text-xs" x-text="currentTip"></span>
+                  <button class="tip-bar-dismiss" @click="dismissTips()" title="Dismiss">&times;</button>
+                </div>
+              </div>
+            </div>
+                          </div>
+                        </div>
+                      </template>
+                      <p class="text-xs text-dim" x-show="!projectChatSelectedAgentId && projectChatAgents.length" style="margin:0">Select an agent above to load the chat panel.</p>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- project task list (cards) -->
               <div x-show="detailTab === 'backlog'" class="mt-4">
                 <div x-show="detailLoading.backlog" class="loading-state"><div class="spinner"></div><span>Loading tasks...</span></div>
                 <div x-show="detailErrors.backlog && !detailLoading.backlog" class="error-state">
@@ -2661,70 +3013,99 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('backlog')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.backlog && !detailErrors.backlog">
-                  <div class="flex flex-wrap gap-2 mb-3" style="align-items:flex-start">
-                    <div class="form-group" style="margin:0;min-width:140px">
-                      <label class="text-xs text-dim">Status</label>
-                      <select class="form-input" x-model="listFilterStatus">
-                        <option value="">All</option>
-                        <template x-for="st in listStatusFilterOptions()" :key="String(st)">
-                          <option :value="st" x-text="st"></option>
-                        </template>
-                      </select>
+                  <div class="task-list-filters">
+                    <div class="task-list-filters__fields">
+                      <div class="form-group" style="margin:0">
+                        <label class="text-xs text-dim" for="task-list-filter-status">Status</label>
+                        <select id="task-list-filter-status" class="form-input" x-model="listFilterStatus">
+                          <option value="">All</option>
+                          <template x-for="st in listStatusFilterOptions()" :key="String(st)">
+                            <option :value="st" x-text="st"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <div class="form-group" style="margin:0">
+                        <label class="text-xs text-dim" for="task-list-filter-priority">Priority</label>
+                        <select id="task-list-filter-priority" class="form-input" x-model="listFilterPriority">
+                          <option value="">All</option>
+                          <template x-for="pr in listPriorityFilterOptions()" :key="pr">
+                            <option :value="pr" x-text="pr"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <div class="form-group task-list-filters__labels" style="margin:0">
+                        <label class="text-xs text-dim" for="task-list-filter-labels">Labels (multi)</label>
+                        <select id="task-list-filter-labels" class="form-input" multiple size="2" x-model="listFilterLabels">
+                          <template x-for="lb in listUniqueLabels" :key="lb">
+                            <option :value="lb" x-text="lb"></option>
+                          </template>
+                        </select>
+                      </div>
+                      <div class="form-group" style="margin:0">
+                        <label class="text-xs text-dim" for="task-list-filter-assignee">Assignee contains</label>
+                        <input id="task-list-filter-assignee" class="form-input" type="search" x-model="listFilterAssignee" placeholder="name…" autocomplete="off">
+                      </div>
                     </div>
-                    <div class="form-group" style="margin:0;min-width:120px">
-                      <label class="text-xs text-dim">Priority</label>
-                      <select class="form-input" x-model="listFilterPriority">
-                        <option value="">All</option>
-                        <template x-for="pr in listPriorityFilterOptions()" :key="pr">
-                          <option :value="pr" x-text="pr"></option>
-                        </template>
-                      </select>
-                    </div>
-                    <div class="form-group" style="margin:0;min-width:160px">
-                      <label class="text-xs text-dim">Labels (multi)</label>
-                      <select class="form-input" multiple size="3" x-model="listFilterLabels">
-                        <template x-for="lb in listUniqueLabels" :key="lb">
-                          <option :value="lb" x-text="lb"></option>
-                        </template>
-                      </select>
-                    </div>
-                    <div class="form-group" style="margin:0;min-width:160px;flex:1">
-                      <label class="text-xs text-dim">Assignee contains</label>
-                      <input class="form-input" type="search" x-model="listFilterAssignee" placeholder="name…">
-                    </div>
-                    <div class="flex-shrink-0" style="margin-top:22px">
+                    <div class="task-list-filters__toolbar">
                       <button type="button" class="button is-ghost is-small" @click="openBacklogCleanupModal()"><i class="fa fa-archive" aria-hidden="true"></i><span>Cleanup old tasks</span></button>
+                      <div class="task-list-filters__sort">
+                        <div class="form-group" style="margin:0;min-width:0;flex:1">
+                          <label class="text-xs text-dim" for="task-list-sort-key">Sort by</label>
+                          <select id="task-list-sort-key" class="form-input" x-model="listSortKey" @change="listOnSortFieldChange()">
+                            <option value="id">ID</option>
+                            <option value="title">Title</option>
+                            <option value="status">Status</option>
+                            <option value="priority">Priority</option>
+                            <option value="labels">Labels</option>
+                            <option value="assignee">Assignee</option>
+                            <option value="created">Created</option>
+                            <option value="deps">Dependencies</option>
+                          </select>
+                        </div>
+                        <button
+                          type="button"
+                          class="button is-light is-small task-list-sort-dir"
+                          @click="listSortDir = listSortDir === 'asc' ? 'desc' : 'asc'"
+                          title="Toggle sort direction"
+                          :aria-label="'Sort ' + (listSortDir === 'asc' ? 'ascending' : 'descending')"
+                        >
+                          <span aria-hidden="true" x-text="listSortDir === 'asc' ? '\u2191' : '\u2193'"></span>
+                        </button>
+                      </div>
                     </div>
                   </div>
-                  <div class="table-wrap table-wrap--flush" x-show="detailTasks.length">
-                    <table class="task-list-table">
-                      <thead>
-                        <tr>
-                          <th class="th-sortable" @click="listToggleSort('id')"><span x-text="'ID' + listSortIndicator('id')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('title')"><span x-text="'Title' + listSortIndicator('title')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('status')"><span x-text="'Status' + listSortIndicator('status')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('priority')"><span x-text="'Priority' + listSortIndicator('priority')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('labels')"><span x-text="'Labels' + listSortIndicator('labels')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('assignee')"><span x-text="'Assignee' + listSortIndicator('assignee')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('created')"><span x-text="'Created' + listSortIndicator('created')"></span></th>
-                          <th class="th-sortable" @click="listToggleSort('deps')"><span x-text="'Deps' + listSortIndicator('deps')"></span></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <template x-for="t in listTableRows()" :key="t.id">
-                          <tr style="cursor:pointer" @click="openBacklogTaskDetail(t)" role="button" tabindex="0" @keydown.enter="openBacklogTaskDetail(t)">
-                            <td class="text-xs font-mono" x-text="t.id"></td>
-                            <td x-text="t.title || '—'"></td>
-                            <td><span class="badge" :class="statusClass(t.status)" x-text="t.status || '—'"></span></td>
-                            <td><span class="badge" :class="priorityClass(t.priority)" x-text="t.priority || '—'"></span></td>
-                            <td class="text-xs" x-text="listLabelsStr(t)"></td>
-                            <td class="text-xs" x-text="listAssigneeStr(t)"></td>
-                            <td class="text-xs" x-text="listCreatedStr(t)"></td>
-                            <td class="text-xs text-dim" x-text="listDepsCount(t)"></td>
-                          </tr>
-                        </template>
-                      </tbody>
-                    </table>
+                  <div class="task-list-cards" x-show="detailTasks.length">
+                    <template x-for="t in listTableRows()" :key="t.id">
+                      <button
+                        type="button"
+                        class="task-list-card"
+                        @click="openBacklogTaskDetail(t)"
+                      >
+                        <div class="task-list-card__head">
+                          <code class="task-list-card__id font-mono text-xs" x-text="t.id"></code>
+                          <div class="task-list-card__badges">
+                            <span class="badge" :class="statusClass(t.status)" x-text="t.status || '—'"></span>
+                            <span class="badge" :class="priorityClass(t.priority)" x-text="t.priority || '—'"></span>
+                          </div>
+                        </div>
+                        <div class="task-list-card__title" x-text="t.title || '\u2014'"></div>
+                        <div class="task-list-card__meta">
+                          <span class="task-list-card__meta-line" x-show="t.labels && t.labels.length">
+                            <span class="task-list-card__meta-k">Labels</span>
+                            <span class="task-list-card__meta-v" x-text="listLabelsStr(t)"></span>
+                          </span>
+                          <span class="task-list-card__meta-line" x-show="t.assignee && t.assignee.length">
+                            <span class="task-list-card__meta-k">Assignee</span>
+                            <span class="task-list-card__meta-v" x-text="listAssigneeStr(t)"></span>
+                          </span>
+                          <span class="task-list-card__meta-line">
+                            <span class="task-list-card__meta-k">Created</span>
+                            <span class="task-list-card__meta-v" x-text="listCreatedStr(t)"></span>
+                          </span>
+                          <span class="task-list-card__deps" x-show="listDepsCount(t) > 0" x-text="listDepsCount(t) + ' dep' + (listDepsCount(t) === 1 ? '' : 's')"></span>
+                        </div>
+                      </button>
+                    </template>
                   </div>
                   <div class="empty-state py-8" x-show="!detailTasks.length">
                     <p class="text-dim text-sm">No tasks in <code style="color:var(--accent)">backlog/tasks</code> for this project.</p>
@@ -3138,17 +3519,10 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </div>
                 <div x-show="!detailLoading.spokes && !detailErrors.spokes && !spokesDetailSpoke" class="project-spokes-tab__fill">
                   <div class="of-hub-spoke-map" x-show="detailSpokes.length">
-                    <div class="of-hub-spoke-map__header is-flex is-flex-wrap is-justify-content-space-between is-align-items-flex-end mb-3" style="gap:0.75rem">
-                      <div>
-                        <h3 class="of-hub-spoke-map__heading mb-1">Spokes topology</h3>
-                        <p class="is-size-7 mb-0" style="color:var(--text-dim)">Hub at center, spokes on the ring. Drag empty space to pan.</p>
-                      </div>
-                      <span class="is-size-7" style="color:var(--text-dim)"><i class="fa fa-arrows-alt" aria-hidden="true"></i> Pan</span>
-                    </div>
                     <div
                       class="of-topology-viewport"
                       role="application"
-                      aria-label="Spokes topology map, drag background to pan"
+                      aria-label="Spoke map, drag background to pan"
                       :class="{ 'of-topology-viewport--grabbing': topologyPanning }"
                       @pointerdown="topologyViewportPointerDown($event)"
                     >
@@ -3519,47 +3893,6 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                 </template>
               </div>
 
-              <div x-show="detailTab === 'agents'" class="mt-4">
-                <div x-show="detailLoading.agents" class="loading-state"><div class="spinner"></div><span>Loading agents...</span></div>
-                <div x-show="detailErrors.agents && !detailLoading.agents" class="error-state">
-                  <span class="error-icon">!</span>
-                  <p x-text="detailErrors.agents"></p>
-                  <button type="button" class="button is-ghost is-small" @click="retryLoad('agents')">Retry</button>
-                </div>
-                <div x-show="!detailLoading.agents && !detailErrors.agents">
-                  <div class="flex flex-wrap gap-2 items-end mb-4">
-                    <div class="form-group mb-0" style="min-width:14rem">
-                      <label class="text-xs text-dim">Bind agent (UUID)</label>
-                      <input class="form-input text-xs font-mono" x-model="bindAgentForm.agent_id" placeholder="agent id" :disabled="bindAgentSubmitting">
-                    </div>
-                    <button type="button" class="button is-small" @click="bindProjectAgent()" :disabled="bindAgentSubmitting">Bind</button>
-                  </div>
-                  <p class="text-xs text-danger mb-2" x-show="bindAgentError" x-text="bindAgentError"></p>
-                  <div class="table-wrap" x-show="detailAgents.length">
-                    <table>
-                      <thead><tr><th>Agent</th><th>Name</th><th>State</th><th>Spoke</th><th>Binding</th><th></th></tr></thead>
-                      <tbody>
-                        <template x-for="a in detailAgents" :key="a.agent_id">
-                          <tr>
-                            <td class="text-xs font-mono" x-text="a.agent_id"></td>
-                            <td x-text="a.name || '—'"></td>
-                            <td><span class="badge badge-info" x-text="String(a.state)"></span></td>
-                            <td class="text-xs" x-text="a.spoke_name || '—'"></td>
-                            <td><span class="badge" :class="a.binding === 'explicit' ? 'badge-warn' : 'badge-dim'" x-text="a.binding || '—'"></span></td>
-                            <td>
-                              <button type="button" class="button is-danger is-light is-small" x-show="a.binding === 'explicit'" @click="unbindProjectAgent(a)" :disabled="bindAgentSubmitting"><i class="fa fa-unlink" aria-hidden="true"></i><span>Remove</span></button>
-                            </td>
-                          </tr>
-                        </template>
-                      </tbody>
-                    </table>
-                  </div>
-                  <div class="empty-state py-8" x-show="!detailAgents.length">
-                    <p class="text-dim text-sm">No agents in scope. Bind an agent by id or set agent workspace under a project spoke.</p>
-                  </div>
-                </div>
-              </div>
-
               <div x-show="detailTab === 'pipelines'" class="mt-4">
                 <div x-show="detailLoading.pipelines" class="loading-state"><div class="spinner"></div><span>Loading pipeline events...</span></div>
                 <div x-show="detailErrors.pipelines && !detailLoading.pipelines" class="error-state">
@@ -3708,48 +4041,74 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   <p x-text="detailErrors.mattermost"></p>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('mattermost')">Retry</button>
                 </div>
-                <div x-show="!detailLoading.mattermost && !detailErrors.mattermost" class="grid gap-4" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">
-                  <div class="of-card p-4">
-                    <h4 class="text-sm font-semibold mb-2">Channel binding</h4>
-                    <p class="text-sm" x-text="mattermostBindingSummary()"></p>
-                    <p class="text-xs text-dim mt-2">Maps Mattermost traffic to this project’s orchestrator.</p>
-                  </div>
-                  <div class="of-card p-4">
-                    <h4 class="text-sm font-semibold mb-2">Orchestrator</h4>
-                    <div x-show="selectedProject && selectedProject.orchestrator_agent_id">
-                      <p class="text-xs mb-2">
-                        <span class="badge" :class="orchestratorIsActive() ? 'badge-success' : 'badge-dim'" x-text="orchestratorIsActive() ? 'Active' : 'Inactive'"></span>
-                        <span class="text-dim ml-2" x-show="_orchestratorAgentMeta && _orchestratorAgentMeta.missing">Agent not found in registry.</span>
-                      </p>
-                      <button type="button" class="button is-small is-link" style="padding-left:0" @click="openOrchestratorAgentDetail()">
-                        <i class="fa fa-external-link" aria-hidden="true"></i>
-                        <span x-text="orchestratorDisplayName() || selectedProject.orchestrator_agent_id"></span>
-                      </button>
-                    </div>
-                    <p class="text-xs text-dim" x-show="!selectedProject || !selectedProject.orchestrator_agent_id">Not running. Save a channel binding to create the orchestrator agent.</p>
-                  </div>
-                  <div class="of-card p-4" style="grid-column:1/-1">
-                    <h4 class="text-sm font-semibold mb-3">Edit binding</h4>
-                    <div class="grid gap-3" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr))">
+                <div x-show="!detailLoading.mattermost && !detailErrors.mattermost" class="mattermost-shell">
+                  <section class="mattermost-channel-card of-card" aria-labelledby="mattermost-channel-heading">
+                    <h4 id="mattermost-channel-heading" class="mattermost-channel-card__title">Mattermost channel</h4>
+                    <p class="mattermost-channel-card__lede text-xs text-dim">
+                      Bind a team and channel so posts there run through this project’s orchestrator. Edit the fields below and save.
+                    </p>
+                    <div class="mattermost-channel-card__fields">
                       <div class="form-group mb-0">
-                        <label class="text-xs text-dim">Channel ID</label>
-                        <input class="form-input text-xs font-mono" x-model="mattermostForm.channel_id" placeholder="e.g. channel id from Mattermost API" :disabled="mattermostSaving">
+                        <label class="text-xs text-dim" for="mm-team-handle">Team handle <span class="font-normal opacity-80">(optional)</span></label>
+                        <input id="mm-team-handle" class="form-input" x-model="mattermostForm.team_name" placeholder="URL slug, e.g. acme" :disabled="mattermostSaving" autocomplete="off">
                       </div>
                       <div class="form-group mb-0">
-                        <label class="text-xs text-dim">Channel name</label>
-                        <input class="form-input text-xs" x-model="mattermostForm.channel_name" placeholder="e.g. town-square" :disabled="mattermostSaving">
+                        <label class="text-xs text-dim" for="mm-channel-handle">Channel handle</label>
+                        <input id="mm-channel-handle" class="form-input" x-model="mattermostForm.channel_name" placeholder="e.g. town-square or project-chat" :disabled="mattermostSaving" autocomplete="off">
                       </div>
                     </div>
-                    <p class="text-xs text-danger mt-2 mb-2" x-show="mattermostError" x-text="mattermostError"></p>
-                    <div class="flex flex-wrap gap-2 mt-3">
+                    <p class="text-xs text-dim mattermost-channel-card__hint">
+                      If the team slug and channel name differ, set both. Otherwise you can use a single <code class="font-mono">team/channel</code> style value in channel handle and leave team blank.
+                    </p>
+                    <p class="text-xs text-danger mt-2 mb-0" x-show="mattermostError" x-text="mattermostError"></p>
+                    <div class="mattermost-channel-card__actions">
                       <button type="button" class="button is-primary is-small" @click="saveMattermostBinding()" :disabled="mattermostSaving">
                         <i class="fa fa-floppy-o" aria-hidden="true" x-show="!mattermostSaving"></i>
-                        <span x-text="mattermostSaving ? 'Saving…' : 'Save'"></span>
+                        <span x-text="mattermostSaving ? 'Saving…' : 'Save binding'"></span>
+                      </button>
+                      <button type="button" class="button is-ghost is-small" @click="sendMattermostTestMessage()" :disabled="mattermostSaving || mattermostTestSending || !selectedProject || !selectedProject.mattermost_channel_id">
+                        <i class="fa fa-paper-plane-o" aria-hidden="true" x-show="!mattermostTestSending"></i>
+                        <span x-text="mattermostTestSending ? 'Sending…' : 'Send test message'"></span>
                       </button>
                       <button type="button" class="button is-ghost is-small" @click="clearMattermostBinding()" :disabled="mattermostSaving">Clear binding</button>
                     </div>
-                    <p class="text-xs text-dim mt-3">Uses <code class="font-mono">PUT /api/projects/{id}</code> with <code class="font-mono">mattermost_channel_id</code> and <code class="font-mono">mattermost_channel_name</code> (null clears).</p>
-                  </div>
+                  </section>
+                  <aside class="mattermost-orchestrator-card" aria-labelledby="mattermost-orchestrator-heading">
+                    <div class="mattermost-orchestrator-card__accent" aria-hidden="true"></div>
+                    <div class="mattermost-orchestrator-card__inner">
+                      <div class="mattermost-orchestrator-card__icon" aria-hidden="true">
+                        <i class="fa fa-sitemap"></i>
+                      </div>
+                      <div class="mattermost-orchestrator-card__body">
+                        <h4 id="mattermost-orchestrator-heading" class="mattermost-orchestrator-card__heading">Orchestrator</h4>
+                        <p class="mattermost-orchestrator-card__sub text-xs text-dim">
+                          Pipeline hand that receives Mattermost messages for this project.
+                        </p>
+                        <template x-if="selectedProject && selectedProject.orchestrator_agent_id">
+                          <div class="mattermost-orchestrator-card__state">
+                            <div class="mattermost-orchestrator-card__status-row">
+                              <span
+                                class="badge"
+                                :class="orchestratorIsActive() ? 'badge-success' : 'badge-dim'"
+                                x-text="orchestratorIsActive() ? 'Running' : 'Not running'"
+                              ></span>
+                              <span class="text-xs text-dim" x-show="_orchestratorAgentMeta && _orchestratorAgentMeta.missing">Not in local agent list</span>
+                            </div>
+                            <p class="mattermost-orchestrator-card__agent-name font-mono text-sm" x-text="orchestratorDisplayName() || selectedProject.orchestrator_agent_id"></p>
+                            <button type="button" class="button is-primary is-small is-fullwidth mattermost-orchestrator-card__cta" @click="openOrchestratorAgentDetail()">
+                              <i class="fa fa-external-link" aria-hidden="true"></i>
+                              <span>Open agent</span>
+                            </button>
+                          </div>
+                        </template>
+                        <template x-if="!selectedProject || !selectedProject.orchestrator_agent_id">
+                          <p class="mattermost-orchestrator-card__empty text-xs text-dim">
+                            Save a channel binding to create or link the orchestrator agent for this project.
+                          </p>
+                        </template>
+                      </div>
+                    </div>
+                  </aside>
                 </div>
               </div>
             </div>

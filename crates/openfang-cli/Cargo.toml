@@ -10,6 +10,8 @@ name = "openfang"
 path = "src/main.rs"
 
 [dependencies]
+# Process-wide default for rustls 0.23+ when both ring and aws-lc-rs are present in the graph.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 openfang-types = { path = "../openfang-types" }
 openfang-kernel = { path = "../openfang-kernel" }
 openfang-api = { path = "../openfang-api" }

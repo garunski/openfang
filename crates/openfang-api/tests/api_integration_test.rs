@@ -180,6 +180,10 @@ async fn start_test_server_with_provider(
                 .delete(routes::delete_project),
         )
         .route(
+            "/api/projects/{id}/mattermost/test-message",
+            axum::routing::post(routes::post_project_mattermost_test_message),
+        )
+        .route(
             "/api/projects/{id}/discover",
             axum::routing::post(routes::discover_project_spokes),
         )
@@ -467,8 +471,6 @@ async fn test_projects_crud_api() {
             "path": proj_root.to_str().unwrap(),
             "spokes": [{"name": "manual", "path": "rel", "labels": ["l1"]}, {"name": "admin", "path": "admin", "labels": []}],
             "admin_spoke": "admin",
-            "mattermost_channel_id": "mm-ch-1",
-            "mattermost_channel_name": "demo-channel",
         }))
         .send()
         .await
@@ -478,8 +480,9 @@ async fn test_projects_crud_api() {
     let pid = body["project_id"].as_str().unwrap().to_string();
     assert_eq!(body["name"], "demo");
     assert_eq!(body["spokes"].as_array().unwrap().len(), 2);
-    assert_eq!(body["mattermost_channel_id"], "mm-ch-1");
-    assert_eq!(body["mattermost_channel_name"], "demo-channel");
+    assert!(body["mattermost_channel_id"].is_null());
+    assert!(body["mattermost_team_name"].is_null());
+    assert!(body["mattermost_channel_name"].is_null());
 
     let resp = client
         .get(format!("{}/api/projects", server.base_url))
@@ -503,8 +506,23 @@ async fn test_projects_crud_api() {
         .unwrap()
         .contains("backlog"));
     assert_eq!(detail["admin_spoke"], "admin");
-    assert_eq!(detail["mattermost_channel_id"], "mm-ch-1");
-    assert_eq!(detail["mattermost_channel_name"], "demo-channel");
+    assert!(detail["mattermost_channel_id"].is_null());
+    assert!(detail["mattermost_team_name"].is_null());
+    assert!(detail["mattermost_channel_name"].is_null());
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/mattermost/test-message",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
+    let err: serde_json::Value = resp.json().await.unwrap();
+    assert!(err["error"].as_str().unwrap().contains("no Mattermost"));
+
     let spokes = detail["spokes"].as_array().unwrap();
     assert_eq!(spokes.len(), 2);
     assert!(!spokes[0]["path_resolved"].as_str().unwrap().is_empty());
@@ -568,18 +586,23 @@ async fn test_projects_crud_api() {
     assert_eq!(resp.status(), 200);
     let up: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(up["name"], "demo2");
-    assert_eq!(up["mattermost_channel_id"], "mm-ch-1");
+    assert!(up["mattermost_channel_id"].is_null());
 
     let resp = client
         .put(format!("{}/api/projects/{}", server.base_url, pid))
-        .json(&serde_json::json!({ "mattermost_channel_id": null }))
+        .json(&serde_json::json!({
+            "mattermost_channel_id": null,
+            "mattermost_team_name": null,
+            "mattermost_channel_name": null
+        }))
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
     let mm: serde_json::Value = resp.json().await.unwrap();
     assert!(mm["mattermost_channel_id"].is_null());
-    assert_eq!(mm["mattermost_channel_name"], "demo-channel");
+    assert!(mm["mattermost_team_name"].is_null());
+    assert!(mm["mattermost_channel_name"].is_null());
 
     let resp = client
         .delete(format!("{}/api/projects/{}", server.base_url, pid))
