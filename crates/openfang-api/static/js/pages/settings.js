@@ -14,6 +14,11 @@ function settingsPage() {
     modelSearch: '',
     modelProviderFilter: '',
     modelTierFilter: '',
+    /** When true, Model Catalog loads GET /api/models?available=true */
+    modelsCatalogAvailableOnly: true,
+    defaultsOrchestratorProvider: '',
+    defaultsOrchestratorModel: '',
+    defaultsSaving: false,
     showCustomModelForm: false,
     customModelId: '',
     customModelProvider: 'openrouter',
@@ -25,6 +30,7 @@ function settingsPage() {
     providerUrlSaving: {},
     providerTesting: {},
     providerTestResults: {},
+    providerEnabledSaving: {},
     copilotOAuth: { polling: false, userCode: '', verificationUri: '', pollId: '', interval: 5 },
     customProviderName: '',
     customProviderUrl: '',
@@ -228,9 +234,82 @@ function settingsPage() {
 
     async loadModels() {
       try {
-        var data = await OpenFangAPI.get('/api/models');
+        var q = this.modelsCatalogAvailableOnly ? '?available=true' : '';
+        var data = await OpenFangAPI.get('/api/models' + q);
         this.models = data.models || [];
       } catch(e) { this.models = []; }
+    },
+
+    async setModelsCatalogAvailableOnly(availableOnly) {
+      if (this.modelsCatalogAvailableOnly === availableOnly) return;
+      this.modelsCatalogAvailableOnly = availableOnly;
+      await this.loadModels();
+    },
+
+    async openDefaultsTab() {
+      this.tab = 'defaults';
+      await this.refreshDefaultsOrchestratorForm();
+    },
+
+    async refreshDefaultsOrchestratorForm() {
+      try {
+        var c = await OpenFangAPI.get('/api/config');
+        var o = c.orchestrator_default_model || {};
+        this.defaultsOrchestratorProvider = o.provider != null ? String(o.provider) : '';
+        this.defaultsOrchestratorModel = o.model != null ? String(o.model) : '';
+        if (!this.models.length) await this.loadModels();
+      } catch(e) {
+        OpenFangToast.error(e.message || 'Could not load defaults');
+      }
+    },
+
+    get defaultsOrchestratorModels() {
+      var p = (this.defaultsOrchestratorProvider || '').trim();
+      return (this.models || []).filter(function(m) {
+        if (!m.available) return false;
+        return !p || m.provider === p;
+      });
+    },
+
+    get uniqueDefaultsOrchestratorProviders() {
+      var seen = {};
+      (this.models || []).forEach(function(m) {
+        if (m.provider && m.available) seen[m.provider] = true;
+      });
+      return Object.keys(seen).sort();
+    },
+
+    onDefaultsOrchestratorProviderChange() {
+      var self = this;
+      var ok = this.defaultsOrchestratorModels.some(function(m) {
+        return String(m.id) === String(self.defaultsOrchestratorModel);
+      });
+      if (!ok) this.defaultsOrchestratorModel = '';
+    },
+
+    async saveOrchestratorDefaults() {
+      var prov = (this.defaultsOrchestratorProvider || '').trim();
+      var mod = (this.defaultsOrchestratorModel || '').trim();
+      if ((prov && !mod) || (!prov && mod)) {
+        OpenFangToast.error('Choose both a provider and a model, or clear both to use the bundled hand default.');
+        return;
+      }
+      this.defaultsSaving = true;
+      try {
+        await OpenFangAPI.post('/api/config/set', { path: 'orchestrator_default_model.provider', value: prov });
+        await OpenFangAPI.post('/api/config/set', { path: 'orchestrator_default_model.model', value: mod });
+        OpenFangToast.success('Saved. New per-project orchestrators pick this model when created.');
+        await this.refreshDefaultsOrchestratorForm();
+      } catch(e) {
+        OpenFangToast.error(e.message || 'Save failed');
+      }
+      this.defaultsSaving = false;
+    },
+
+    async clearOrchestratorDefaults() {
+      this.defaultsOrchestratorProvider = '';
+      this.defaultsOrchestratorModel = '';
+      await this.saveOrchestratorDefaults();
     },
 
     async addCustomModel() {
@@ -335,13 +414,17 @@ function settingsPage() {
     },
 
     providerAuthClass(p) {
+      if (p.models_usable) return 'auth-configured';
+      if (p.env_key_configured) return 'auth-configured';
       if (p.auth_status === 'configured') return 'auth-configured';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'auth-not-set';
       return 'auth-no-key';
     },
 
     providerAuthText(p) {
-      if (p.auth_status === 'configured') return 'Configured';
+      if (p.models_usable) return 'Active';
+      if (p.env_key_configured) return 'Env key';
+      if (p.auth_status === 'configured') return 'Key saved';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') {
         if (p.id === 'claude-code') return 'Not Installed';
         return 'Not Set';
@@ -350,7 +433,8 @@ function settingsPage() {
     },
 
     providerCardClass(p) {
-      if (p.auth_status === 'configured') return 'configured';
+      if (p.models_usable) return 'configured';
+      if (p.effective_enabled && (p.auth_status === 'not_set' || p.auth_status === 'missing')) return 'not-configured';
       if (p.auth_status === 'not_set' || p.auth_status === 'missing') return 'not-configured';
       return 'no-key';
     },
@@ -385,6 +469,21 @@ function settingsPage() {
       if (h > 0) return h + 'h ' + m + 'm';
       if (m > 0) return m + 'm ' + s + 's';
       return s + 's';
+    },
+
+    async setProviderEnabled(provider, ev) {
+      var enabled = ev.target.checked;
+      this.providerEnabledSaving[provider.id] = true;
+      try {
+        await OpenFangAPI.put('/api/providers/' + encodeURIComponent(provider.id) + '/enabled', { enabled: enabled });
+        OpenFangToast.success((enabled ? 'Enabled ' : 'Disabled ') + provider.display_name);
+        await this.loadProviders();
+        await this.loadModels();
+      } catch (e) {
+        ev.target.checked = !enabled;
+        OpenFangToast.error('Failed to update provider: ' + (e.message || String(e)));
+      }
+      this.providerEnabledSaving[provider.id] = false;
     },
 
     async saveProviderKey(provider) {

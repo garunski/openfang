@@ -199,8 +199,8 @@ function chatPage(opts) {
           self.showSlashMenu = false;
           self.modelPickerFilter = modelMatch[1].toLowerCase();
           if (!self.modelPickerList.length) {
-            OpenFangAPI.get('/api/models').then(function(data) {
-              self.modelPickerList = (data.models || []).filter(function(m) { return m.available; });
+            OpenFangAPI.get('/api/models?available=true').then(function(data) {
+              self.modelPickerList = data.models || [];
               self.showModelPicker = true;
               self.modelPickerIdx = 0;
             }).catch(function() {});
@@ -248,8 +248,8 @@ function chatPage(opts) {
         });
         return;
       }
-      OpenFangAPI.get('/api/models').then(function(data) {
-        var models = (data.models || []).filter(function(m) { return m.available; });
+      OpenFangAPI.get('/api/models?available=true').then(function(data) {
+        var models = data.models || [];
         self._modelCache = models;
         self._modelCacheTime = Date.now();
         self.modelPickerList = models;

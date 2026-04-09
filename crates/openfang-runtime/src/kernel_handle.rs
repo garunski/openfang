@@ -270,18 +270,18 @@ pub trait KernelHandle: Send + Sync {
         Vec::new()
     }
 
-    /// `[automation].max_retries` for pipeline / coordinator retry after failed quality gate.
+    /// `[automation].max_retries` for workflow/coordinator retry after failed quality gate.
     fn automation_max_retries(&self) -> u32 {
         2
     }
 
-    /// Effective max retries: `ProjectPipelineOverrides.max_retries` when set for `project_id`, else [`Self::automation_max_retries`].
+    /// Effective max retries: `ProjectWorkflowOverrides.max_retries` when set for `project_id`, else [`Self::automation_max_retries`].
     fn automation_effective_max_retries(&self, project_id: Option<&str>) -> u32 {
         let _ = project_id;
         self.automation_max_retries()
     }
 
-    /// `[automation].model_routing` model id for a pipeline phase (e.g. `planning`, `implementation`).
+    /// `[automation].model_routing` model id for a workflow phase (e.g. `planning`, `implementation`).
     fn automation_model_for_phase(&self, phase: &str) -> String {
         openfang_types::config::default_automation_model_for_phase(phase).to_string()
     }
@@ -308,7 +308,7 @@ pub trait KernelHandle: Send + Sync {
         Err("query_project_status not available".to_string())
     }
 
-    /// Load persisted per-project pipeline context (`<home>/projects/<id>/context.json`) as JSON.
+    /// Load persisted per-project workflow context (`<home>/projects/<id>/context.json`) as JSON.
     async fn read_project_context(&self, _project_id: &str) -> Result<String, String> {
         Err("read_project_context not available".to_string())
     }
@@ -332,12 +332,12 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Env var name for GitHub PAT (`git_create_pr`); project override wins over `[automation].github_token_env`.
-    fn github_token_env_for_pipeline(&self, _project_id: &str) -> String {
+    fn github_token_env_for_workflow(&self, _project_id: &str) -> String {
         "GITHUB_TOKEN".to_string()
     }
 
     /// `{task_id}` branch naming template for `git_create_branch`.
-    fn pipeline_git_branch_template(&self, _project_id: &str) -> String {
+    fn workflow_git_branch_template(&self, _project_id: &str) -> String {
         "openfang/task-{task_id}".to_string()
     }
 }

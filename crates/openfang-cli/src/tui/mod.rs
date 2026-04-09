@@ -1880,19 +1880,16 @@ impl App {
                     Err(_) => Vec::new(),
                 }
             }
-            Backend::InProcess { kernel } => {
-                let catalog = kernel.model_catalog.read().unwrap();
-                catalog
-                    .available_models()
-                    .into_iter()
-                    .map(|e| chat::ModelEntry {
-                        id: e.id.clone(),
-                        display_name: e.display_name.clone(),
-                        provider: e.provider.clone(),
-                        tier: format!("{:?}", e.tier),
-                    })
-                    .collect()
-            }
+            Backend::InProcess { kernel } => kernel
+                .available_model_catalog_entries_cloned()
+                .into_iter()
+                .map(|e| chat::ModelEntry {
+                    id: e.id,
+                    display_name: e.display_name,
+                    provider: e.provider,
+                    tier: format!("{:?}", e.tier),
+                })
+                .collect(),
             Backend::None => Vec::new(),
         };
 

@@ -1782,12 +1782,16 @@ table.trader-trades-table tr:hover td {
   30% { transform: translateY(-4px); opacity: 1; }
 }
 
-/* Voice recording */
+/* Voice recording (Bulma ghost mic + circular chat tool mic) */
 .button.of-voice-recording,
-.of-voice-recording.button {
+.of-voice-recording.button,
+.of-chat-tool-btn.of-voice-recording {
   background: rgba(239, 68, 68, 0.15) !important;
   color: var(--danger) !important;
   animation: recording-pulse 1s ease-in-out infinite;
+}
+.of-chat-tool-btn.of-voice-recording {
+  border-color: var(--error) !important;
 }
 .recording-dot {
   display: inline-block;
@@ -1796,6 +1800,10 @@ table.trader-trades-table tr:hover td {
   border-radius: 50%;
   background: var(--danger);
   animation: recording-pulse 1s ease-in-out infinite;
+}
+.of-chat-tool-btn .recording-dot {
+  width: 10px;
+  height: 10px;
 }
 .recording-indicator {
   display: flex;
@@ -2370,14 +2378,52 @@ mark.search-highlight {
 
 .input-row {
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   width: 100%;
 }
 
+/* Attach / mic — same footprint as send, circular, matches compose bar */
+.of-chat-tool-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-dim);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  transition: border-color 0.2s var(--ease-smooth), color 0.2s var(--ease-smooth),
+    background 0.2s var(--ease-smooth), box-shadow 0.2s var(--ease-smooth),
+    transform 0.15s var(--ease-spring);
+  box-shadow: var(--shadow-xs);
+}
+.of-chat-tool-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface2);
+  box-shadow: var(--shadow-sm);
+}
+.of-chat-tool-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+.of-chat-tool-btn:active {
+  transform: scale(0.94);
+}
+.of-chat-tool-btn .fa {
+  font-size: 17px;
+  line-height: 1;
+}
+
 .of-chat-send {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: none;
   background: var(--accent);
@@ -2392,7 +2438,7 @@ mark.search-highlight {
 }
 .of-chat-send .fa {
   color: inherit;
-  font-size: 15px;
+  font-size: 16px;
   line-height: 1;
 }
 .of-chat-send:hover { background: var(--accent-dim); transform: scale(1.05); box-shadow: var(--shadow-md), var(--shadow-accent); }
@@ -2401,8 +2447,8 @@ mark.search-highlight {
 
 /* Stop button variant during streaming */
 .of-chat-stop {
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: 2px solid var(--error);
   background: var(--error-subtle);
@@ -2416,7 +2462,7 @@ mark.search-highlight {
 }
 .of-chat-stop .fa {
   color: inherit;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
 }
 .of-chat-stop:hover { background: var(--error); color: #fff; transform: scale(1.05); }
@@ -2803,7 +2849,9 @@ mark.search-highlight {
 .of-tabs.of-tabs--project-primary {
   display: flex;
   flex: 0 1 auto;
-  min-width: 0;
+  /* Prefer keeping primary + segment on one row; wrap segment only when not enough width */
+  min-width: min-content;
+  max-width: 100%;
   margin-bottom: 0;
   border-bottom: none;
   gap: 0 1.5rem;
@@ -2840,7 +2888,6 @@ mark.search-highlight {
   border: 1px solid var(--border);
   flex: 0 0 auto;
   max-width: 100%;
-  margin-left: auto;
 }
 
 .project-segment__btn {
@@ -2885,36 +2932,6 @@ mark.search-highlight {
 .project-segment__btn.active .project-segment__icon {
   opacity: 1;
   color: var(--accent);
-}
-
-/* Tablet / small laptop: unchanged tab + segment styling; two lines — primaries wrap, then segment + actions. */
-@media (min-width: 769px) and (max-width: 1279.98px) {
-  .project-subnav__desktop {
-    flex-wrap: wrap;
-    align-items: center;
-    row-gap: 10px;
-    column-gap: 16px;
-  }
-
-  .of-tabs.of-tabs--project-primary {
-    flex: 1 1 100%;
-    flex-wrap: wrap;
-    overflow-x: visible;
-    overflow-y: visible;
-    row-gap: 2px;
-    column-gap: 1.5rem;
-    align-content: flex-start;
-  }
-
-  .project-subnav__trailing {
-    flex: 1 1 100%;
-    margin-left: 0 !important;
-    justify-content: flex-start;
-  }
-
-  .project-subnav__trailing .project-segment {
-    margin-left: 0;
-  }
 }
 
 /* Stats row */

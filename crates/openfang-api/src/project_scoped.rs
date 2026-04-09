@@ -1,4 +1,4 @@
-//! Project-scoped agents, spokes, and pipeline audit filtering.
+//! Project-scoped agents, spokes, and workflow audit filtering.
 
 use crate::project_backlog;
 use openfang_types::project::Project;
@@ -131,8 +131,8 @@ pub fn flatten_pipeline_event(ev: &Value) -> Value {
                 .unwrap_or("")
                 .to_string(),
         ),
-        "pipeline_run_outcome" => (
-            "pipeline_outcome",
+        "workflow_run_outcome" => (
+            "workflow_outcome",
             format!(
                 "success={}",
                 ev.get("success").and_then(|x| x.as_bool()).unwrap_or(false)

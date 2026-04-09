@@ -1442,7 +1442,7 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "backlog_root": admin_br,
         "spokes": spokes,
         "bound_agents": p.bound_agents,
-        "pipeline_overrides": p.pipeline_overrides,
+        "workflow_overrides": p.workflow_overrides,
         "mattermost_channel_id": p.mattermost_channel_id,
         "mattermost_team_name": p.mattermost_team_name,
         "mattermost_channel_name": p.mattermost_channel_name,
@@ -1734,7 +1734,7 @@ pub async fn create_project(
         },
     };
 
-    let pipeline_overrides = match req.get("pipeline_overrides") {
+    let workflow_overrides = match req.get("workflow_overrides") {
         None => Default::default(),
         Some(v) if v.is_null() => Default::default(),
         Some(v) => match serde_json::from_value(v.clone()) {
@@ -1743,7 +1743,7 @@ pub async fn create_project(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(
-                        serde_json::json!({"error": format!("Invalid 'pipeline_overrides': {e}")}),
+                        serde_json::json!({"error": format!("Invalid 'workflow_overrides': {e}")}),
                     ),
                 );
             }
@@ -1882,7 +1882,7 @@ pub async fn create_project(
         name,
         path: PathBuf::from(path_str),
         spokes,
-        pipeline_overrides,
+        workflow_overrides,
         admin_spoke,
         mattermost_channel_id,
         mattermost_team_name,
@@ -1976,15 +1976,15 @@ pub async fn update_project(
             }
         }
     }
-    if let Some(v) = req.get("pipeline_overrides") {
+    if let Some(v) = req.get("workflow_overrides") {
         if !v.is_null() {
             match serde_json::from_value(v.clone()) {
-                Ok(o) => patch.pipeline_overrides = Some(o),
+                Ok(o) => patch.workflow_overrides = Some(o),
                 Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(
-                            serde_json::json!({"error": format!("Invalid 'pipeline_overrides': {e}")}),
+                            serde_json::json!({"error": format!("Invalid 'workflow_overrides': {e}")}),
                         ),
                     );
                 }
@@ -2345,7 +2345,7 @@ pub async fn list_project_docs(
 }
 
 #[derive(Debug, Deserialize)]
-pub struct ListProjectPipelinesQuery {
+pub struct ListProjectWorkflowsQuery {
     #[serde(default)]
     pub limit: Option<u32>,
 }
@@ -2491,7 +2491,7 @@ pub async fn unbind_project_agent(
     }
 }
 
-/// GET /api/projects/:id/spokes — spoke paths, git/mise flags, latest quality gate from pipeline audit ring.
+/// GET /api/projects/:id/spokes — spoke paths, git/mise flags, latest quality gate from workflow audit ring.
 pub async fn list_project_spokes(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
@@ -2532,11 +2532,11 @@ pub async fn list_project_spokes(
     Json(rows).into_response()
 }
 
-/// GET /api/projects/:id/pipelines — scoped pipeline audit rows (`?limit=N`).
-pub async fn list_project_pipelines(
+/// GET /api/projects/:id/workflows — scoped workflow audit rows (`?limit=N`).
+pub async fn list_project_workflows(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
-    Query(q): Query<ListProjectPipelinesQuery>,
+    Query(q): Query<ListProjectWorkflowsQuery>,
 ) -> impl IntoResponse {
     let pid = match parse_project_id_param(&id) {
         Ok(p) => p,
@@ -6120,16 +6120,43 @@ pub async fn list_tools(State(state): State<Arc<AppState>>) -> impl IntoResponse
 
 /// GET /api/config — Get kernel configuration (secrets redacted).
 pub async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    // Return a redacted view of the kernel config
+    // Return a redacted view of the kernel config.
+    // Hot-reloaded `default_model` / `orchestrator_default_model` live in RwLock overrides;
+    // `kernel.config` is boot snapshot and stays stale until process restart.
     let config = &state.kernel.config;
+    let default_model = {
+        let g = state
+            .kernel
+            .default_model_override
+            .read()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        g.as_ref()
+            .cloned()
+            .unwrap_or_else(|| config.default_model.clone())
+    };
+    let orchestrator_default_model = {
+        let g = state
+            .kernel
+            .orchestrator_default_model_override
+            .read()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        g.as_ref()
+            .cloned()
+            .unwrap_or_else(|| config.orchestrator_default_model.clone())
+    };
     Json(serde_json::json!({
         "home_dir": config.home_dir.to_string_lossy(),
         "data_dir": config.data_dir.to_string_lossy(),
         "api_key": if config.api_key.is_empty() { "not set" } else { "***" },
         "default_model": {
-            "provider": config.default_model.provider,
-            "model": config.default_model.model,
-            "api_key_env": config.default_model.api_key_env,
+            "provider": default_model.provider,
+            "model": default_model.model,
+            "api_key_env": state.kernel.resolve_provider_api_key_env(&default_model.provider),
+        },
+        "orchestrator_default_model": {
+            "provider": orchestrator_default_model.provider,
+            "model": orchestrator_default_model.model,
+            "api_key_env": state.kernel.resolve_provider_api_key_env(&orchestrator_default_model.provider),
         },
         "memory": {
             "decay_rate": config.memory.decay_rate,
@@ -6828,6 +6855,13 @@ pub async fn list_models(
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
 
+    let usable_providers: std::collections::HashSet<String> = catalog
+        .list_providers()
+        .iter()
+        .filter(|p| state.kernel.provider_models_usable(p))
+        .map(|p| p.id.clone())
+        .collect();
+
     let models: Vec<serde_json::Value> = catalog
         .list_models()
         .iter()
@@ -6843,20 +6877,18 @@ pub async fn list_models(
                 }
             }
             if available_only {
-                let provider = catalog.get_provider(&m.provider);
-                if let Some(p) = provider {
-                    if p.auth_status == openfang_types::model_catalog::AuthStatus::Missing {
-                        return false;
-                    }
+                let ok = usable_providers.contains(&m.provider)
+                    || m.tier == openfang_types::model_catalog::ModelTier::Custom;
+                if !ok {
+                    return false;
                 }
             }
             true
         })
         .map(|m| {
-            // Custom models from unknown providers are assumed available
             let available = catalog
                 .get_provider(&m.provider)
-                .map(|p| p.auth_status != openfang_types::model_catalog::AuthStatus::Missing)
+                .map(|p| state.kernel.provider_models_usable(p))
                 .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom);
             serde_json::json!({
                 "id": m.id,
@@ -6876,7 +6908,14 @@ pub async fn list_models(
         .collect();
 
     let total = catalog.list_models().len();
-    let available_count = catalog.available_models().len();
+    let available_count = catalog
+        .list_models()
+        .iter()
+        .filter(|m| {
+            usable_providers.contains(&m.provider)
+                || m.tier == openfang_types::model_catalog::ModelTier::Custom
+        })
+        .count();
 
     (
         StatusCode::OK,
@@ -6930,7 +6969,7 @@ pub async fn get_model(
         Some(m) => {
             let available = catalog
                 .get_provider(&m.provider)
-                .map(|p| p.auth_status != openfang_types::model_catalog::AuthStatus::Missing)
+                .map(|p| state.kernel.provider_models_usable(p))
                 .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom);
             (
                 StatusCode::OK,
@@ -7004,6 +7043,11 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
     let mut providers: Vec<serde_json::Value> = Vec::with_capacity(provider_list.len());
 
     for (i, p) in provider_list.iter().enumerate() {
+        let env_key_configured =
+            openfang_runtime::model_catalog::ModelCatalog::provider_primary_env_configured(p);
+        let settings_enabled = state.kernel.provider_user_enabled_resolved(p);
+        let effective_enabled = state.kernel.provider_effective_enabled(p);
+        let models_usable = state.kernel.provider_models_usable(p);
         let mut entry = serde_json::json!({
             "id": p.id,
             "display_name": p.display_name,
@@ -7012,6 +7056,10 @@ pub async fn list_providers(State(state): State<Arc<AppState>>) -> impl IntoResp
             "key_required": p.key_required,
             "api_key_env": p.api_key_env,
             "base_url": p.base_url,
+            "settings_enabled": settings_enabled,
+            "env_key_configured": env_key_configured,
+            "effective_enabled": effective_enabled,
+            "models_usable": models_usable,
         });
 
         // For local providers, attach the probe result
@@ -8120,6 +8168,96 @@ pub async fn set_agent_mcp_servers(
 
 // ── Provider Key Management Endpoints ──────────────────────────────────
 
+/// Merge `[provider_enabled].<id> = <bool>` into `config.toml` (creates file if missing).
+fn merge_provider_enabled_into_config_toml(
+    home: &std::path::Path,
+    provider_id: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    let config_path = home.join("config.toml");
+    let mut table: toml::value::Table = if config_path.exists() {
+        match std::fs::read_to_string(&config_path) {
+            Ok(content) => toml::from_str(&content).unwrap_or_default(),
+            Err(e) => return Err(format!("read config: {e}")),
+        }
+    } else {
+        toml::value::Table::new()
+    };
+    let section = table
+        .entry("provider_enabled".to_string())
+        .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+    if let toml::Value::Table(ref mut t) = section {
+        t.insert(provider_id.to_string(), toml::Value::Boolean(enabled));
+    }
+    let s = toml::to_string_pretty(&toml::Value::Table(table))
+        .map_err(|e| format!("serialize config: {e}"))?;
+    std::fs::write(&config_path, s).map_err(|e| format!("write config: {e}"))?;
+    Ok(())
+}
+
+/// PUT /api/providers/{name}/enabled — Opt a provider in/out for model catalog usage.
+///
+/// Body: `{ "enabled": true | false }`. Persisted under `[provider_enabled]` in `config.toml`.
+/// Cloud providers default to enabled when unset; local providers default to disabled.
+/// OS environment API keys always enable the provider regardless of this flag.
+pub async fn set_provider_enabled(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let enabled = match body.get("enabled") {
+        Some(serde_json::Value::Bool(b)) => *b,
+        _ => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "JSON body must include boolean \"enabled\""})),
+            );
+        }
+    };
+    if let Err(e) =
+        merge_provider_enabled_into_config_toml(&state.kernel.config.home_dir, &name, enabled)
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        );
+    }
+    let reload_status = match state.kernel.reload_config() {
+        Ok(plan) => {
+            if plan.restart_required {
+                "applied_partial"
+            } else {
+                "applied"
+            }
+        }
+        Err(e) => {
+            return (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "status": "saved_reload_failed",
+                    "provider": name,
+                    "enabled": enabled,
+                    "error": e
+                })),
+            );
+        }
+    };
+    state.kernel.audit_log.record(
+        "system",
+        openfang_runtime::audit::AuditAction::ConfigChange,
+        format!("provider_enabled: {name} = {enabled}"),
+        "completed",
+    );
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": reload_status,
+            "provider": name,
+            "enabled": enabled
+        })),
+    )
+}
+
 /// POST /api/providers/{name}/key — Save an API key for a provider.
 ///
 /// SECURITY: Writes to `~/.openfang/secrets.env`, sets env var in process,
@@ -8286,6 +8424,14 @@ pub async fn set_provider_key(
     } else {
         false
     };
+
+    if let Err(e) =
+        merge_provider_enabled_into_config_toml(&state.kernel.config.home_dir, &name, true)
+    {
+        tracing::warn!(error = %e, "persist provider_enabled after key save");
+    } else if let Err(e) = state.kernel.reload_config() {
+        tracing::warn!(error = %e, "reload_config after provider_enabled merge");
+    }
 
     let mut resp = serde_json::json!({"status": "saved", "provider": name});
     if switched {
@@ -8488,6 +8634,7 @@ pub async fn set_provider_url(
             .write()
             .unwrap_or_else(|e| e.into_inner());
         catalog.set_provider_url(&name, &base_url);
+        catalog.detect_auth();
     }
 
     // Persist to config.toml [provider_urls] section
@@ -10653,6 +10800,12 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
     let model_options: Vec<serde_json::Value> = catalog
         .list_models()
         .iter()
+        .filter(|m| {
+            catalog
+                .get_provider(&m.provider)
+                .map(|p| p.auth_status != openfang_types::model_catalog::AuthStatus::Missing)
+                .unwrap_or(m.tier == openfang_types::model_catalog::ModelTier::Custom)
+        })
         .map(|m| serde_json::json!({"id": m.id, "name": m.display_name, "provider": m.provider}))
         .collect();
     drop(catalog);

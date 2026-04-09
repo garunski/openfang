@@ -673,11 +673,11 @@ mod tests {
         let reg = HandRegistry::new();
         let count = reg.load_bundled();
         assert_eq!(count, 1);
-        assert!(reg.get_definition("pipeline-coordinator").is_some());
+        assert!(reg.get_definition("workflow-coordinator").is_some());
     }
 
     #[test]
-    fn pipeline_coordinator_two_openfang_project_instances() {
+    fn workflow_coordinator_two_openfang_project_instances() {
         let reg = HandRegistry::new();
         reg.load_bundled();
         let mut c1 = HashMap::new();
@@ -685,20 +685,20 @@ mod tests {
             "openfang_project_id".into(),
             serde_json::json!("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
         );
-        let i1 = reg.activate("pipeline-coordinator", c1).unwrap();
+        let i1 = reg.activate("workflow-coordinator", c1).unwrap();
         let mut c2 = HashMap::new();
         c2.insert(
             "openfang_project_id".into(),
             serde_json::json!("ffffffff-eeee-dddd-cccc-bbbbbbbbbbbb"),
         );
-        let i2 = reg.activate("pipeline-coordinator", c2).unwrap();
+        let i2 = reg.activate("workflow-coordinator", c2).unwrap();
         assert_ne!(i1.instance_id, i2.instance_id);
         let mut c1dup = HashMap::new();
         c1dup.insert(
             "openfang_project_id".into(),
             serde_json::json!("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
         );
-        assert!(reg.activate("pipeline-coordinator", c1dup).is_err());
+        assert!(reg.activate("workflow-coordinator", c1dup).is_err());
     }
 
     #[test]

@@ -149,7 +149,7 @@ pub enum ErrorMode {
 }
 
 /// Workflow name of the bundled doc-2 full-cycle template installed on hub init.
-pub const BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME: &str = "pipeline-full-cycle";
+pub const BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME: &str = "workflow-full-cycle";
 
 /// Parses the same JSON body shape as `POST /api/workflows` into a new [`Workflow`]
 /// (fresh id and `created_at`). Shared by the API and bundled default workflow install.

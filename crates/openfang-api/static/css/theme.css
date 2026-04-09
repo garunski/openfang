@@ -147,6 +147,8 @@
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+[x-cloak] { display: none !important; }
+
 html { scroll-behavior: smooth; }
 
 body {
@@ -274,6 +276,221 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .skeleton-heading { height: 20px; width: 40%; margin-bottom: 12px; }
 .skeleton-card { height: 100px; border-radius: var(--radius-lg); }
 .skeleton-avatar { width: 32px; height: 32px; border-radius: 50%; }
+
+/* Full-screen shell before Alpine hydrates auth card (x-cloak); hidden when login/API key UI shows */
+.auth-prompt-boot {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: max(24px, env(safe-area-inset-top, 0px)) 24px 24px;
+  text-align: center;
+  color: #f0efee;
+  background-color: #080706;
+  background-image: radial-gradient(
+    ellipse 90% 55% at 50% -25%,
+    rgba(255, 92, 0, 0.15),
+    transparent 58%
+  );
+}
+
+html[data-theme="light"] .auth-prompt-boot {
+  color: #1a1817;
+  background-color: #f5f4f2;
+  background-image: radial-gradient(
+    ellipse 90% 55% at 50% -25%,
+    rgba(255, 92, 0, 0.1),
+    transparent 58%
+  );
+}
+
+.auth-prompt-boot__logo-mark {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto 16px;
+  border-radius: var(--radius-lg);
+  background: #2a2725;
+  border: 1px solid #2d2a28;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="light"] .auth-prompt-boot__logo-mark {
+  background: #f0eeec;
+  border-color: #d5d2cf;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+
+.auth-prompt-boot__logo-mark img {
+  display: block;
+  width: 40px;
+  height: 40px;
+}
+
+.auth-prompt-boot__brand {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  margin-bottom: 6px;
+}
+
+.auth-prompt-boot__status {
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: #c4c0bc;
+  margin-bottom: 20px;
+}
+
+html[data-theme="light"] .auth-prompt-boot__status {
+  color: #6b6560;
+}
+
+/* After components.css .spinner */
+.auth-prompt-boot .auth-prompt-boot__spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid #2d2a28;
+  border-top-color: #ff5c00;
+  border-radius: 50%;
+}
+
+html[data-theme="light"] .auth-prompt-boot .auth-prompt-boot__spinner {
+  border: 2px solid #d5d2cf;
+  border-top-color: #ff5c00;
+}
+
+/* First paint in main column — scripts parse before Alpine hydrates <template x-if> panels.
+   Literal fallbacks so text/card stay visible if custom props resolve late. */
+.app-boot-splash {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(16px, env(safe-area-inset-top, 0px)) 24px 24px;
+  color: #f0efee;
+  background-color: #080706;
+  background-image: radial-gradient(
+    ellipse 90% 55% at 50% -25%,
+    rgba(255, 92, 0, 0.15),
+    transparent 58%
+  );
+  transition:
+    opacity 0.4s var(--ease-smooth),
+    visibility 0.4s var(--ease-smooth);
+}
+
+html[data-theme="light"] .app-boot-splash {
+  color: #1a1817;
+  background-color: #f5f4f2;
+  background-image: radial-gradient(
+    ellipse 90% 55% at 50% -25%,
+    rgba(255, 92, 0, 0.1),
+    transparent 58%
+  );
+}
+
+.app-boot-splash.app-boot-splash--hide {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.app-boot-splash__inner {
+  text-align: center;
+  max-width: 300px;
+  width: 100%;
+  padding: 28px 32px;
+  background: #1f1d1c;
+  border: 1px solid #232120;
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-lg);
+  color: inherit;
+}
+
+html[data-theme="light"] .app-boot-splash__inner {
+  background: #ffffff;
+  border-color: #e0deda;
+}
+
+.app-boot-splash__logo-mark {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  border-radius: var(--radius-lg);
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: var(--shadow-xs);
+}
+
+.app-boot-splash__logo-mark img {
+  display: block;
+  width: 36px;
+  height: 36px;
+}
+
+.app-boot-splash__brand {
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: inherit;
+  line-height: 1.2;
+}
+
+.app-boot-splash__sub {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #8a8380;
+  margin-top: 4px;
+  margin-bottom: 10px;
+}
+
+html[data-theme="light"] .app-boot-splash__sub {
+  color: #9a958f;
+}
+
+.app-boot-splash__loading {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #c4c0bc;
+  margin-bottom: 14px;
+}
+
+html[data-theme="light"] .app-boot-splash__loading {
+  color: #6b6560;
+}
+
+/* After components.css .spinner — need 2-class specificity so literal borders win */
+.app-boot-splash .app-boot-splash__spinner {
+  margin-left: auto;
+  margin-right: auto;
+  border: 2px solid #2d2a28;
+  border-top-color: #ff5c00;
+}
+
+html[data-theme="light"] .app-boot-splash .app-boot-splash__spinner {
+  border: 2px solid #d5d2cf;
+  border-top-color: #ff5c00;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-boot-splash {
+    transition-duration: 0.01ms;
+  }
+}
 
 /* Print styles */
 @media print {

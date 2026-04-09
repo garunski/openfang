@@ -45,6 +45,10 @@ pub enum HotAction {
     ReloadProviderUrls,
     /// Default model changed — update in-place without restart.
     UpdateDefaultModel,
+    /// Orchestrator default model changed — picked up when orchestrator agents spawn.
+    UpdateOrchestratorDefaultModel,
+    /// `[provider_enabled]` toggles (Settings → Providers).
+    UpdateProviderEnabled,
 }
 
 // ---------------------------------------------------------------------------
@@ -168,6 +172,14 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
         plan.hot_actions.push(HotAction::UpdateDefaultModel);
     }
 
+    if field_changed(
+        &old.orchestrator_default_model,
+        &new.orchestrator_default_model,
+    ) {
+        plan.hot_actions
+            .push(HotAction::UpdateOrchestratorDefaultModel);
+    }
+
     // Home/data directory changes
     if old.home_dir != new.home_dir {
         plan.restart_required = true;
@@ -239,6 +251,10 @@ pub fn build_reload_plan(old: &KernelConfig, new: &KernelConfig) -> ReloadPlan {
 
     if field_changed(&old.provider_urls, &new.provider_urls) {
         plan.hot_actions.push(HotAction::ReloadProviderUrls);
+    }
+
+    if field_changed(&old.provider_enabled, &new.provider_enabled) {
+        plan.hot_actions.push(HotAction::UpdateProviderEnabled);
     }
 
     if field_changed(&old.provider_api_keys, &new.provider_api_keys) {

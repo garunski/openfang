@@ -1,7 +1,7 @@
-//! Structured JSON audit lines for automation pipeline runs.
+//! Structured JSON audit lines for automation workflow runs.
 //!
-//! Emits `tracing` events (target `openfang_pipeline_audit`, field `line` = one JSON object).
-//! Append the same lines to a file when **`OPENFANG_PIPELINE_AUDIT_LOG`** is set to a path.
+//! Emits `tracing` events (target `openfang_workflow_audit`, field `line` = one JSON object).
+//! Append the same lines to a file when **`OPENFANG_WORKFLOW_AUDIT_LOG`** is set to a path.
 
 use chrono::Utc;
 use serde::Serialize;
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use tracing::info;
 
-/// Cap for in-memory pipeline audit ring (API reads this; tracing/file remain primary sinks).
+/// Cap for in-memory workflow audit ring (API reads this; tracing/file remain primary sinks).
 const PIPELINE_AUDIT_RING_CAP: usize = 8000;
 
 static PIPELINE_AUDIT_RING: OnceLock<Mutex<VecDeque<serde_json::Value>>> = OnceLock::new();
@@ -29,7 +29,7 @@ fn ring_push(v: &serde_json::Value) {
     g.push_back(v.clone());
 }
 
-/// Recent pipeline audit JSON records, **newest first** (up to `limit`).
+/// Recent workflow audit JSON records, **newest first** (up to `limit`).
 pub fn recent_pipeline_audit_records(limit: usize) -> Vec<serde_json::Value> {
     let g = pipeline_audit_ring()
         .lock()
@@ -47,14 +47,14 @@ pub fn clear_pipeline_audit_ring() {
 #[cfg(test)]
 static PIPELINE_AUDIT_TEST_RECORDS: Mutex<Vec<serde_json::Value>> = Mutex::new(Vec::new());
 
-/// Clear recorded pipeline audit events (unit tests only).
+/// Clear recorded workflow audit events (unit tests only).
 #[cfg(test)]
 pub fn clear_pipeline_audit_test_buffer() {
     PIPELINE_AUDIT_TEST_RECORDS.lock().unwrap().clear();
     clear_pipeline_audit_ring();
 }
 
-/// Take and clear recorded pipeline audit events (unit tests only).
+/// Take and clear recorded workflow audit events (unit tests only).
 #[cfg(test)]
 pub fn take_pipeline_audit_test_buffer() -> Vec<serde_json::Value> {
     std::mem::take(&mut *PIPELINE_AUDIT_TEST_RECORDS.lock().unwrap())
@@ -103,7 +103,7 @@ pub enum PipelineAuditEvent {
         actor: String,
         tool: String,
     },
-    PipelineRunOutcome {
+    WorkflowRunOutcome {
         timestamp: String,
         task_id: String,
         success: bool,
@@ -117,16 +117,16 @@ pub enum PipelineAuditEvent {
 
 pub fn emit(event: PipelineAuditEvent) {
     let v = serde_json::to_value(&event)
-        .unwrap_or_else(|_| serde_json::json!({ "event": "pipeline_audit_serialize_error" }));
+        .unwrap_or_else(|_| serde_json::json!({ "event": "workflow_audit_serialize_error" }));
     ring_push(&v);
     #[cfg(test)]
     {
         PIPELINE_AUDIT_TEST_RECORDS.lock().unwrap().push(v.clone());
     }
     let line = serde_json::to_string(&v)
-        .unwrap_or_else(|_| r#"{"event":"pipeline_audit_line_error"}"#.to_string());
-    info!(target: "openfang_pipeline_audit", %line);
-    if let Ok(path) = std::env::var("OPENFANG_PIPELINE_AUDIT_LOG") {
+        .unwrap_or_else(|_| r#"{"event":"workflow_audit_line_error"}"#.to_string());
+    info!(target: "openfang_workflow_audit", %line);
+    if let Ok(path) = std::env::var("OPENFANG_WORKFLOW_AUDIT_LOG") {
         let path = path.trim();
         if !path.is_empty() {
             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -191,7 +191,7 @@ pub fn log_cursor_worker(
     });
 }
 
-pub fn log_pipeline_run_outcome(
+pub fn log_workflow_run_outcome(
     task_id: impl Into<String>,
     success: bool,
     retry_count: u32,
@@ -199,7 +199,7 @@ pub fn log_pipeline_run_outcome(
     actor: impl Into<String>,
     tool: impl Into<String>,
 ) {
-    emit(PipelineAuditEvent::PipelineRunOutcome {
+    emit(PipelineAuditEvent::WorkflowRunOutcome {
         timestamp: Utc::now().to_rfc3339(),
         task_id: task_id.into(),
         success,

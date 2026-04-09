@@ -449,8 +449,8 @@ pub async fn build_router(
             axum::routing::get(routes::get_project_spoke_detail),
         )
         .route(
-            "/api/projects/{id}/pipelines",
-            axum::routing::get(routes::list_project_pipelines),
+            "/api/projects/{id}/workflows",
+            axum::routing::get(routes::list_project_workflows),
         )
         .route(
             "/api/projects/{id}/workflows/{workflow_id}/run",
@@ -763,6 +763,10 @@ pub async fn build_router(
         .route(
             "/api/providers/github-copilot/oauth/poll/{poll_id}",
             axum::routing::get(routes::copilot_oauth_poll),
+        )
+        .route(
+            "/api/providers/{name}/enabled",
+            axum::routing::put(routes::set_provider_enabled),
         )
         .route(
             "/api/providers/{name}/key",

@@ -377,11 +377,51 @@ function app() {
 
     init() {
       var self = this;
+      var splashShownAt = typeof performance !== 'undefined' && performance.now ? performance.now() : 0;
+
+      document.documentElement.setAttribute('data-theme', this.theme);
+      document.documentElement.style.colorScheme = this.theme === 'dark' ? 'dark' : 'light';
+
+      var splash = document.getElementById('app-boot-splash');
+      var splashStatus = document.getElementById('app-boot-splash-status');
+      if (splashStatus) splashStatus.textContent = 'Loading…';
+
+      function dismissBootSplash() {
+        if (!splash || splash.classList.contains('app-boot-splash--hide')) return;
+        splash.classList.add('app-boot-splash--hide');
+        var removed = false;
+        function finish() {
+          if (removed || !splash.parentNode) return;
+          removed = true;
+          splash.remove();
+        }
+        splash.addEventListener('transitionend', function onTe(ev) {
+          if (ev.propertyName === 'opacity') {
+            splash.removeEventListener('transitionend', onTe);
+            finish();
+          }
+        });
+        window.setTimeout(finish, 500);
+      }
+      function scheduleDismiss() {
+        var minMs = 220;
+        var elapsed =
+          typeof performance !== 'undefined' && performance.now
+            ? performance.now() - splashShownAt
+            : minMs;
+        var delay = Math.max(0, minMs - elapsed);
+        window.setTimeout(dismissBootSplash, delay);
+      }
+      requestAnimationFrame(function () {
+        requestAnimationFrame(scheduleDismiss);
+      });
 
       // Listen for OS theme changes (only matters when mode is 'system')
       window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function(e) {
         if (self.themeMode === 'system') {
           self.theme = e.matches ? 'dark' : 'light';
+          document.documentElement.setAttribute('data-theme', self.theme);
+          document.documentElement.style.colorScheme = self.theme === 'dark' ? 'dark' : 'light';
         }
       });
 
@@ -526,6 +566,8 @@ function app() {
       } else {
         this.theme = mode;
       }
+      document.documentElement.setAttribute('data-theme', this.theme);
+      document.documentElement.style.colorScheme = this.theme === 'dark' ? 'dark' : 'light';
     },
 
     toggleTheme() {

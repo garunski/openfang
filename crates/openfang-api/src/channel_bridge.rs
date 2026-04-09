@@ -130,17 +130,17 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
     }
 
     async fn list_models_text(&self) -> String {
-        let catalog = self
-            .kernel
-            .model_catalog
-            .read()
-            .unwrap_or_else(|e| e.into_inner());
-        let available = catalog.available_models();
+        let available = self.kernel.available_model_catalog_entries_cloned();
         if available.is_empty() {
             return "No models available. Configure API keys to enable providers.".to_string();
         }
         let mut msg = format!("Available models ({}):\n", available.len());
         // Group by provider
+        let catalog = self
+            .kernel
+            .model_catalog
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
         let mut by_provider: std::collections::HashMap<
             &str,
             Vec<&openfang_types::model_catalog::ModelCatalogEntry>,

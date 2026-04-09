@@ -1004,6 +1004,10 @@ pub struct KernelConfig {
     pub network_enabled: bool,
     /// Default LLM provider configuration.
     pub default_model: DefaultModelConfig,
+    /// When both `provider` and `model` are non-empty, per-project workflow orchestrators
+    /// (e.g. Mattermost) spawn with this LLM; otherwise the hand's bundled model applies.
+    #[serde(default)]
+    pub orchestrator_default_model: DefaultModelConfig,
     /// Memory substrate configuration.
     pub memory: MemoryConfig,
     /// Network configuration.
@@ -1117,6 +1121,14 @@ pub struct KernelConfig {
     /// If not set, the convention `{PROVIDER_UPPER}_API_KEY` is used automatically.
     #[serde(default)]
     pub provider_api_keys: HashMap<String, String>,
+    /// Per-provider opt-in for using models in OpenFang (Settings → Providers).
+    ///
+    /// Missing entry uses defaults: cloud providers (`key_required`) default to enabled;
+    /// local providers default to disabled until toggled on. If the provider's API key
+    /// env var is set in the process environment (non-empty), the provider is always
+    /// treated as enabled regardless of this map.
+    #[serde(default)]
+    pub provider_enabled: HashMap<String, bool>,
     /// OAuth client ID overrides for PKCE flows.
     #[serde(default)]
     pub oauth: OAuthConfig,
@@ -1566,6 +1578,12 @@ impl Default for KernelConfig {
             api_listen: "127.0.0.1:50051".to_string(),
             network_enabled: false,
             default_model: DefaultModelConfig::default(),
+            orchestrator_default_model: DefaultModelConfig {
+                provider: String::new(),
+                model: String::new(),
+                api_key_env: String::new(),
+                base_url: None,
+            },
             memory: MemoryConfig::default(),
             network: NetworkConfig::default(),
             channels: ChannelsConfig::default(),
@@ -1602,6 +1620,7 @@ impl Default for KernelConfig {
             budget: BudgetConfig::default(),
             provider_urls: HashMap::new(),
             provider_api_keys: HashMap::new(),
+            provider_enabled: HashMap::new(),
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
             workflows_dir: None,
@@ -1673,6 +1692,7 @@ impl std::fmt::Debug for KernelConfig {
             .field("api_listen", &self.api_listen)
             .field("network_enabled", &self.network_enabled)
             .field("default_model", &self.default_model)
+            .field("orchestrator_default_model", &self.orchestrator_default_model)
             .field("memory", &self.memory)
             .field("network", &self.network)
             .field("channels", &self.channels)
@@ -1745,6 +1765,10 @@ impl std::fmt::Debug for KernelConfig {
             .field(
                 "provider_api_keys",
                 &format!("{} mapping(s)", self.provider_api_keys.len()),
+            )
+            .field(
+                "provider_enabled",
+                &format!("{} provider(s)", self.provider_enabled.len()),
             )
             .field("auth", &format!("enabled={}", self.auth.enabled))
             .field(

@@ -268,8 +268,8 @@ async fn start_test_server_with_provider(
             axum::routing::get(routes::get_project_spoke_detail),
         )
         .route(
-            "/api/projects/{id}/pipelines",
-            axum::routing::get(routes::list_project_pipelines),
+            "/api/projects/{id}/workflows",
+            axum::routing::get(routes::list_project_workflows),
         )
         .route(
             "/api/projects/{id}/backlog/config",
@@ -1841,7 +1841,7 @@ async fn test_backlog_search_and_statistics_api() {
 }
 
 #[tokio::test]
-async fn test_project_scoped_agents_spokes_pipelines() {
+async fn test_project_scoped_agents_spokes_workflows() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
@@ -2019,7 +2019,7 @@ async fn test_project_scoped_agents_spokes_pipelines() {
 
     let resp = client
         .get(format!(
-            "{}/api/projects/{}/pipelines?limit=5",
+            "{}/api/projects/{}/workflows?limit=5",
             server.base_url, pid
         ))
         .send()
@@ -2354,9 +2354,9 @@ async fn test_project_workflow_requires_assigned_agents() {
     );
 }
 
-/// TASK-46: `pipeline-full-cycle` template registers via POST /api/workflows and runs via project route.
+/// TASK-46: `workflow-full-cycle` template registers via POST /api/workflows and runs via project route.
 #[tokio::test]
-async fn test_pipeline_full_cycle_workflow_registers_and_project_run() {
+async fn test_workflow_full_cycle_workflow_registers_and_project_run() {
     let server = start_test_server().await;
     let client = reqwest::Client::new();
     let home = server.state.kernel.config.home_dir.clone();
@@ -2384,16 +2384,16 @@ async fn test_pipeline_full_cycle_workflow_registers_and_project_run() {
     let pid = body["project_id"].as_str().unwrap();
 
     const COORD_MANIFEST: &str = r#"
-name = "pipeline-coordinator-hand"
+name = "workflow-coordinator-hand"
 version = "0.1.0"
-description = "Test stand-in for pipeline coordinator workflow steps"
+description = "Test stand-in for workflow coordinator workflow steps"
 author = "test"
 module = "builtin:chat"
 
 [model]
 provider = "ollama"
 model = "test-model"
-system_prompt = "You are a test pipeline orchestrator. Reply briefly."
+system_prompt = "You are a test workflow orchestrator. Reply briefly."
 
 [capabilities]
 tools = ["file_read", "backlog_task_view", "query_project_status", "read_project_context", "update_project_context", "backlog_task_edit", "trigger_cursor_worker", "enforce_quality_gate", "record_git_action", "git_create_branch", "git_commit_and_push", "git_create_pr"]
@@ -2413,7 +2413,7 @@ memory_write = ["self.*"]
 
     let mut wf_template: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../openfang-kernel/bundled/workflows/pipeline-full-cycle.json"
+        "/../openfang-kernel/bundled/workflows/workflow-full-cycle.json"
     )))
     .unwrap();
     wf_template["project_id"] = serde_json::json!(pid);

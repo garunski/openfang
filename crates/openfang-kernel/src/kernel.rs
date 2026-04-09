@@ -60,11 +60,11 @@ impl LlmDriver for StubDriver {
     }
 }
 
-/// Human-readable label for a per-project pipeline coordinator agent (no GUID suffix).
+/// Human-readable label for a per-project workflow coordinator agent (no GUID suffix).
 fn pipeline_coordinator_agent_display_name(project: &Project) -> String {
     let raw = project.name.trim();
     if raw.is_empty() {
-        return "Pipeline coordinator".to_string();
+        return "Workflow coordinator".to_string();
     }
     let mut label = String::new();
     for ch in raw.chars().take(80) {
@@ -76,9 +76,9 @@ fn pipeline_coordinator_agent_display_name(project: &Project) -> String {
     }
     let label = label.trim().to_string();
     if label.is_empty() {
-        return "Pipeline coordinator".to_string();
+        return "Workflow coordinator".to_string();
     }
-    format!("Pipeline · {label}")
+    format!("Workflow · {label}")
 }
 
 pub struct OpenFangKernel {
@@ -181,6 +181,11 @@ pub struct OpenFangKernel {
     /// Hot-reloadable default model override (set via config hot-reload, read at agent spawn).
     pub default_model_override:
         std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
+    /// Hot-reloadable orchestrator default model (read when spawning workflow-coordinator agents).
+    pub orchestrator_default_model_override:
+        std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
+    /// Hot-reloadable `[provider_enabled]` map (Settings → Providers toggles).
+    pub provider_enabled_state: std::sync::RwLock<std::collections::HashMap<String, bool>>,
     /// Per-agent message locks — serializes LLM calls for the same agent to prevent
     /// session corruption when multiple messages arrive concurrently (e.g. rapid voice
     /// messages via a channel). Different agents can still run in parallel.
@@ -772,7 +777,9 @@ impl OpenFangKernel {
         // Load user's custom models from ~/.openfang/custom_models.json
         let custom_models_path = config.home_dir.join("custom_models.json");
         model_catalog.load_custom_models(&custom_models_path);
-        let available_count = model_catalog.available_models().len();
+        let available_count = model_catalog
+            .available_models_with_enabled(&config.provider_enabled)
+            .len();
         let total_count = model_catalog.list_models().len();
         let local_count = model_catalog
             .list_providers()
@@ -1074,6 +1081,7 @@ impl OpenFangKernel {
         let initial_bindings = config.bindings.clone();
         let initial_broadcast = config.broadcast.clone();
         let auto_reply_engine = crate::auto_reply::AutoReplyEngine::new(config.auto_reply.clone());
+        let provider_enabled_initial = config.provider_enabled.clone();
 
         let kernel = Self {
             config,
@@ -1124,6 +1132,8 @@ impl OpenFangKernel {
             booted_at: std::time::Instant::now(),
             channel_adapters: dashmap::DashMap::new(),
             default_model_override: std::sync::RwLock::new(None),
+            orchestrator_default_model_override: std::sync::RwLock::new(None),
+            provider_enabled_state: std::sync::RwLock::new(provider_enabled_initial),
             agent_msg_locks: dashmap::DashMap::new(),
             self_handle: OnceLock::new(),
         };
@@ -3618,7 +3628,177 @@ impl OpenFangKernel {
         Ok(())
     }
 
-    /// Spawns a dedicated `pipeline-coordinator` agent for `project` (readable name; workspace dir is unique per project id).
+    fn resolved_orchestrator_default_model(&self) -> openfang_types::config::DefaultModelConfig {
+        let guard = self
+            .orchestrator_default_model_override
+            .read()
+            .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+        guard
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| self.config.orchestrator_default_model.clone())
+    }
+
+    fn provider_api_key_env_from_catalog(
+        config: &KernelConfig,
+        catalog: &openfang_runtime::model_catalog::ModelCatalog,
+        provider: &str,
+    ) -> String {
+        let p = provider.trim();
+        if p.is_empty() {
+            return String::new();
+        }
+        catalog
+            .get_provider(p)
+            .filter(|info| !info.api_key_env.trim().is_empty())
+            .map(|info| info.api_key_env.clone())
+            .unwrap_or_else(|| config.resolve_api_key_env(p))
+    }
+
+    /// Effective API key env for a model provider: built-in catalog, else `provider_api_keys` / profiles / `{PROVIDER}_API_KEY`.
+    pub fn resolve_provider_api_key_env(&self, provider: &str) -> String {
+        let catalog = self
+            .model_catalog
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        Self::provider_api_key_env_from_catalog(&self.config, &catalog, provider)
+    }
+
+    /// Dashboard / `[provider_enabled]` toggle with defaults (cloud on, local off), ignoring env auto-enable.
+    pub fn provider_user_enabled_resolved(
+        &self,
+        p: &openfang_types::model_catalog::ProviderInfo,
+    ) -> bool {
+        let map = self
+            .provider_enabled_state
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        openfang_runtime::model_catalog::ModelCatalog::provider_user_enabled_defaulting(p, &map)
+    }
+
+    /// Env API key forces enable; else uses [`Self::provider_user_enabled_resolved`].
+    pub fn provider_effective_enabled(
+        &self,
+        p: &openfang_types::model_catalog::ProviderInfo,
+    ) -> bool {
+        let map = self
+            .provider_enabled_state
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        openfang_runtime::model_catalog::ModelCatalog::provider_effective_enabled_in_config(p, &map)
+    }
+
+    /// Vault / env chain / `auth_status` — whether the provider can call the API (or CLI is ready).
+    pub fn provider_credential_ready(
+        &self,
+        p: &openfang_types::model_catalog::ProviderInfo,
+    ) -> bool {
+        use openfang_types::model_catalog::AuthStatus;
+        if p.id == "claude-code" || p.id == "qwen-code" {
+            return p.auth_status == AuthStatus::Configured;
+        }
+        if !p.key_required {
+            return true;
+        }
+        if p.auth_status == AuthStatus::Configured {
+            return true;
+        }
+        if !p.api_key_env.is_empty() && self.resolve_credential(&p.api_key_env).is_some() {
+            return true;
+        }
+        if p.id == "gemini" && self.resolve_credential("GOOGLE_API_KEY").is_some() {
+            return true;
+        }
+        if p.id == "codex" {
+            if self.resolve_credential("OPENAI_API_KEY").is_some() {
+                return true;
+            }
+            return openfang_runtime::model_catalog::read_codex_credential().is_some();
+        }
+        false
+    }
+
+    /// Provider is opted in and has credentials (or local/CLI is ready).
+    pub fn provider_models_usable(
+        &self,
+        p: &openfang_types::model_catalog::ProviderInfo,
+    ) -> bool {
+        self.provider_effective_enabled(p) && self.provider_credential_ready(p)
+    }
+
+    /// Catalog models that are enabled and credentialed (for pickers / channel bridge).
+    pub fn available_model_catalog_entries_cloned(
+        &self,
+    ) -> Vec<openfang_types::model_catalog::ModelCatalogEntry> {
+        let cat = self
+            .model_catalog
+            .read()
+            .unwrap_or_else(|e| e.into_inner());
+        cat.available_models_filtered(|p| self.provider_models_usable(p))
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
+    /// Provider/model/credentials for the per-project workflow-coordinator manifest.
+    fn resolve_workflow_coordinator_llm(
+        &self,
+        def: &openfang_hands::HandDefinition,
+    ) -> (String, String, Option<String>, Option<String>) {
+        let odm = self.resolved_orchestrator_default_model();
+        if !odm.provider.trim().is_empty() && !odm.model.trim().is_empty() {
+            let catalog = self
+                .model_catalog
+                .read()
+                .unwrap_or_else(|e| e.into_inner());
+            let api_key_env =
+                Self::provider_api_key_env_from_catalog(&self.config, &catalog, &odm.provider);
+            let mut base_url = odm.base_url.clone();
+            if base_url.is_none() {
+                if let Some(p) = catalog.get_provider(odm.provider.trim()) {
+                    if !p.base_url.is_empty() {
+                        base_url = Some(p.base_url.clone());
+                    }
+                }
+            }
+            let api_key_env = if api_key_env.trim().is_empty() {
+                None
+            } else {
+                Some(api_key_env)
+            };
+            return (odm.provider, odm.model, api_key_env, base_url);
+        }
+
+        let dm = {
+            let g = self
+                .default_model_override
+                .read()
+                .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+            g.as_ref()
+                .cloned()
+                .unwrap_or_else(|| self.config.default_model.clone())
+        };
+
+        let hand_provider = if def.agent.provider == "default" {
+            dm.provider.clone()
+        } else {
+            def.agent.provider.clone()
+        };
+        let hand_model = if def.agent.model == "default" {
+            dm.model.clone()
+        } else {
+            def.agent.model.clone()
+        };
+
+        (
+            hand_provider,
+            hand_model,
+            def.agent.api_key_env.clone(),
+            def.agent.base_url.clone(),
+        )
+    }
+
+    /// Spawns a dedicated `workflow-coordinator` agent for `project` (readable name; workspace dir is unique per project id).
     pub fn activate_pipeline_coordinator_for_project(
         &self,
         project: &Project,
@@ -3626,7 +3806,7 @@ impl OpenFangKernel {
         use openfang_hands::HandError;
         use std::collections::HashMap;
 
-        const HAND_ID: &str = "pipeline-coordinator";
+        const HAND_ID: &str = "workflow-coordinator";
 
         let def = self
             .hand_registry
@@ -3654,22 +3834,14 @@ impl OpenFangKernel {
                 other => KernelError::OpenFang(OpenFangError::Internal(other.to_string())),
             })?;
 
-        let hand_provider = if def.agent.provider == "default" {
-            self.config.default_model.provider.clone()
-        } else {
-            def.agent.provider.clone()
-        };
-        let hand_model = if def.agent.model == "default" {
-            self.config.default_model.model.clone()
-        } else {
-            def.agent.model.clone()
-        };
+        let (hand_provider, hand_model, orch_key_env, orch_base_url) =
+            self.resolve_workflow_coordinator_llm(&def);
 
         let agent_name = pipeline_coordinator_agent_display_name(project);
         let workspace_dir = self
             .config
             .effective_workspaces_dir()
-            .join(format!("project-{}-pipeline-coordinator", project.id));
+            .join(format!("project-{}-workflow-coordinator", project.id));
 
         let mut manifest = AgentManifest {
             name: agent_name,
@@ -3681,8 +3853,8 @@ impl OpenFangKernel {
                 max_tokens: def.agent.max_tokens,
                 temperature: def.agent.temperature,
                 system_prompt: def.agent.system_prompt.clone(),
-                api_key_env: def.agent.api_key_env.clone(),
-                base_url: def.agent.base_url.clone(),
+                api_key_env: orch_key_env,
+                base_url: orch_base_url,
             },
             capabilities: ManifestCapabilities {
                 tools: def.tools.clone(),
@@ -3820,7 +3992,7 @@ impl OpenFangKernel {
             instance = %instance.instance_id,
             agent = %agent_id,
             project_id = %project.id,
-            "Per-project pipeline-coordinator activated"
+            "Per-project workflow-coordinator activated"
         );
 
         self.persist_hand_state();
@@ -4000,11 +4172,11 @@ impl OpenFangKernel {
     }
 
     /// Env var holding GitHub PAT for `git_create_pr` (project override → `[automation].github_token_env` → `GITHUB_TOKEN`).
-    pub fn github_token_env_for_pipeline(&self, project_id: &str) -> String {
+    pub fn github_token_env_for_workflow(&self, project_id: &str) -> String {
         use std::str::FromStr;
         if let Ok(id) = ProjectId::from_str(project_id.trim()) {
             if let Some(p) = self.project_store.get(id) {
-                if let Some(ref e) = p.pipeline_overrides.github_token_env {
+                if let Some(ref e) = p.workflow_overrides.github_token_env {
                     let t = e.trim();
                     if !t.is_empty() {
                         return t.to_string();
@@ -4023,12 +4195,12 @@ impl OpenFangKernel {
     }
 
     /// Branch name template with `{task_id}` for `git_create_branch`.
-    pub fn pipeline_git_branch_template(&self, project_id: &str) -> String {
+    pub fn workflow_git_branch_template(&self, project_id: &str) -> String {
         use std::str::FromStr;
         const DEF: &str = "openfang/task-{task_id}";
         if let Ok(id) = ProjectId::from_str(project_id.trim()) {
             if let Some(p) = self.project_store.get(id) {
-                if let Some(ref t) = p.pipeline_overrides.git_branch_name_template {
+                if let Some(ref t) = p.workflow_overrides.git_branch_name_template {
                     let s = t.trim();
                     if !s.is_empty() {
                         return s.to_string();
@@ -4168,6 +4340,26 @@ impl OpenFangKernel {
                         .write()
                         .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
                     *guard = Some(new_config.default_model.clone());
+                }
+                HotAction::UpdateOrchestratorDefaultModel => {
+                    info!(
+                        "Hot-reload: updating orchestrator default model to {}/{}",
+                        new_config.orchestrator_default_model.provider,
+                        new_config.orchestrator_default_model.model
+                    );
+                    let mut guard = self
+                        .orchestrator_default_model_override
+                        .write()
+                        .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+                    *guard = Some(new_config.orchestrator_default_model.clone());
+                }
+                HotAction::UpdateProviderEnabled => {
+                    info!("Hot-reload: updating provider_enabled map");
+                    let mut guard = self
+                        .provider_enabled_state
+                        .write()
+                        .unwrap_or_else(|e: std::sync::PoisonError<_>| e.into_inner());
+                    *guard = new_config.provider_enabled.clone();
                 }
                 _ => {
                     // Other hot actions (channels, web, browser, extensions, etc.)
@@ -4521,33 +4713,33 @@ impl OpenFangKernel {
                 info!("Auto-loaded {count} workflow(s) from {}", wf_dir.display());
             }
         }
-        self.ensure_bundled_pipeline_full_cycle().await;
+        self.ensure_bundled_workflow_full_cycle().await;
     }
 
-    async fn ensure_bundled_pipeline_full_cycle(&self) {
+    async fn ensure_bundled_workflow_full_cycle(&self) {
         use crate::workflow::{
-            workflow_from_create_request_json, BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME,
+            workflow_from_create_request_json, BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME,
         };
 
         let list = self.workflows.list_workflows().await;
         if list
             .iter()
-            .any(|w| w.name == BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME)
+            .any(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME)
         {
             return;
         }
 
         let v: serde_json::Value = serde_json::from_str(include_str!(
-            "../bundled/workflows/pipeline-full-cycle.json"
+            "../bundled/workflows/workflow-full-cycle.json"
         ))
-        .expect("bundled pipeline-full-cycle.json must be valid JSON");
+        .expect("bundled workflow-full-cycle.json must be valid JSON");
 
         let wf = match workflow_from_create_request_json(&v) {
             Ok(w) => w,
             Err(e) => {
                 tracing::error!(
                     error = %e,
-                    "Invalid bundled pipeline-full-cycle workflow template"
+                    "Invalid bundled workflow-full-cycle workflow template"
                 );
                 return;
             }
@@ -4574,8 +4766,8 @@ impl OpenFangKernel {
         if !saved_hands.is_empty() {
             info!("Restoring {} persisted hand(s)", saved_hands.len());
             for (hand_id, config, old_agent_id) in saved_hands {
-                // Per-project pipeline coordinators use unique agent IDs; re-sync from `projects.json`.
-                if hand_id == "pipeline-coordinator" {
+                // Per-project workflow coordinators use unique agent IDs; re-sync from `projects.json`.
+                if hand_id == "workflow-coordinator" {
                     if let Some(pid_s) = config.get("openfang_project_id").and_then(|v| v.as_str())
                     {
                         if let Ok(pid) = pid_s.parse::<ProjectId>() {
@@ -4588,7 +4780,7 @@ impl OpenFangKernel {
                                             hand = %hand_id,
                                             project_id = %pid,
                                             error = %e,
-                                            "Failed to restore per-project pipeline-coordinator"
+                                            "Failed to restore per-project workflow-coordinator"
                                         );
                                     }
                                     continue;
@@ -4815,7 +5007,7 @@ impl OpenFangKernel {
             });
         }
 
-        // Auto-load hub workflows and install bundled defaults (e.g. pipeline-full-cycle)
+        // Auto-load hub workflows and install bundled defaults (e.g. workflow-full-cycle)
         {
             let kernel = Arc::clone(self);
             tokio::spawn(async move {
@@ -6646,7 +6838,7 @@ impl KernelHandle for OpenFangKernel {
         };
         self.project_store
             .get(id)
-            .and_then(|p| p.pipeline_overrides.max_retries)
+            .and_then(|p| p.workflow_overrides.max_retries)
             .unwrap_or(base)
     }
 
@@ -7376,12 +7568,12 @@ impl KernelHandle for OpenFangKernel {
         OpenFangKernel::resolve_git_workspace_for_project(self, project_id, spoke_root)
     }
 
-    fn github_token_env_for_pipeline(&self, project_id: &str) -> String {
-        OpenFangKernel::github_token_env_for_pipeline(self, project_id)
+    fn github_token_env_for_workflow(&self, project_id: &str) -> String {
+        OpenFangKernel::github_token_env_for_workflow(self, project_id)
     }
 
-    fn pipeline_git_branch_template(&self, project_id: &str) -> String {
-        OpenFangKernel::pipeline_git_branch_template(self, project_id)
+    fn workflow_git_branch_template(&self, project_id: &str) -> String {
+        OpenFangKernel::workflow_git_branch_template(self, project_id)
     }
 
     async fn read_project_context(&self, project_id: &str) -> Result<String, String> {

@@ -1,4 +1,4 @@
-//! Multi-repo project model (backlog root + spokes + pipeline overrides).
+//! Multi-repo project model (backlog root + spokes + workflow overrides).
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -41,10 +41,10 @@ impl std::str::FromStr for ProjectId {
     }
 }
 
-/// Optional pipeline settings for a project.
+/// Optional workflow settings for a project.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ProjectPipelineOverrides {
+pub struct ProjectWorkflowOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_retries: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,7 +81,7 @@ impl Default for SpokeDescriptor {
 pub struct ProjectPatch {
     pub name: Option<String>,
     pub spokes: Option<Vec<SpokeDescriptor>>,
-    pub pipeline_overrides: Option<ProjectPipelineOverrides>,
+    pub workflow_overrides: Option<ProjectWorkflowOverrides>,
     /// `None` = no change; `Some(None)` = clear; `Some(Some(name))` = set.
     pub admin_spoke: Option<Option<String>>,
     /// Mattermost channel id: same semantics as [`Self::admin_spoke`].
@@ -101,7 +101,7 @@ pub struct Project {
     pub name: String,
     pub path: PathBuf,
     pub spokes: Vec<SpokeDescriptor>,
-    pub pipeline_overrides: ProjectPipelineOverrides,
+    pub workflow_overrides: ProjectWorkflowOverrides,
     /// Explicitly bound agent UUID strings (dashboard / API); persisted in `projects.json`.
     #[serde(default)]
     pub bound_agents: Vec<String>,
@@ -116,7 +116,7 @@ pub struct Project {
     pub mattermost_team_name: Option<String>,
     #[serde(default)]
     pub mattermost_channel_name: Option<String>,
-    /// Agent UUID for the per-project `pipeline-coordinator` hand (Mattermost orchestrator).
+    /// Agent UUID for the per-project `workflow-coordinator` hand (Mattermost orchestrator).
     #[serde(default)]
     pub orchestrator_agent_id: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -131,7 +131,7 @@ impl Default for Project {
             name: String::new(),
             path: PathBuf::new(),
             spokes: Vec::new(),
-            pipeline_overrides: ProjectPipelineOverrides::default(),
+            workflow_overrides: ProjectWorkflowOverrides::default(),
             bound_agents: Vec::new(),
             admin_spoke: None,
             mattermost_channel_id: None,
@@ -207,7 +207,7 @@ pub struct PastFailure {
     pub stderr_snippet: String,
 }
 
-/// A decision or outcome note from a prior pipeline run.
+/// A decision or outcome note from a prior workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DecisionLogEntry {
     pub at: DateTime<Utc>,
@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn project_json_default_bound_agents_when_omitted() {
-        let j = r#"{"id":"550e8400-e29b-41d4-a716-446655440000","name":"n","path":"/p","spokes":[],"pipeline_overrides":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
+        let j = r#"{"id":"550e8400-e29b-41d4-a716-446655440000","name":"n","path":"/p","spokes":[],"workflow_overrides":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
         let p: Project = serde_json::from_str(j).unwrap();
         assert!(p.bound_agents.is_empty());
         assert!(p.admin_spoke.is_none());
@@ -460,11 +460,11 @@ mod tests {
     }
 
     #[test]
-    fn project_pipeline_overrides_json_omits_none() {
-        let empty = serde_json::to_string(&ProjectPipelineOverrides::default()).unwrap();
+    fn project_workflow_overrides_json_omits_none() {
+        let empty = serde_json::to_string(&ProjectWorkflowOverrides::default()).unwrap();
         assert_eq!(empty, "{}");
 
-        let partial = ProjectPipelineOverrides {
+        let partial = ProjectWorkflowOverrides {
             max_retries: Some(3),
             model_routing: None,
             ..Default::default()

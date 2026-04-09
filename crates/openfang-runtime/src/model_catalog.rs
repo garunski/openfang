@@ -16,6 +16,18 @@ use openfang_types::model_catalog::{
 };
 use std::collections::HashMap;
 
+/// True if `name` is set in the process environment to a non-empty value (trimmed).
+///
+/// Used for provider auth / model availability: unset or whitespace-only counts as no key.
+fn process_env_var_set_nonempty(name: &str) -> bool {
+    if name.trim().is_empty() {
+        return false;
+    }
+    std::env::var(name)
+        .ok()
+        .is_some_and(|v| !v.trim().is_empty())
+}
+
 /// The model catalog — registry of all known models and providers.
 pub struct ModelCatalog {
     models: Vec<ModelCatalogEntry>,
@@ -52,8 +64,9 @@ impl ModelCatalog {
 
     /// Detect which providers have API keys configured.
     ///
-    /// Checks `std::env::var()` for each provider's API key env var.
-    /// Only checks presence — never reads or stores the actual secret.
+    /// Checks the process environment for each provider's API key env var.
+    /// The variable must be set to a **non-empty** value (after trim); empty
+    /// strings are treated as missing. Never reads or stores the secret beyond this check.
     pub fn detect_auth(&mut self) {
         for provider in &mut self.providers {
             // Claude Code is special: no API key needed, but we probe for CLI
@@ -80,14 +93,15 @@ impl ModelCatalog {
                 continue;
             }
 
-            // Primary: check the provider's declared env var
-            let has_key = std::env::var(&provider.api_key_env).is_ok();
+            // Primary: check the provider's declared env var (non-empty value)
+            let has_key = process_env_var_set_nonempty(&provider.api_key_env);
 
             // Secondary: provider-specific fallback auth
             let has_fallback = match provider.id.as_str() {
-                "gemini" => std::env::var("GOOGLE_API_KEY").is_ok(),
+                "gemini" => process_env_var_set_nonempty("GOOGLE_API_KEY"),
                 "codex" => {
-                    std::env::var("OPENAI_API_KEY").is_ok() || read_codex_credential().is_some()
+                    process_env_var_set_nonempty("OPENAI_API_KEY")
+                        || read_codex_credential().is_some()
                 }
                 // claude-code is handled above (before key_required check)
                 _ => false,
@@ -99,6 +113,50 @@ impl ModelCatalog {
                 AuthStatus::Missing
             };
         }
+    }
+
+    /// True if the provider is enabled via **OS environment** only (non-empty key vars).
+    /// Does not inspect vault or dashboard keys.
+    pub fn provider_primary_env_configured(p: &ProviderInfo) -> bool {
+        if !p.key_required {
+            return false;
+        }
+        if process_env_var_set_nonempty(&p.api_key_env) {
+            return true;
+        }
+        match p.id.as_str() {
+            "gemini" => process_env_var_set_nonempty("GOOGLE_API_KEY"),
+            "codex" => {
+                process_env_var_set_nonempty("OPENAI_API_KEY")
+                    || read_codex_credential().is_some()
+            }
+            _ => false,
+        }
+    }
+
+    /// `[provider_enabled]` entry when set; otherwise defaults (cloud on, local off).
+    pub fn provider_user_enabled_defaulting(p: &ProviderInfo, map: &HashMap<String, bool>) -> bool {
+        map.get(&p.id)
+            .copied()
+            .unwrap_or(p.key_required)
+    }
+
+    /// User/dashboard intent plus env auto-enable: env key always enables the provider.
+    pub fn provider_effective_enabled_in_config(p: &ProviderInfo, map: &HashMap<String, bool>) -> bool {
+        if Self::provider_primary_env_configured(p) {
+            return true;
+        }
+        Self::provider_user_enabled_defaulting(p, map)
+    }
+
+    fn provider_models_ready_boot_snapshot(p: &ProviderInfo) -> bool {
+        if !p.key_required {
+            if p.id == "claude-code" || p.id == "qwen-code" {
+                return p.auth_status == AuthStatus::Configured;
+            }
+            return true;
+        }
+        p.auth_status != AuthStatus::Missing
     }
 
     /// List all models in the catalog.
@@ -274,18 +332,50 @@ impl ModelCatalog {
             .map(|m| m.id.clone())
     }
 
-    /// List models that are available (from configured providers only).
-    pub fn available_models(&self) -> Vec<&ModelCatalogEntry> {
+    /// List models that are available (from configured + enabled providers).
+    ///
+    /// `provider_enabled` is `[provider_enabled]` from config: missing keys default to
+    /// enabled for cloud providers and **disabled** for local providers unless env keys
+    /// apply ([`Self::provider_primary_env_configured`]).
+    pub fn available_models_with_enabled(
+        &self,
+        provider_enabled: &HashMap<String, bool>,
+    ) -> Vec<&ModelCatalogEntry> {
         let configured: Vec<&str> = self
             .providers
             .iter()
-            .filter(|p| p.auth_status != AuthStatus::Missing)
+            .filter(|p| {
+                Self::provider_effective_enabled_in_config(p, provider_enabled)
+                    && Self::provider_models_ready_boot_snapshot(p)
+            })
             .map(|p| p.id.as_str())
             .collect();
         self.models
             .iter()
             .filter(|m| configured.contains(&m.provider.as_str()))
             .collect()
+    }
+
+    /// Models whose provider passes `is_usable` (for runtime checks with vault, etc.).
+    pub fn available_models_filtered<F>(&self, mut is_usable: F) -> Vec<&ModelCatalogEntry>
+    where
+        F: FnMut(&ProviderInfo) -> bool,
+    {
+        let allowed: Vec<&str> = self
+            .providers
+            .iter()
+            .filter(|p| is_usable(p))
+            .map(|p| p.id.as_str())
+            .collect();
+        self.models
+            .iter()
+            .filter(|m| allowed.contains(&m.provider.as_str()))
+            .collect()
+    }
+
+    /// Same as [`Self::available_models_with_enabled`] with an empty map (defaults only).
+    pub fn available_models(&self) -> Vec<&ModelCatalogEntry> {
+        self.available_models_with_enabled(&HashMap::new())
     }
 
     /// Get pricing for a model: (input_cost_per_million, output_cost_per_million).
@@ -332,15 +422,11 @@ impl ModelCatalog {
     /// the user intentionally set them up (e.g. local proxies, custom endpoints).
     pub fn apply_url_overrides(&mut self, overrides: &HashMap<String, String>) {
         for (provider, url) in overrides {
-            if self.set_provider_url(provider, url) {
-                // Mark as configured so models from this provider show as available
-                if let Some(p) = self.providers.iter_mut().find(|p| p.id == *provider) {
-                    if p.auth_status == AuthStatus::Missing {
-                        p.auth_status = AuthStatus::Configured;
-                    }
-                }
-            }
+            let _ = self.set_provider_url(provider, url);
         }
+        // Re-evaluate auth: availability requires a real API key in the environment
+        // (or NotRequired local providers), not merely a custom base URL.
+        self.detect_auth();
     }
 
     /// List models filtered by tier.
@@ -3998,12 +4084,24 @@ mod tests {
     }
 
     #[test]
-    fn test_available_models_includes_local() {
+    fn test_available_models_includes_local_when_enabled() {
+        let mut catalog = ModelCatalog::new();
+        catalog.detect_auth();
+        let mut enabled = HashMap::new();
+        enabled.insert("ollama".to_string(), true);
+        let available = catalog.available_models_with_enabled(&enabled);
+        assert!(available.iter().any(|m| m.provider == "ollama"));
+    }
+
+    #[test]
+    fn test_available_models_excludes_local_by_default() {
         let mut catalog = ModelCatalog::new();
         catalog.detect_auth();
         let available = catalog.available_models();
-        // Local providers (ollama, vllm, lmstudio) should always be available
-        assert!(available.iter().any(|m| m.provider == "ollama"));
+        assert!(
+            !available.iter().any(|m| m.provider == "ollama"),
+            "local providers default to disabled until [provider_enabled]"
+        );
     }
 
     #[test]
@@ -4522,5 +4620,19 @@ mod tests {
             .unwrap();
         assert_eq!(found.provider, "custom_provider");
         assert_eq!(found.id, "My-Custom-LLM");
+    }
+
+    #[test]
+    fn test_process_env_var_set_nonempty() {
+        let key = "OPENFANG_RT_ENV_nonempty_unit_test_var_82014";
+        std::env::remove_var(key);
+        assert!(!super::process_env_var_set_nonempty(key));
+        std::env::set_var(key, "");
+        assert!(!super::process_env_var_set_nonempty(key));
+        std::env::set_var(key, "  \t  ");
+        assert!(!super::process_env_var_set_nonempty(key));
+        std::env::set_var(key, "k");
+        assert!(super::process_env_var_set_nonempty(key));
+        std::env::remove_var(key);
     }
 }

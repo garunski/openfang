@@ -8,7 +8,7 @@
 
 use openfang_kernel::workflow::{
     workflow_from_create_request_json, ErrorMode, StepAgent, StepMode, Workflow, WorkflowEngine,
-    WorkflowId, WorkflowStep, BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME,
+    WorkflowId, WorkflowStep, BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME,
 };
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::{AgentId, AgentManifest};
@@ -409,17 +409,17 @@ async fn test_workflow_e2e_with_groq() {
 }
 
 // ---------------------------------------------------------------------------
-// Doc-2 pipeline-full-cycle template (TASK-46)
-// Canonical JSON: `openfang-kernel/bundled/workflows/pipeline-full-cycle.json`
-// (keep in sync with `openfang-custom/.mise/workflows/pipeline-full-cycle.json`).
+// Doc-2 workflow-full-cycle template (TASK-46)
+// Canonical JSON: `openfang-kernel/bundled/workflows/workflow-full-cycle.json`
+// (keep in sync with `openfang-custom/.mise/workflows/workflow-full-cycle.json`).
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_pipeline_full_cycle_template_parses() {
-    let raw = include_str!("../bundled/workflows/pipeline-full-cycle.json");
+    let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
     let wf = workflow_from_create_request_json(&v).expect("parse template");
-    assert_eq!(wf.name, "pipeline-full-cycle");
+    assert_eq!(wf.name, "workflow-full-cycle");
     assert_eq!(wf.steps.len(), 6);
     assert_eq!(wf.steps[0].name, "resolve_context");
     assert_eq!(wf.steps[1].name, "backlog_in_progress");
@@ -434,13 +434,13 @@ fn test_pipeline_full_cycle_template_parses() {
     assert!(wf.project_id.is_none());
     assert!(matches!(
         &wf.steps[0].agent,
-        StepAgent::ByName { name } if name == "pipeline-coordinator-hand"
+        StepAgent::ByName { name } if name == "workflow-coordinator-hand"
     ));
 }
 
 #[tokio::test]
 async fn test_pipeline_full_cycle_execute_run_mock() {
-    let raw = include_str!("../bundled/workflows/pipeline-full-cycle.json");
+    let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
     let wf = workflow_from_create_request_json(&v).expect("parse");
     let engine = WorkflowEngine::new();
@@ -456,7 +456,7 @@ async fn test_pipeline_full_cycle_execute_run_mock() {
     let out = engine
         .execute_run(
             run_id,
-            |_step_agent| Some((dummy, "pipeline-coordinator-hand".into())),
+            |_step_agent| Some((dummy, "workflow-coordinator-hand".into())),
             |_agent_id, _prompt| async move { Ok(("ok".into(), 0u64, 0u64)) },
         )
         .await
@@ -475,7 +475,7 @@ async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
     let wfs = kernel.workflows.list_workflows().await;
     assert!(
         wfs.iter()
-            .any(|w| w.name == BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME),
+            .any(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME),
         "bundled pipeline should be registered"
     );
     let wf_dir = kernel.config.home_dir.join("workflows");
@@ -486,7 +486,7 @@ async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
     let mut found_file = false;
     for entry in std::fs::read_dir(&wf_dir).unwrap() {
         let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
-        if text.contains(BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME) {
+        if text.contains(BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME) {
             found_file = true;
             break;
         }
@@ -500,7 +500,7 @@ async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
     let wfs2 = kernel.workflows.list_workflows().await;
     let n = wfs2
         .iter()
-        .filter(|w| w.name == BUNDLED_PIPELINE_FULL_CYCLE_WORKFLOW_NAME)
+        .filter(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME)
         .count();
     assert_eq!(n, 1, "second init should not duplicate bundled workflow");
 }

@@ -1,4 +1,4 @@
-//! Per-project pipeline-coordinator orchestrator (TASK-47).
+//! Per-project workflow-coordinator orchestrator (TASK-47).
 
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::AgentId;
@@ -70,6 +70,45 @@ fn two_projects_get_distinct_orchestrator_agents() {
         2,
         "two hand instances"
     );
+
+    kernel.shutdown();
+}
+
+#[test]
+fn orchestrator_spawn_uses_orchestrator_default_model_when_set() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = test_kernel_config(&tmp);
+    cfg.orchestrator_default_model = DefaultModelConfig {
+        provider: "ollama".to_string(),
+        model: "test-model".to_string(),
+        api_key_env: "OLLAMA_API_KEY".to_string(),
+        base_url: None,
+    };
+    let kernel = OpenFangKernel::boot_with_config(cfg).expect("boot");
+
+    let r = tmp.path().join("p-orch-model");
+    std::fs::create_dir_all(&r).unwrap();
+    let p = Project {
+        name: "orch-model".into(),
+        path: r,
+        mattermost_channel_id: Some("mm-ch-orch-model".into()),
+        ..Default::default()
+    };
+    let id = kernel.project_store.register(p).unwrap();
+    let g = kernel.project_store.get(id).unwrap();
+    kernel
+        .sync_project_mattermost_orchestrator(None, &g)
+        .expect("sync");
+
+    let updated = kernel.project_store.get(id).unwrap();
+    let oid = updated
+        .orchestrator_agent_id
+        .as_ref()
+        .expect("orchestrator");
+    let aid = AgentId::from_str(oid).unwrap();
+    let entry = kernel.registry.get(aid).expect("agent entry");
+    assert_eq!(entry.manifest.model.provider, "ollama");
+    assert_eq!(entry.manifest.model.model, "test-model");
 
     kernel.shutdown();
 }

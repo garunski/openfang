@@ -114,7 +114,7 @@ impl PipelineRunner {
             .to_string()
     }
 
-    /// `max_retries` is the number of **extra** Cursor rounds after a failed gate (same as pipeline-coordinator HAND).
+    /// `max_retries` is the number of **extra** Cursor rounds after a failed gate (same as workflow-coordinator HAND).
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
@@ -146,13 +146,13 @@ impl PipelineRunner {
                 )
                 .await
             {
-                crate::pipeline_audit::log_pipeline_run_outcome(
+                crate::pipeline_audit::log_workflow_run_outcome(
                     task_id,
                     false,
                     retry_count,
                     rb.clone(),
                     &actor,
-                    "run_pipeline",
+                    "run_workflow_cycle",
                 );
                 return Err(PipelineRunErr {
                     retry_count,
@@ -165,13 +165,13 @@ impl PipelineRunner {
             let gate = match self.executor.run_gate(workspace, task_id, &actor).await {
                 Ok(g) => g,
                 Err(e) => {
-                    crate::pipeline_audit::log_pipeline_run_outcome(
+                    crate::pipeline_audit::log_workflow_run_outcome(
                         task_id,
                         false,
                         retry_count,
                         rb.clone(),
                         &actor,
-                        "run_pipeline",
+                        "run_workflow_cycle",
                     );
                     return Err(PipelineRunErr {
                         retry_count,
@@ -183,25 +183,25 @@ impl PipelineRunner {
             };
 
             if gate.exit_code == 0 {
-                crate::pipeline_audit::log_pipeline_run_outcome(
+                crate::pipeline_audit::log_workflow_run_outcome(
                     task_id,
                     true,
                     retry_count,
                     None,
                     &actor,
-                    "run_pipeline",
+                    "run_workflow_cycle",
                 );
                 return Ok(PipelineRunOk { gate, retry_count });
             }
 
             if retry_count >= max_retries {
-                crate::pipeline_audit::log_pipeline_run_outcome(
+                crate::pipeline_audit::log_workflow_run_outcome(
                     task_id,
                     false,
                     retry_count,
                     rb.clone(),
                     &actor,
-                    "run_pipeline",
+                    "run_workflow_cycle",
                 );
                 return Err(PipelineRunErr {
                     retry_count,

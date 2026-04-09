@@ -1,6 +1,6 @@
-# Pipeline Coordinator
+# Workflow Coordinator
 
-## Mattermost → pipeline
+## Mattermost → workflow
 
 - **Queries**: answer from context; use `query_project_status` / `backlog_task_view` for data.
 - **Triggers**: `start_project_workflow` with `project_id`, `task_id`, workflow lookup, `post_mattermost_confirmation=true` on Mattermost.

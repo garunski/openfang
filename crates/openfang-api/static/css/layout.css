@@ -26,6 +26,24 @@
 .sidebar.collapsed .sidebar-header-text,
 .sidebar.collapsed .nav-label { display: none; }
 
+.sidebar.collapsed .theme-switcher {
+  display: none;
+}
+
+/* Logo row is hidden when collapsed; theme strip removed — drop empty header chrome */
+.sidebar.collapsed .sidebar-header {
+  padding: 0;
+  border-bottom: none;
+  gap: 0;
+  min-height: 0;
+}
+
+/* Only the status dot shows (labels are .sidebar-label); center like nav icons */
+.sidebar.collapsed .sidebar-status {
+  justify-content: center;
+  padding: 10px 6px;
+}
+
 .sidebar.collapsed .nav-item { justify-content: center; padding: 12px 0; }
 
 .sidebar-header {
@@ -245,10 +263,9 @@
   stroke-linejoin: round;
 }
 
-/* Sidebar toggle button */
+/* Sidebar toggle button (no border-top — .sidebar-footer already separates from nav) */
 .sidebar-toggle {
   padding: 10px 16px;
-  border-top: 1px solid var(--border);
   cursor: pointer;
   text-align: center;
   font-size: 14px;
@@ -266,11 +283,13 @@
   min-width: 0;
   overflow: hidden;
   background: var(--bg);
+  position: relative;
 }
 
 /* Page wrapper divs (rendered by x-if) must fill the column
-   and be flex containers so .page-body can scroll. */
-.main-content > div {
+   and be flex containers so .page-body can scroll.
+   Exclude #app-boot-splash: absolute overlay + flex/min-height/overflow can break first paint. */
+.main-content > div:not(#app-boot-splash) {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -343,9 +362,10 @@
 .project-subnav__desktop {
   display: none !important;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
-  justify-content: flex-start;
-  gap: 16px;
+  justify-content: space-between;
+  gap: 10px 16px;
   width: 100%;
   flex: 1 1 auto;
   min-width: 0;
@@ -357,8 +377,9 @@
   flex-wrap: wrap;
   gap: 12px;
   justify-content: flex-end;
-  margin-left: auto;
+  margin-left: 0;
   min-width: 0;
+  flex: 0 0 auto;
 }
 
 .project-subnav__actions {

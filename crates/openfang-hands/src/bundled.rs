@@ -5,9 +5,9 @@ use crate::{parse_hand_toml, HandDefinition, HandError};
 /// Returns all bundled hand definitions as (id, HAND.toml content, SKILL.md content).
 pub fn bundled_hands() -> Vec<(&'static str, &'static str, &'static str)> {
     vec![(
-        "pipeline-coordinator",
-        include_str!("../bundled/pipeline-coordinator/HAND.toml"),
-        include_str!("../bundled/pipeline-coordinator/SKILL.md"),
+        "workflow-coordinator",
+        include_str!("../bundled/workflow-coordinator/HAND.toml"),
+        include_str!("../bundled/workflow-coordinator/SKILL.md"),
     )]
 }
 
@@ -33,14 +33,14 @@ mod tests {
     fn bundled_hands_non_empty() {
         let hands = bundled_hands();
         assert_eq!(hands.len(), 1);
-        assert_eq!(hands[0].0, "pipeline-coordinator");
+        assert_eq!(hands[0].0, "workflow-coordinator");
     }
 
     #[test]
     fn bundled_hands_parse() {
         let hands = bundled_hands();
         let def = parse_bundled(hands[0].0, hands[0].1, hands[0].2).unwrap();
-        assert_eq!(def.id, "pipeline-coordinator");
+        assert_eq!(def.id, "workflow-coordinator");
         assert!(def.tools.contains(&"start_project_workflow".to_string()));
     }
 }
