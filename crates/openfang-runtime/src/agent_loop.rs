@@ -65,7 +65,7 @@ fn tool_timeout_for(tool_name: &str) -> Duration {
             Duration::from_secs(CURSOR_WORKER_TIMEOUT_SECS)
         }
         // Multiple cursor + gate cycles under one tool call; project workflow runs the full engine synchronously.
-        "run_workflow_cycle" | "start_project_workflow" => Duration::from_secs(7200),
+        "run_conduit_cycle" | "start_project_conduit" => Duration::from_secs(7200),
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -3095,9 +3095,9 @@ mod tests {
             tool_timeout_for("enforce_quality_gate"),
             Duration::from_secs(3600)
         );
-        assert_eq!(tool_timeout_for("run_workflow_cycle"), Duration::from_secs(7200));
+        assert_eq!(tool_timeout_for("run_conduit_cycle"), Duration::from_secs(7200));
         assert_eq!(
-            tool_timeout_for("start_project_workflow"),
+            tool_timeout_for("start_project_conduit"),
             Duration::from_secs(7200)
         );
         assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));

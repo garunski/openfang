@@ -24,7 +24,7 @@ use super::screens::{
     templates::ProviderAuth,
     triggers::TriggerInfo,
     usage::{AgentUsage, ModelUsage, UsageSummary},
-    workflows::{WorkflowInfo, WorkflowRun},
+    workflows::{WorkflowInfo, ConduitRun},
 };
 
 // ── BackendRef ──────────────────────────────────────────────────────────────
@@ -77,13 +77,13 @@ pub enum AppEvent {
     ChannelListLoaded(Vec<ChannelInfo>),
     /// Channel test result.
     ChannelTestResult { success: bool, message: String },
-    /// Workflow list loaded.
+    /// Conduit list loaded.
     WorkflowListLoaded(Vec<WorkflowInfo>),
-    /// Workflow runs loaded for a specific workflow.
-    WorkflowRunsLoaded(Vec<WorkflowRun>),
-    /// Workflow run completed.
-    WorkflowRunResult(String),
-    /// Workflow created successfully.
+    /// Conduit runs loaded for a specific workflow.
+    ConduitRunsLoaded(Vec<ConduitRun>),
+    /// Conduit run completed.
+    ConduitRunResult(String),
+    /// Conduit created successfully.
     WorkflowCreated(String),
     /// Trigger list loaded.
     TriggerListLoaded(Vec<TriggerInfo>),
@@ -690,7 +690,7 @@ pub fn spawn_fetch_workflows(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
                 .build()
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
-            if let Ok(resp) = client.get(format!("{base_url}/api/workflows")).send() {
+            if let Ok(resp) = client.get(format!("{base_url}/api/conduits")).send() {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
                     let workflows: Vec<WorkflowInfo> = body
                         .as_array()
@@ -719,7 +719,7 @@ pub fn spawn_fetch_workflows(backend: BackendRef, tx: mpsc::Sender<AppEvent>) {
 /// Fetch workflow runs in background.
 pub fn spawn_fetch_workflow_runs(
     backend: BackendRef,
-    workflow_id: String,
+    conduit_id: String,
     tx: mpsc::Sender<AppEvent>,
 ) {
     std::thread::spawn(move || match backend {
@@ -730,15 +730,15 @@ pub fn spawn_fetch_workflow_runs(
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
             if let Ok(resp) = client
-                .get(format!("{base_url}/api/workflows/{workflow_id}/runs"))
+                .get(format!("{base_url}/api/conduits/{conduit_id}/runs"))
                 .send()
             {
                 if let Ok(body) = resp.json::<serde_json::Value>() {
-                    let runs: Vec<WorkflowRun> = body
+                    let runs: Vec<ConduitRun> = body
                         .as_array()
                         .map(|arr| {
                             arr.iter()
-                                .map(|r| WorkflowRun {
+                                .map(|r| ConduitRun {
                                     id: r["id"].as_str().unwrap_or("?").to_string(),
                                     state: r["state"].as_str().unwrap_or("?").to_string(),
                                     duration: r["duration"].as_str().unwrap_or("").to_string(),
@@ -747,20 +747,20 @@ pub fn spawn_fetch_workflow_runs(
                                 .collect()
                         })
                         .unwrap_or_default();
-                    let _ = tx.send(AppEvent::WorkflowRunsLoaded(runs));
+                    let _ = tx.send(AppEvent::ConduitRunsLoaded(runs));
                 }
             }
         }
         BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::WorkflowRunsLoaded(Vec::new()));
+            let _ = tx.send(AppEvent::ConduitRunsLoaded(Vec::new()));
         }
     });
 }
 
 /// Run a workflow in background.
-pub fn spawn_run_workflow(
+pub fn spawn_run_conduit(
     backend: BackendRef,
-    workflow_id: String,
+    conduit_id: String,
     input: String,
     tx: mpsc::Sender<AppEvent>,
 ) {
@@ -772,7 +772,7 @@ pub fn spawn_run_workflow(
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
             match client
-                .post(format!("{base_url}/api/workflows/{workflow_id}/run"))
+                .post(format!("{base_url}/api/conduits/{conduit_id}/run"))
                 .json(&serde_json::json!({"input": input}))
                 .send()
             {
@@ -780,25 +780,25 @@ pub fn spawn_run_workflow(
                     let body: serde_json::Value = resp.json().unwrap_or_default();
                     let result = body["output"]
                         .as_str()
-                        .unwrap_or("Workflow completed")
+                        .unwrap_or("Conduit completed")
                         .to_string();
-                    let _ = tx.send(AppEvent::WorkflowRunResult(result));
+                    let _ = tx.send(AppEvent::ConduitRunResult(result));
                 }
                 Err(e) => {
-                    let _ = tx.send(AppEvent::WorkflowRunResult(format!("Error: {e}")));
+                    let _ = tx.send(AppEvent::ConduitRunResult(format!("Error: {e}")));
                 }
             }
         }
         BackendRef::InProcess(_) => {
-            let _ = tx.send(AppEvent::WorkflowRunResult(
-                "Workflow execution not available in in-process mode".to_string(),
+            let _ = tx.send(AppEvent::ConduitRunResult(
+                "Conduit execution not available in in-process mode".to_string(),
             ));
         }
     });
 }
 
 /// Create a workflow in background.
-pub fn spawn_create_workflow(
+pub fn spawn_create_conduit(
     backend: BackendRef,
     name: String,
     description: String,
@@ -813,7 +813,7 @@ pub fn spawn_create_workflow(
                 .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
             match client
-                .post(format!("{base_url}/api/workflows"))
+                .post(format!("{base_url}/api/conduits"))
                 .json(&serde_json::json!({
                     "name": name,
                     "description": description,
@@ -833,7 +833,7 @@ pub fn spawn_create_workflow(
         }
         BackendRef::InProcess(_) => {
             let _ = tx.send(AppEvent::FetchError(
-                "Workflow creation not available in in-process mode".to_string(),
+                "Conduit creation not available in in-process mode".to_string(),
             ));
         }
     });

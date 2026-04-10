@@ -96,8 +96,16 @@ function projectsPage() {
     topologyPanning: false,
     detailAgents: [],
     detailPipelines: [],
-    /** Workflow engine runs for this project (`GET .../workflow-runs`). */
-    detailWorkflowRuns: [],
+    /** Workflow engine runs for this project (`GET .../conduit-runs`). */
+    detailConduitRuns: [],
+    /** Selected run id (summary row) for highlight + refetch. */
+    conduitRunSelectedId: null,
+    /** Conduit id for the selected row (retry detail fetch when full payload missing). */
+    conduitRunSelectedConduitId: null,
+    /** Full run payload from `GET /api/conduits/:id/runs/:run_id`. */
+    conduitRunDetail: null,
+    conduitRunDetailLoading: false,
+    conduitRunDetailError: '',
     /** @type {{ orchestrator_agent_id: string|null, current: any[], historical: any[] } | null} */
     projectAgentsManagement: null,
     orchestratorStartSubmitting: false,
@@ -463,7 +471,8 @@ function projectsPage() {
       this.detailSpokes = [];
       this.detailAgents = [];
       this.detailPipelines = [];
-      this.detailWorkflowRuns = [];
+      this.detailConduitRuns = [];
+      this.clearConduitRunDetail();
       this.projectAgentsManagement = null;
       this.orchestratorStartSubmitting = false;
       this.detailErrors = {
@@ -553,6 +562,7 @@ function projectsPage() {
     backToList() {
       this._backlogWsReloadNextAt = 0;
       this.selectedProject = null;
+      this.clearConduitRunDetail();
       this.taskModalOpen = false;
       this.taskDetailHtml = '';
       this.backlogDetailTask = null;
@@ -637,7 +647,7 @@ function projectsPage() {
             OpenFangAPI.get(base + '/backlog/overview'),
             OpenFangAPI.get(base + '/spokes'),
             OpenFangAPI.get(base + '/agents'),
-            OpenFangAPI.get(base + '/workflows?limit=50'),
+            OpenFangAPI.get(base + '/conduits?limit=50'),
           ]);
           this.projectOverview = results[0];
           this.detailSpokes = Array.isArray(results[1]) ? results[1] : [];
@@ -752,9 +762,17 @@ function projectsPage() {
           this.resetTopologyPan();
         } else if (tab === 'workflow_runs') {
           var wr = await OpenFangAPI.get(
-            '/api/projects/' + encodeURIComponent(pid) + '/workflow-runs?limit=50'
+            '/api/projects/' + encodeURIComponent(pid) + '/conduit-runs?limit=50'
           );
-          this.detailWorkflowRuns = Array.isArray(wr) ? wr : [];
+          this.detailConduitRuns = Array.isArray(wr) ? wr : [];
+          if (
+            this.conduitRunSelectedId &&
+            !this.detailConduitRuns.some(function (r) {
+              return String(r.id) === String(this.conduitRunSelectedId);
+            }, this)
+          ) {
+            this.clearConduitRunDetail();
+          }
         }
         this.setDetailLoaded(tab, true);
       } catch (e) {
@@ -764,6 +782,9 @@ function projectsPage() {
     },
 
     async onDetailTabChange(tab) {
+      if (tab !== 'workflow_runs') {
+        this.clearConduitRunDetail();
+      }
       if (typeof this.closeDecisionViewModal === 'function' && tab !== 'decisions') {
         this.closeDecisionViewModal();
       }
@@ -934,7 +955,7 @@ function projectsPage() {
         docs: 'Docs',
         decisions: 'Decisions',
         spokes: 'Spokes',
-        workflow_runs: 'Workflow Runs',
+        workflow_runs: 'Conduit runs',
         project_agents: 'Agents',
         mattermost: 'Mattermost',
       };
@@ -1700,6 +1721,84 @@ function projectsPage() {
       if (x === 'failed') return 'badge-error';
       if (x === 'running') return 'badge-info';
       return 'badge-dim';
+    },
+
+    clearConduitRunDetail() {
+      this.conduitRunSelectedId = null;
+      this.conduitRunSelectedConduitId = null;
+      this.conduitRunDetail = null;
+      this.conduitRunDetailLoading = false;
+      this.conduitRunDetailError = '';
+    },
+
+    async selectConduitRunRow(row) {
+      if (!row || !row.id || !row.conduit_id) return;
+      if (String(this.conduitRunSelectedId) === String(row.id) && this.conduitRunDetail) {
+        this.clearConduitRunDetail();
+        return;
+      }
+      this.conduitRunSelectedId = row.id;
+      this.conduitRunSelectedConduitId = row.conduit_id;
+      this.conduitRunDetail = null;
+      this.conduitRunDetailError = '';
+      this.conduitRunDetailLoading = true;
+      try {
+        var path =
+          '/api/conduits/' +
+          encodeURIComponent(row.conduit_id) +
+          '/runs/' +
+          encodeURIComponent(row.id);
+        this.conduitRunDetail = await OpenFangAPI.get(path);
+      } catch (e) {
+        this.conduitRunDetailError = e.message || 'Failed to load run detail';
+        this.conduitRunDetail = null;
+      }
+      this.conduitRunDetailLoading = false;
+    },
+
+    async reloadConduitRunDetail() {
+      var rid = this.conduitRunSelectedId;
+      var cid =
+        (this.conduitRunDetail && this.conduitRunDetail.conduit_id) ||
+        this.conduitRunSelectedConduitId;
+      if (!rid || !cid) return;
+      this.conduitRunDetailError = '';
+      this.conduitRunDetailLoading = true;
+      try {
+        var path =
+          '/api/conduits/' +
+          encodeURIComponent(cid) +
+          '/runs/' +
+          encodeURIComponent(rid);
+        this.conduitRunDetail = await OpenFangAPI.get(path);
+      } catch (e) {
+        this.conduitRunDetailError = e.message || 'Failed to load run detail';
+        this.conduitRunDetail = null;
+      }
+      this.conduitRunDetailLoading = false;
+    },
+
+    async copyConduitRunDetailJson() {
+      if (!this.conduitRunDetail) return;
+      try {
+        var t = JSON.stringify(this.conduitRunDetail, null, 2);
+        await navigator.clipboard.writeText(t);
+        if (typeof OpenFangToast !== 'undefined' && OpenFangToast.success) {
+          OpenFangToast.success('Run JSON copied');
+        }
+      } catch (e) {
+        if (typeof OpenFangToast !== 'undefined' && OpenFangToast.error) {
+          OpenFangToast.error('Copy failed');
+        }
+      }
+    },
+
+    conduitRunStepTokenSummary(step) {
+      if (!step) return '—';
+      var a = step.input_tokens != null ? Number(step.input_tokens) : null;
+      var b = step.output_tokens != null ? Number(step.output_tokens) : null;
+      if (!isFinite(a) && !isFinite(b)) return '—';
+      return (isFinite(a) ? a : 0) + ' in / ' + (isFinite(b) ? b : 0) + ' out';
     },
 
     priorityClass(p) {

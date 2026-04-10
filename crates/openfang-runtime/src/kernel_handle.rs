@@ -275,7 +275,7 @@ pub trait KernelHandle: Send + Sync {
         2
     }
 
-    /// Effective max retries: `ProjectWorkflowOverrides.max_retries` when set for `project_id`, else [`Self::automation_max_retries`].
+    /// Effective max retries: `ProjectConduitOverrides.max_retries` when set for `project_id`, else [`Self::automation_max_retries`].
     fn automation_effective_max_retries(&self, project_id: Option<&str>) -> u32 {
         let _ = project_id;
         self.automation_max_retries()
@@ -288,15 +288,15 @@ pub trait KernelHandle: Send + Sync {
 
     /// Validate backlog task is `Ready for Dev`, then run a registered workflow for this project.
     /// When `post_mattermost_confirmation` is true, posts to the project's `mattermost_channel_id` before starting.
-    async fn start_project_workflow(
+    async fn start_project_conduit(
         &self,
         _project_id: &str,
         _task_id: &str,
-        _workflow_id: Option<&str>,
-        _workflow_name: Option<&str>,
+        _conduit_id: Option<&str>,
+        _conduit_name: Option<&str>,
         _post_mattermost_confirmation: bool,
     ) -> Result<String, String> {
-        Err("start_project_workflow not available".to_string())
+        Err("start_project_conduit not available".to_string())
     }
 
     /// Read-only backlog snapshot for a registered project (`task list` or single `task view`).
@@ -332,12 +332,12 @@ pub trait KernelHandle: Send + Sync {
     }
 
     /// Env var name for GitHub PAT (`git_create_pr`); project override wins over `[automation].github_token_env`.
-    fn github_token_env_for_workflow(&self, _project_id: &str) -> String {
+    fn github_token_env_for_conduit(&self, _project_id: &str) -> String {
         "GITHUB_TOKEN".to_string()
     }
 
     /// `{task_id}` branch naming template for `git_create_branch`.
-    fn workflow_git_branch_template(&self, _project_id: &str) -> String {
+    fn conduit_git_branch_template(&self, _project_id: &str) -> String {
         "openfang/task-{task_id}".to_string()
     }
 }

@@ -666,20 +666,20 @@ pub async fn backlog_complete_task(
     }
 }
 
-/// POST /api/projects/:id/backlog/tasks/:task_id/workflow-start
+/// POST /api/projects/:id/backlog/tasks/:task_id/conduit-start
 ///
-/// Runs the same pipeline as the workflow-coordinator `start_project_workflow` tool:
-/// validates task is **Ready for Dev**, resolves the workflow, then `run_workflow` with project context.
+/// Runs the same pipeline as the conduit-coordinator `start_project_conduit` tool:
+/// validates task is **Ready for Dev**, resolves the workflow, then `run_conduit` with project context.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklogStartTaskWorkflowBody {
-    pub workflow_id: Option<String>,
-    pub workflow_name: Option<String>,
+    pub conduit_id: Option<String>,
+    pub conduit_name: Option<String>,
     #[serde(default)]
     pub post_mattermost_confirmation: bool,
 }
 
-pub async fn backlog_start_task_workflow(
+pub async fn backlog_start_task_conduit(
     State(state): State<Arc<AppState>>,
     Path((id, task_id)): Path<(String, String)>,
     Json(body): Json<BacklogStartTaskWorkflowBody>,
@@ -691,12 +691,12 @@ pub async fn backlog_start_task_workflow(
     if let Err(tup) = ensure_project(&state, pid) {
         return tup.into_response();
     }
-    let wf_id = body.workflow_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    let wf_name = body.workflow_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let wf_id = body.conduit_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let wf_name = body.conduit_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
     if wf_id.is_none() && wf_name.is_none() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Provide workflow_id or workflow_name"})),
+            Json(serde_json::json!({"error": "Provide conduit_id or conduit_name"})),
         )
             .into_response();
     }
@@ -709,7 +709,7 @@ pub async fn backlog_start_task_workflow(
         )
             .into_response();
     }
-    match KernelHandle::start_project_workflow(
+    match KernelHandle::start_project_conduit(
         state.kernel.as_ref(),
         project_id.as_str(),
         tid,

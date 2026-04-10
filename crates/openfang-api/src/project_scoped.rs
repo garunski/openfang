@@ -131,8 +131,8 @@ pub fn flatten_pipeline_event(ev: &Value) -> Value {
                 .unwrap_or("")
                 .to_string(),
         ),
-        "workflow_run_outcome" => (
-            "workflow_outcome",
+        "conduit_run_outcome" => (
+            "conduit_outcome",
             format!(
                 "success={}",
                 ev.get("success").and_then(|x| x.as_bool()).unwrap_or(false)

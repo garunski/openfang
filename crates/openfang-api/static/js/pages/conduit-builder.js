@@ -1,7 +1,7 @@
 // OpenFang Visual Workflow Builder — Drag-and-drop workflow designer
 'use strict';
 
-function workflowBuilder() {
+function conduitBuilder() {
   return {
     // -- Canvas state --
     nodes: [],
@@ -558,7 +558,7 @@ function workflowBuilder() {
         steps.push(step);
       }
       try {
-        await OpenFangAPI.post('/api/workflows', {
+        await OpenFangAPI.post('/api/conduits', {
           name: this.workflowName || 'untitled',
           description: this.workflowDescription || '',
           steps: steps

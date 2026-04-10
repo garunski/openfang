@@ -142,9 +142,9 @@
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span>
               <span class="nav-label">Scheduler</span>
             </a>
-            <a class="nav-item" :class="{ active: page === 'workflows' }" @click="navigate('workflows')" :aria-current="page === 'workflows' ? 'page' : false">
+            <a class="nav-item" :class="{ active: page === 'conduits' }" @click="navigate('conduits')" :aria-current="page === 'conduits' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="8" height="6" rx="1"/><rect x="14" y="3" width="8" height="6" rx="1"/><rect x="8" y="15" width="8" height="6" rx="1"/><path d="M6 9v3M18 9v3M12 12v3"/></svg></span>
-              <span class="nav-label">Workflows</span>
+              <span class="nav-label">Conduits</span>
             </a>
             <a class="nav-item" :class="{ active: page === 'channels' }" @click="navigate('channels')" :aria-current="page === 'channels' ? 'page' : false">
               <span class="nav-icon"><svg viewBox="0 0 24 24"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg></span>
@@ -1166,11 +1166,11 @@
       </div>
     </template>
 
-    <!-- Page: Workflows -->
-    <template x-if="page === 'workflows'">
+    <!-- Page: Conduits -->
+    <template x-if="page === 'conduits'">
       <div x-data="{ wfTab: 'list' }">
         <div class="page-header">
-          <h2>Workflows</h2>
+          <h2>Conduits</h2>
           <div class="flex gap-2">
             <button class="button is-ghost is-small" :class="{ active: wfTab === 'list' }" @click="wfTab = 'list'">List</button>
             <button class="button is-ghost is-small" :class="{ active: wfTab === 'builder' }" @click="wfTab = 'builder'">Visual Builder</button>
@@ -1179,9 +1179,9 @@
 
         <!-- Tab: List -->
         <template x-if="wfTab === 'list'">
-        <div x-data="workflowsPage" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
+        <div x-data="conduitsPage" style="display:flex;flex-direction:column;flex:1;min-height:0;overflow:hidden">
         <div class="page-body" x-init="loadWorkflows()">
-          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading workflows...</span></div>
+          <div x-show="loading" class="loading-state"><div class="spinner"></div><span>Loading conduits...</span></div>
           <div x-show="!loading && loadError" class="error-state">
             <span class="error-icon">!</span>
             <p x-text="loadError"></p>
@@ -1189,15 +1189,15 @@
           </div>
           <div x-show="!loading && !loadError">
           <div class="of-card mb-4" style="border-left:3px solid var(--accent)">
-            <div class="font-bold" style="font-size:13px;margin-bottom:4px">What are Workflows?</div>
+            <div class="font-bold" style="font-size:13px;margin-bottom:4px">What are conduits?</div>
             <div class="text-sm text-dim" style="line-height:1.6">
-              Workflows chain multiple agents into automated workflow runs. Each step runs an agent with a prompt template,
+              Conduits chain multiple agents into automated runs (multi-step workflows). Each step runs an agent with a prompt template,
               passing output from one step as input to the next. Steps can run sequentially, fan out in parallel, loop, or branch conditionally.
               <br><span style="margin-top:4px;display:inline-block">Try the <strong style="color:var(--accent);cursor:pointer" @click="$dispatch('wf-switch-tab','builder')">Visual Builder</strong> to drag and drop workflow steps.</span>
             </div>
           </div>
           <div class="flex gap-2 mb-4">
-            <button type="button" class="button is-primary is-small" @click="showCreateModal = true"><i class="fa fa-plus" aria-hidden="true"></i><span>New workflow</span></button>
+            <button type="button" class="button is-primary is-small" @click="showCreateModal = true"><i class="fa fa-plus" aria-hidden="true"></i><span>New conduit</span></button>
           </div>
           <div class="table-wrap" x-show="workflows.length">
             <table>
@@ -1225,9 +1225,9 @@
             <div class="empty-state-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12M18 9a9 9 0 0 1-9 9"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/></svg>
             </div>
-            <h3>No workflows yet</h3>
-            <p>Chain multiple agents into automated workflows with branching, fan-out, and loops.</p>
-            <button type="button" class="button is-primary is-small" @click="showCreateModal = true"><i class="fa fa-plus" aria-hidden="true"></i><span>Create workflow</span></button>
+            <h3>No conduits yet</h3>
+            <p>Chain multiple agents into automated conduits (multi-step workflows) with branching, fan-out, and loops.</p>
+            <button type="button" class="button is-primary is-small" @click="showCreateModal = true"><i class="fa fa-plus" aria-hidden="true"></i><span>Create conduit</span></button>
           </div>
           </div>
           <!-- Create modal -->
@@ -1235,7 +1235,7 @@
             <div class="of-modal-overlay" @click.self="showCreateModal = false" @keydown.escape.window="showCreateModal = false">
               <div class="of-modal">
                 <div class="of-modal-header">
-                  <h3>Create Workflow</h3>
+                  <h3>Create conduit</h3>
                   <div class="of-modal-header__actions">
                     <button type="button" class="button is-primary is-small" @click="createWorkflow()"><i class="fa fa-plus" aria-hidden="true"></i><span>Create</span></button>
                     <button type="button" class="button is-ghost is-small" @click="showCreateModal = false">Cancel</button>
@@ -1284,7 +1284,7 @@
                     <button type="button" class="of-modal-close" @click="runModal = null" :disabled="running" aria-label="Close">&times;</button>
                   </div>
                 </div>
-                <div class="form-group"><label>Input</label><textarea class="form-textarea" x-model="runInput" placeholder="Enter workflow input..."></textarea></div>
+                <div class="form-group"><label>Input</label><textarea class="form-textarea" x-model="runInput" placeholder="Enter conduit input..."></textarea></div>
                 <div class="of-card mt-4" x-show="runResult">
                   <div class="of-card-header">Result</div>
                   <pre style="font-size:11px;white-space:pre-wrap;margin-top:8px;color:var(--text-dim)" x-text="runResult"></pre>
@@ -1305,7 +1305,7 @@
                   </div>
                 </div>
                 <div class="form-group"><label>Name</label><input class="form-input" x-model="editWf.name" placeholder="Workflow name"></div>
-                <div class="form-group"><label>Description</label><input class="form-input" x-model="editWf.description" placeholder="What does this workflow do?"></div>
+                <div class="form-group"><label>Description</label><input class="form-input" x-model="editWf.description" placeholder="What does this conduit do?"></div>
                 <div class="mb-4">
                   <div class="form-group" style="margin:0"><label>Steps</label></div>
                   <div class="text-xs text-dim mb-2">Each step runs an agent. Use <code style="color:var(--accent)">{{input}}</code> in prompts to pass the previous step's output.</div>
@@ -1337,7 +1337,7 @@
 
         <!-- Tab: Visual Builder -->
         <template x-if="wfTab === 'builder'">
-        <div x-data="workflowBuilder()" x-init="init()">
+        <div x-data="conduitBuilder()" x-init="init()">
           <div class="wf-builder-layout">
             <!-- Node palette (left sidebar) -->
             <div class="wf-palette">
@@ -1351,16 +1351,16 @@
                 </div>
               </template>
               <hr style="border-color:var(--border);margin:12px 0">
-              <div class="text-xs text-dim mb-2">Workflow</div>
+              <div class="text-xs text-dim mb-2">Conduit</div>
               <div class="form-group" style="margin-bottom:8px">
-                <input class="form-input" x-model="workflowName" placeholder="Workflow name" style="font-size:11px">
+                <input class="form-input" x-model="workflowName" placeholder="Conduit name" style="font-size:11px">
               </div>
               <div class="form-group" style="margin-bottom:8px">
                 <input class="form-input" x-model="workflowDescription" placeholder="Description" style="font-size:11px">
               </div>
               <div class="flex flex-col gap-1">
                 <button type="button" class="button is-primary is-small is-fullwidth" @click="generateToml()"><i class="fa fa-download" aria-hidden="true"></i><span>Export TOML</span></button>
-                <button type="button" class="button is-primary is-small is-fullwidth" @click="showSaveModal = true"><i class="fa fa-floppy-o" aria-hidden="true"></i><span>Save workflow</span></button>
+                <button type="button" class="button is-primary is-small is-fullwidth" @click="showSaveModal = true"><i class="fa fa-floppy-o" aria-hidden="true"></i><span>Save conduit</span></button>
                 <button type="button" class="button is-ghost is-small is-fullwidth" @click="autoLayout()"><i class="fa fa-sitemap" aria-hidden="true"></i><span>Auto layout</span></button>
                 <button type="button" class="button is-ghost is-small is-fullwidth" @click="clearCanvas()"><i class="fa fa-eraser" aria-hidden="true"></i><span>Clear</span></button>
               </div>
@@ -1527,7 +1527,7 @@
             <div class="of-modal-overlay" @click.self="showSaveModal = false" @keydown.escape.window="showSaveModal = false">
               <div class="of-modal">
                 <div class="of-modal-header">
-                  <h3>Save Workflow</h3>
+                  <h3>Save conduit</h3>
                   <div class="of-modal-header__actions">
                     <button type="button" class="button is-primary is-small" @click="saveWorkflow()"><i class="fa fa-floppy-o" aria-hidden="true"></i><span>Save</span></button>
                     <button type="button" class="button is-ghost is-small" @click="showSaveModal = false">Cancel</button>
@@ -1722,7 +1722,7 @@
                 <div class="font-bold" style="font-size:13px;margin-bottom:4px">Event Triggers</div>
                 <div class="text-sm text-dim" style="line-height:1.6">
                   Event triggers fire agents in response to system events (agent lifecycle, memory updates, custom events).
-                  Create and manage triggers on the <a href="#workflows" style="color:var(--accent)">Workflows</a> page.
+                  Create and manage triggers on the <a href="#conduits" style="color:var(--accent)">Conduits</a> page.
                   This view shows all active triggers for monitoring.
                 </div>
               </div>
@@ -1750,7 +1750,7 @@
               </div>
               <div class="empty-state" x-show="!triggers.length">
                 <h4>No event triggers</h4>
-                <p class="hint">Create event triggers on the <a href="#workflows" style="color:var(--accent)">Workflows page</a> to fire agents in response to system events.</p>
+                <p class="hint">Create event triggers on the <a href="#conduits" style="color:var(--accent)">Conduits page</a> to fire agents in response to system events.</p>
               </div>
             </div>
           </div>
@@ -2462,7 +2462,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                   </optgroup>
                   <optgroup label="Automation">
                     <option value="spokes">Spokes</option>
-                    <option value="workflow_runs">Workflow Runs</option>
+                    <option value="workflow_runs">Conduit runs</option>
                     <option value="mattermost">Mattermost</option>
                   </optgroup>
                 </select>
@@ -2573,7 +2573,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     </div>
                     <div class="of-card p-3 text-center">
                       <div class="text-xl font-semibold" x-text="detailPipelines.length"></div>
-                      <div class="text-xs text-dim mt-1">Workflow Runs</div>
+                      <div class="text-xs text-dim mt-1">Conduit runs</div>
                     </div>
                     <div class="of-card p-3 text-center">
                       <div class="text-xl font-semibold" x-text="projectOverview.activeTaskCount"></div>
@@ -2678,7 +2678,7 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                     <div class="project-overview-column">
                       <div class="flex justify-between items-center mb-2">
                         <h3 class="text-sm font-semibold">Pipeline audit</h3>
-                        <button type="button" class="button is-ghost is-small" @click="onDetailTabChange('workflow_runs')">Workflow runs</button>
+                        <button type="button" class="button is-ghost is-small" @click="onDetailTabChange('workflow_runs')">Conduit runs</button>
                       </div>
                       <div class="of-card p-3" x-show="detailPipelines.length">
                         <template x-for="(p, idx) in detailPipelines.slice(0, 6)" :key="(p.timestamp || '') + (p.action || '') + (p.task_id || '') + '-' + idx">
@@ -4263,30 +4263,39 @@ x-model="inputText"
               </div>
 
               <div x-show="detailTab === 'workflow_runs'" class="mt-4">
-                <div x-show="detailLoading.workflow_runs" class="loading-state"><div class="spinner"></div><span>Loading workflow events...</span></div>
+                <div x-show="detailLoading.workflow_runs" class="loading-state"><div class="spinner"></div><span>Loading conduit runs…</span></div>
                 <div x-show="detailErrors.workflow_runs && !detailLoading.workflow_runs" class="error-state">
                   <span class="error-icon">!</span>
                   <p x-text="detailErrors.workflow_runs"></p>
                   <button type="button" class="button is-ghost is-small" @click="retryLoad('workflow_runs')">Retry</button>
                 </div>
                 <div x-show="!detailLoading.workflow_runs && !detailErrors.workflow_runs">
-                  <div class="table-wrap" x-show="detailWorkflowRuns.length">
-                    <table>
+                  <div class="flex flex-wrap gap-2 items-center justify-between mb-3">
+                    <p class="text-xs text-dim m-0">Project-scoped runs (newest first, limit 50). Click a row for full payload, step outputs, and tokens.</p>
+                    <button type="button" class="button is-ghost is-small" @click="retryLoad('workflow_runs')">Refresh list</button>
+                  </div>
+                  <div class="table-wrap" x-show="detailConduitRuns.length">
+                    <table class="conduit-runs-table">
                       <thead>
                         <tr>
                           <th>Started</th>
-                          <th>Workflow</th>
+                          <th>Conduit</th>
                           <th>State</th>
                           <th>Steps</th>
                           <th>Duration</th>
-                          <th>Input</th>
+                          <th>Input (preview)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        <template x-for="row in detailWorkflowRuns" :key="row.id">
-                          <tr>
+                        <template x-for="row in detailConduitRuns" :key="row.id">
+                          <tr
+                            class="conduit-runs-table__row"
+                            :class="{ 'conduit-runs-table__row--selected': conduitRunSelectedId && String(conduitRunSelectedId) === String(row.id) }"
+                            @click="selectConduitRunRow(row)"
+                            title="Show full run detail"
+                          >
                             <td class="text-xs text-dim" x-text="row.started_at || '—'"></td>
-                            <td class="text-sm" style="font-weight:600" x-text="row.workflow_name || row.workflow_id || '—'"></td>
+                            <td class="text-sm" style="font-weight:600" x-text="row.conduit_name || row.conduit_id || '—'"></td>
                             <td><span class="badge text-xs" :class="wfRunStateBadgeClass(row.state)" x-text="row.state || '—'"></span></td>
                             <td class="text-xs text-dim font-mono" x-text="(row.steps_completed != null ? row.steps_completed : '0') + (row.step_count != null ? ' / ' + row.step_count : '')"></td>
                             <td class="text-xs font-mono" x-text="formatWfDurationMs(row.duration_ms)"></td>
@@ -4296,8 +4305,71 @@ x-model="inputText"
                       </tbody>
                     </table>
                   </div>
-                  <div class="empty-state py-8" x-show="!detailWorkflowRuns.length">
-                    <p class="text-dim text-sm">No workflows recorded yet.</p>
+                  <div class="empty-state py-8" x-show="!detailConduitRuns.length">
+                    <p class="text-dim text-sm">No conduit runs recorded yet.</p>
+                  </div>
+
+                  <div class="of-card conduit-run-detail mt-4" x-show="conduitRunDetailLoading || conduitRunDetailError || conduitRunDetail">
+                    <div class="flex flex-wrap gap-2 items-center justify-between mb-3 pb-2" style="border-bottom:1px solid var(--border)">
+                      <h4 class="m-0 text-sm" style="font-weight:600">Run detail</h4>
+                      <div class="flex flex-wrap gap-2">
+                        <button type="button" class="button is-ghost is-small" @click="reloadConduitRunDetail()" x-show="!conduitRunDetailLoading && conduitRunSelectedId && conduitRunSelectedConduitId && (conduitRunDetail || conduitRunDetailError)">Reload detail</button>
+                        <button type="button" class="button is-ghost is-small" @click="copyConduitRunDetailJson()" x-show="conduitRunDetail && !conduitRunDetailLoading">Copy JSON</button>
+                        <button type="button" class="button is-ghost is-small" @click="clearConduitRunDetail()">Close</button>
+                      </div>
+                    </div>
+                    <div x-show="conduitRunDetailLoading" class="loading-state py-6"><div class="spinner"></div><span>Loading full run…</span></div>
+                    <p class="text-danger text-sm" x-show="conduitRunDetailError && !conduitRunDetailLoading" x-text="conduitRunDetailError"></p>
+                    <template x-if="conduitRunDetail && !conduitRunDetailLoading">
+                      <div class="conduit-run-detail__body text-sm">
+                        <div class="grid gap-3 mb-4" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr))">
+                          <div><span class="text-dim text-xs block">Run id</span><code class="text-xs break-all" x-text="conduitRunDetail.id || '—'"></code></div>
+                          <div><span class="text-dim text-xs block">Conduit id</span><code class="text-xs break-all" x-text="conduitRunDetail.conduit_id || '—'"></code></div>
+                          <div><span class="text-dim text-xs block">Name</span><span x-text="conduitRunDetail.conduit_name || '—'"></span></div>
+                          <div><span class="text-dim text-xs block">State</span><span class="badge text-xs" :class="wfRunStateBadgeClass(conduitRunDetail.state)" x-text="conduitRunDetail.state || '—'"></span></div>
+                          <div><span class="text-dim text-xs block">Project id</span><code class="text-xs break-all" x-text="conduitRunDetail.project_id != null ? conduitRunDetail.project_id : '—'"></code></div>
+                          <div><span class="text-dim text-xs block">Started</span><span class="text-xs" x-text="conduitRunDetail.started_at || '—'"></span></div>
+                          <div><span class="text-dim text-xs block">Completed</span><span class="text-xs" x-text="conduitRunDetail.completed_at || '—'"></span></div>
+                          <div><span class="text-dim text-xs block">Duration</span><span class="text-xs font-mono" x-text="formatWfDurationMs(conduitRunDetail.duration_ms)"></span></div>
+                        </div>
+                        <template x-if="conduitRunDetail.error">
+                          <div class="message-bubble mb-3" style="border-color:var(--danger)">
+                            <span class="text-dim text-xs block mb-1">Error</span>
+                            <pre class="conduit-run-detail__pre" x-text="conduitRunDetail.error"></pre>
+                          </div>
+                        </template>
+                        <div class="mb-3">
+                          <span class="text-dim text-xs block mb-1">Input (full)</span>
+                          <pre class="conduit-run-detail__pre" x-text="conduitRunDetail.input != null && conduitRunDetail.input !== '' ? conduitRunDetail.input : '—'"></pre>
+                        </div>
+                        <div class="mb-3">
+                          <span class="text-dim text-xs block mb-1">Final output</span>
+                          <pre class="conduit-run-detail__pre" x-text="conduitRunDetail.output != null && conduitRunDetail.output !== '' ? conduitRunDetail.output : '—'"></pre>
+                        </div>
+                        <div>
+                          <span class="text-dim text-xs block mb-2">Step results</span>
+                          <div class="flex flex-col gap-3">
+                            <template x-for="(st, stIdx) in (conduitRunDetail.step_results || [])" :key="stIdx + '-' + (st.step_name || stIdx)">
+                              <div class="of-card" style="padding:12px;background:var(--surface2)">
+                                <div class="flex flex-wrap gap-2 justify-between items-baseline mb-2">
+                                  <span class="font-mono text-xs" style="font-weight:600" x-text="st.step_name || ('step ' + (stIdx + 1))"></span>
+                                  <span class="text-xs text-dim font-mono" x-text="conduitRunStepTokenSummary(st) + ' · ' + (st.duration_ms != null ? st.duration_ms + ' ms' : '—')"></span>
+                                </div>
+                                <div class="text-xs text-dim mb-1">
+                                  <span x-text="st.agent_name || '—'"></span>
+                                  <template x-if="st.agent_id">
+                                    <code class="ml-2 break-all" x-text="st.agent_id"></code>
+                                  </template>
+                                </div>
+                                <div class="text-xs text-dim mb-1">Status: <span x-text="st.status || '—'"></span></div>
+                                <pre class="conduit-run-detail__pre conduit-run-detail__pre--step" x-text="st.output != null && st.output !== '' ? st.output : '—'"></pre>
+                              </div>
+                            </template>
+                          </div>
+                          <p class="text-dim text-xs mt-2" x-show="!(conduitRunDetail.step_results && conduitRunDetail.step_results.length)">No step rows yet (run may still be in memory only until steps finish).</p>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </div>
               </div>
@@ -4430,7 +4502,7 @@ x-model="inputText"
                       <div class="mattermost-orchestrator-card__body">
                         <h4 id="mattermost-orchestrator-heading" class="mattermost-orchestrator-card__heading">Orchestrator</h4>
                         <p class="mattermost-orchestrator-card__sub text-xs text-dim">
-                          Workflow hand that receives Mattermost messages for this project.
+                          Conduit coordinator hand that receives Mattermost messages for this project.
                         </p>
                         <template x-if="selectedProject && selectedProject.orchestrator_agent_id">
                           <div class="mattermost-orchestrator-card__state">
@@ -4846,22 +4918,22 @@ x-model="inputText"
                       </ul>
                     </section>
                     <section class="task-detail-modal__section" x-show="taskModalTaskActions && !taskDetailEditMode && selectedProject">
-                      <h4 class="task-detail-modal__section-title">Workflow pipeline</h4>
-                      <p class="text-xs text-dim">Runs the same path as the orchestrator <code>start_project_workflow</code> tool with this <strong>project_id</strong> and <strong>task id</strong>. Task status must be <strong>Ready for Dev</strong>.</p>
+                      <h4 class="task-detail-modal__section-title">Conduit pipeline</h4>
+                      <p class="text-xs text-dim">Runs the same path as the orchestrator <code>start_project_conduit</code> tool with this <strong>project_id</strong> and <strong>task id</strong>. Task status must be <strong>Ready for Dev</strong>.</p>
                       <div class="flex gap-2 flex-wrap items-center mt-2">
-                        <select class="form-select" style="min-width:220px;max-width:100%" x-model="taskWorkflowSelectedId" :disabled="taskWorkflowsLoading || taskWorkflowRunning">
-                          <template x-for="w in taskWorkflowsForProject" :key="w.id">
-                            <option :value="w.id" x-text="taskWorkflowOptionLabel(w)"></option>
+                        <select class="form-select" style="min-width:220px;max-width:100%" x-model="taskConduitSelectedId" :disabled="taskConduitsLoading || taskConduitRunning">
+                          <template x-for="w in taskConduitsOptions" :key="String(w.id)">
+                            <option :value="w.id" x-text="taskConduitOptionLabel(w)"></option>
                           </template>
                         </select>
-                        <button type="button" class="button is-primary is-small" @click="startTaskWorkflowFromModal()" :disabled="taskWorkflowRunning || taskWorkflowsLoading || !taskWorkflowSelectedId || !taskWorkflowsForProject.length">
-                          <span x-show="!taskWorkflowRunning">Start workflow</span>
-                          <span x-show="taskWorkflowRunning">Starting…</span>
+                        <button type="button" class="button is-primary is-small" @click="startTaskWorkflowFromModal()" :disabled="taskConduitRunning || taskConduitsLoading || !taskConduitSelectedId || !taskConduitsOptions.length">
+                          <span x-show="!taskConduitRunning">Start conduit</span>
+                          <span x-show="taskConduitRunning">Starting…</span>
                         </button>
                       </div>
-                      <p class="text-xs text-dim mt-1" x-show="taskWorkflowsLoading">Loading workflows…</p>
-                      <p class="text-xs text-danger mt-1" x-show="taskWorkflowRunError && !taskWorkflowRunning" x-text="taskWorkflowRunError"></p>
-                      <p class="text-xs text-dim mt-1" x-show="!taskWorkflowsLoading && !taskWorkflowsForProject.length">No registered workflows. Add workflows via the API or workflow JSON under the hub.</p>
+                      <p class="text-xs text-dim mt-1" x-show="taskConduitsLoading">Loading conduits…</p>
+                      <p class="text-xs text-danger mt-1" x-show="taskConduitRunError && !taskConduitRunning" x-text="taskConduitRunError"></p>
+                      <p class="text-xs text-dim mt-1" x-show="!taskConduitsLoading && !taskConduitsOptions.length">No registered conduits. Add conduits via the API or conduit JSON under the hub.</p>
                     </section>
                     <template x-if="taskDetailEditMode">
                       <div class="task-detail-modal__edit-fields">
@@ -6004,11 +6076,11 @@ x-model="inputText"
           <div x-show="tab === 'defaults'">
             <div class="info-card">
               <h4>Defaults</h4>
-              <p class="text-xs text-dim">The orchestrator default applies when OpenFang creates the per-project workflow-coordinator agent (for example after a Mattermost channel binding). Orchestrators already running keep their model until recreated. Memory embedding default overrides <code>[memory]</code> embedding settings for vector recall when both provider and model are set; leave both empty to use <code>config.toml</code> <code>[memory]</code> and auto-detect.</p>
+              <p class="text-xs text-dim">The orchestrator default applies when OpenFang creates the per-project conduit-coordinator agent (for example after a Mattermost channel binding). Orchestrators already running keep their model until recreated. Memory embedding default overrides <code>[memory]</code> embedding settings for vector recall when both provider and model are set; leave both empty to use <code>config.toml</code> <code>[memory]</code> and auto-detect.</p>
             </div>
             <div class="of-card" style="max-width:520px">
               <div class="of-card-header">Project orchestrator model</div>
-              <p class="text-xs text-dim mb-3">Leave both empty to use the workflow-coordinator hand&rsquo;s bundled model. Otherwise choose a provider and model that are <strong>active</strong> in the Models tab (default view lists only active providers).</p>
+              <p class="text-xs text-dim mb-3">Leave both empty to use the conduit-coordinator hand&rsquo;s bundled model. Otherwise choose a provider and model that are <strong>active</strong> in the Models tab (default view lists only active providers).</p>
               <div class="detail-grid">
                 <div class="detail-row" style="align-items:center">
                   <span class="detail-label">Provider</span>

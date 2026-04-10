@@ -233,7 +233,7 @@ OpenFang doesn't bolt security on after the fact. Every layer is independently t
 11 Rust crates in this workspace. Modular kernel design.
 
 ```
-openfang-kernel      Orchestration, workflows, metering, RBAC, scheduler, budget tracking
+openfang-kernel      Orchestration, conduits, metering, RBAC, scheduler, budget tracking
 openfang-runtime     Agent loop, LLM drivers, tools, WASM sandbox, MCP, A2A
 openfang-api         REST/WS/SSE endpoints, OpenAI-compatible API, dashboard
 openfang-channels    Signal + Mattermost adapters, webchat, CLI; rate limiting, policies
@@ -284,7 +284,7 @@ curl -X POST localhost:4200/v1/chat/completions \
   }'
 ```
 
-140+ REST/WS/SSE endpoints covering agents, memory, workflows, channels, models, skills, A2A, Hands, and more.
+140+ REST/WS/SSE endpoints covering agents, memory, conduits, channels, models, skills, A2A, Hands, and more.
 
 ---
 

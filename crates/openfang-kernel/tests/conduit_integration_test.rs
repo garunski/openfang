@@ -6,10 +6,10 @@
 //! LLM tests require GROQ_API_KEY. Non-LLM tests verify the kernel-level
 //! workflow wiring without making real API calls.
 
-use openfang_kernel::workflow::{
-    workflow_from_create_request_json, ErrorMode, StepAgent, StepMode, Workflow, WorkflowEngine,
-    WorkflowId, WorkflowStep, BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME,
-    BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME,
+use openfang_kernel::conduit::{
+    conduit_from_create_request_json, ErrorMode, StepAgent, StepMode, Conduit, ConduitEngine,
+    ConduitId, ConduitStep, BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME,
+    BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME,
 };
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::{AgentId, AgentManifest};
@@ -40,7 +40,7 @@ fn spawn_test_agent(
         r#"
 name = "{name}"
 version = "0.1.0"
-description = "Workflow test agent: {name}"
+description = "Conduit test agent: {name}"
 author = "test"
 module = "builtin:chat"
 
@@ -113,12 +113,12 @@ memory_write = ["self.*"]
     let beta_id = kernel.spawn_agent(manifest2).unwrap();
 
     // Create a 2-step workflow referencing agents by name
-    let workflow = Workflow {
-        id: WorkflowId::new(),
+    let workflow = Conduit {
+        id: ConduitId::new(),
         name: "alpha-beta-pipeline".to_string(),
         description: "Tests agent resolution by name".to_string(),
         steps: vec![
-            WorkflowStep {
+            ConduitStep {
                 name: "step-alpha".to_string(),
                 agent: StepAgent::ByName {
                     name: "agent-alpha".to_string(),
@@ -129,7 +129,7 @@ memory_write = ["self.*"]
                 error_mode: ErrorMode::Fail,
                 output_var: Some("alpha_out".to_string()),
             },
-            WorkflowStep {
+            ConduitStep {
                 name: "step-beta".to_string(),
                 agent: StepAgent::ByName {
                     name: "agent-beta".to_string(),
@@ -145,10 +145,10 @@ memory_write = ["self.*"]
         created_at: chrono::Utc::now(),
     };
 
-    let wf_id = kernel.register_workflow(workflow).await;
+    let wf_id = kernel.register_conduit(workflow).await;
 
     // Verify workflow is registered
-    let workflows = kernel.workflows.list_workflows().await;
+    let workflows = kernel.conduits.list_conduits().await;
     assert_eq!(workflows.len(), 1);
     assert_eq!(workflows[0].name, "alpha-beta-pipeline");
 
@@ -163,12 +163,12 @@ memory_write = ["self.*"]
 
     // Verify workflow run can be created
     let run_id = kernel
-        .workflows
+        .conduits
         .create_run(wf_id, "test input".to_string(), None)
         .await;
     assert!(run_id.is_some());
 
-    let run = kernel.workflows.get_run(run_id.unwrap()).await.unwrap();
+    let run = kernel.conduits.get_run(run_id.unwrap()).await.unwrap();
     assert_eq!(run.input, "test input");
 
     kernel.shutdown();
@@ -201,11 +201,11 @@ memory_write = ["self.*"]
     .unwrap();
     let agent_id = kernel.spawn_agent(manifest).unwrap();
 
-    let workflow = Workflow {
-        id: WorkflowId::new(),
+    let workflow = Conduit {
+        id: ConduitId::new(),
         name: "by-id-test".to_string(),
         description: "".to_string(),
-        steps: vec![WorkflowStep {
+        steps: vec![ConduitStep {
             name: "step1".to_string(),
             agent: StepAgent::ById {
                 id: agent_id.to_string(),
@@ -220,11 +220,11 @@ memory_write = ["self.*"]
         created_at: chrono::Utc::now(),
     };
 
-    let wf_id = kernel.register_workflow(workflow).await;
+    let wf_id = kernel.register_conduit(workflow).await;
 
     // Can create run (agent resolution happens at execute time)
     let run_id = kernel
-        .workflows
+        .conduits
         .create_run(wf_id, "hello".to_string(), None)
         .await;
     assert!(run_id.is_some());
@@ -330,12 +330,12 @@ async fn test_workflow_e2e_with_groq() {
     );
 
     // Create a 2-step pipeline: analyst → writer
-    let workflow = Workflow {
-        id: WorkflowId::new(),
+    let workflow = Conduit {
+        id: ConduitId::new(),
         name: "analyst-writer-pipeline".to_string(),
         description: "E2E integration test workflow".to_string(),
         steps: vec![
-            WorkflowStep {
+            ConduitStep {
                 name: "analyze".to_string(),
                 agent: StepAgent::ByName {
                     name: "wf-analyst".to_string(),
@@ -346,7 +346,7 @@ async fn test_workflow_e2e_with_groq() {
                 error_mode: ErrorMode::Fail,
                 output_var: None,
             },
-            WorkflowStep {
+            ConduitStep {
                 name: "summarize".to_string(),
                 agent: StepAgent::ByName {
                     name: "wf-writer".to_string(),
@@ -362,11 +362,11 @@ async fn test_workflow_e2e_with_groq() {
         created_at: chrono::Utc::now(),
     };
 
-    let wf_id = kernel.register_workflow(workflow).await;
+    let wf_id = kernel.register_conduit(workflow).await;
 
     // Run the workflow
     let result = kernel
-        .run_workflow(
+        .run_conduit(
             wf_id,
             "The Rust programming language is growing rapidly.".to_string(),
             None,
@@ -375,7 +375,7 @@ async fn test_workflow_e2e_with_groq() {
 
     assert!(
         result.is_ok(),
-        "Workflow should complete: {:?}",
+        "Conduit should complete: {:?}",
         result.err()
     );
     let (run_id, output) = result.unwrap();
@@ -384,13 +384,13 @@ async fn test_workflow_e2e_with_groq() {
     println!("{output}");
     println!("======================\n");
 
-    assert!(!output.is_empty(), "Workflow output should not be empty");
+    assert!(!output.is_empty(), "Conduit output should not be empty");
 
     // Verify the workflow run record
-    let run = kernel.workflows.get_run(run_id).await.unwrap();
+    let run = kernel.conduits.get_run(run_id).await.unwrap();
     assert!(matches!(
         run.state,
-        openfang_kernel::workflow::WorkflowRunState::Completed
+        openfang_kernel::conduit::ConduitRunState::Completed
     ));
     assert_eq!(run.step_results.len(), 2);
     assert_eq!(run.step_results[0].step_name, "analyze");
@@ -403,26 +403,26 @@ async fn test_workflow_e2e_with_groq() {
     assert!(run.step_results[1].output_tokens > 0);
 
     // List runs
-    let runs = kernel.workflows.list_runs(None).await;
+    let runs = kernel.conduits.list_runs(None).await;
     assert_eq!(runs.len(), 1);
 
     kernel.shutdown();
 }
 
 // ---------------------------------------------------------------------------
-// Doc-2 workflow-full-cycle template (TASK-46)
-// Canonical JSON: `openfang-kernel/bundled/workflows/workflow-full-cycle.json`
+// Doc-2 conduit-full-cycle template (TASK-46)
+// Canonical JSON: `openfang-kernel/bundled/conduits/conduit-full-cycle.json`
 // ---------------------------------------------------------------------------
 // Doc-to-tasks template
-// Canonical JSON: `openfang-kernel/bundled/workflows/workflow-doc-to-tasks.json`
+// Canonical JSON: `openfang-kernel/bundled/conduits/conduit-doc-to-tasks.json`
 // ---------------------------------------------------------------------------
 
 #[test]
 fn test_workflow_full_cycle_template_parses() {
-    let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
+    let raw = include_str!("../bundled/conduits/conduit-full-cycle.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
-    let wf = workflow_from_create_request_json(&v).expect("parse template");
-    assert_eq!(wf.name, "workflow-full-cycle");
+    let wf = conduit_from_create_request_json(&v).expect("parse template");
+    assert_eq!(wf.name, "conduit-full-cycle");
     assert_eq!(wf.steps.len(), 6);
     assert_eq!(wf.steps[0].name, "resolve_context");
     assert_eq!(wf.steps[1].name, "backlog_in_progress");
@@ -437,16 +437,16 @@ fn test_workflow_full_cycle_template_parses() {
     assert!(wf.project_id.is_none());
     assert!(matches!(
         &wf.steps[0].agent,
-        StepAgent::ByName { name } if name == "workflow-coordinator-hand"
+        StepAgent::ByName { name } if name == "conduit-coordinator-hand"
     ));
 }
 
 #[test]
 fn test_pipeline_doc_to_tasks_template_parses() {
-    let raw = include_str!("../bundled/workflows/workflow-doc-to-tasks.json");
+    let raw = include_str!("../bundled/conduits/conduit-doc-to-tasks.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
-    let wf = workflow_from_create_request_json(&v).expect("parse template");
-    assert_eq!(wf.name, "workflow-doc-to-tasks");
+    let wf = conduit_from_create_request_json(&v).expect("parse template");
+    assert_eq!(wf.name, "conduit-doc-to-tasks");
     assert_eq!(wf.steps.len(), 3);
     assert_eq!(wf.steps[0].name, "resolve_doc_context");
     assert_eq!(wf.steps[1].name, "cursor_create_tasks_from_doc");
@@ -458,16 +458,16 @@ fn test_pipeline_doc_to_tasks_template_parses() {
     assert!(wf.project_id.is_none());
     assert!(matches!(
         &wf.steps[2].agent,
-        StepAgent::ByName { name } if name == "workflow-coordinator-hand"
+        StepAgent::ByName { name } if name == "conduit-coordinator-hand"
     ));
 }
 
 #[tokio::test]
 async fn test_workflow_full_cycle_execute_run_mock() {
-    let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
+    let raw = include_str!("../bundled/conduits/conduit-full-cycle.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
-    let wf = workflow_from_create_request_json(&v).expect("parse");
-    let engine = WorkflowEngine::new();
+    let wf = conduit_from_create_request_json(&v).expect("parse");
+    let engine = ConduitEngine::new();
     let wf_id = engine.register(wf).await;
     let run_id = engine
         .create_run(
@@ -481,7 +481,7 @@ async fn test_workflow_full_cycle_execute_run_mock() {
     let out = engine
         .execute_run(
             run_id,
-            |_step_agent| Some((dummy, "workflow-coordinator-hand".into())),
+            |_step_agent| Some((dummy, "conduit-coordinator-hand".into())),
             |_agent_id, _prompt| async move { Ok(("ok".into(), 0u64, 0u64)) },
         )
         .await
@@ -493,34 +493,34 @@ async fn test_workflow_full_cycle_execute_run_mock() {
 }
 
 #[tokio::test]
-async fn init_default_workflows_installs_bundled_workflow_full_cycle() {
+async fn init_default_conduits_installs_bundled_workflow_full_cycle() {
     let config = test_config("ollama", "test-model", "OLLAMA_API_KEY");
     let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
-    kernel.init_default_workflows().await;
-    let wfs = kernel.workflows.list_workflows().await;
+    kernel.init_default_conduits().await;
+    let wfs = kernel.conduits.list_conduits().await;
     assert!(
         wfs.iter()
-            .any(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME),
-        "bundled workflow-full-cycle should be registered"
+            .any(|w| w.name == BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME),
+        "bundled conduit-full-cycle should be registered"
     );
     assert!(
         wfs.iter()
-            .any(|w| w.name == BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME),
+            .any(|w| w.name == BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME),
         "bundled doc-to-tasks workflow should be registered"
     );
-    let wf_dir = kernel.config.home_dir.join("workflows");
+    let wf_dir = kernel.config.home_dir.join("conduits");
     assert!(
         wf_dir.exists(),
-        "workflows dir should exist after bundled install"
+        "conduits dir should exist after bundled install"
     );
     let mut found_full = false;
     let mut found_doc = false;
     for entry in std::fs::read_dir(&wf_dir).unwrap() {
         let text = std::fs::read_to_string(entry.unwrap().path()).unwrap();
-        if text.contains(BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME) {
+        if text.contains(BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME) {
             found_full = true;
         }
-        if text.contains(BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME) {
+        if text.contains(BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME) {
             found_doc = true;
         }
     }
@@ -529,16 +529,16 @@ async fn init_default_workflows_installs_bundled_workflow_full_cycle() {
         "persisted workflow JSON should mention both bundled workflow names"
     );
 
-    kernel.init_default_workflows().await;
-    let wfs2 = kernel.workflows.list_workflows().await;
+    kernel.init_default_conduits().await;
+    let wfs2 = kernel.conduits.list_conduits().await;
     let n_full = wfs2
         .iter()
-        .filter(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME)
+        .filter(|w| w.name == BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME)
         .count();
     assert_eq!(n_full, 1, "second init should not duplicate full-cycle workflow");
     let n_doc = wfs2
         .iter()
-        .filter(|w| w.name == BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME)
+        .filter(|w| w.name == BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME)
         .count();
     assert_eq!(n_doc, 1, "second init should not duplicate doc-to-tasks workflow");
 }

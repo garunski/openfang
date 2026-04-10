@@ -253,12 +253,12 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
 
     // ── Automation: workflows, triggers, schedules, approvals ──
 
-    async fn list_workflows_text(&self) -> String {
-        let workflows = self.kernel.workflows.list_workflows().await;
+    async fn list_conduits_text(&self) -> String {
+        let workflows = self.kernel.conduits.list_conduits().await;
         if workflows.is_empty() {
-            return "No workflows defined.".to_string();
+            return "No conduits defined.".to_string();
         }
-        let mut msg = format!("Workflows ({}):\n", workflows.len());
+        let mut msg = format!("Conduits ({}):\n", workflows.len());
         for wf in &workflows {
             let steps = wf.steps.len();
             let desc = if wf.description.is_empty() {
@@ -271,16 +271,16 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         msg
     }
 
-    async fn run_workflow_text(&self, name: &str, input: &str) -> String {
-        let workflows = self.kernel.workflows.list_workflows().await;
+    async fn run_conduit_text(&self, name: &str, input: &str) -> String {
+        let workflows = self.kernel.conduits.list_conduits().await;
         let wf = match workflows.iter().find(|w| w.name.eq_ignore_ascii_case(name)) {
             Some(w) => w.clone(),
-            None => return format!("Workflow '{name}' not found. Use /workflows to list."),
+            None => return format!("Conduit '{name}' not found. Use /conduits to list."),
         };
 
         let run_id = match self
             .kernel
-            .workflows
+            .conduits
             .create_run(wf.id, input.to_string(), None)
             .await
         {
@@ -292,16 +292,16 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
         let registry_ref = &self.kernel.registry;
         let result = self
             .kernel
-            .workflows
+            .conduits
             .execute_run(
                 run_id,
                 |step_agent| match step_agent {
-                    openfang_kernel::workflow::StepAgent::ById { id } => {
+                    openfang_kernel::conduit::StepAgent::ById { id } => {
                         let aid: AgentId = id.parse().ok()?;
                         let entry = registry_ref.get(aid)?;
                         Some((aid, entry.name.clone()))
                     }
-                    openfang_kernel::workflow::StepAgent::ByName { name } => {
+                    openfang_kernel::conduit::StepAgent::ByName { name } => {
                         let entry = registry_ref.find_by_name(name)?;
                         Some((entry.id, entry.name.clone()))
                     }
@@ -324,8 +324,8 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
             .await;
 
         match result {
-            Ok(output) => format!("Workflow '{}' completed:\n{}", wf.name, output),
-            Err(e) => format!("Workflow '{}' failed: {}", wf.name, e),
+            Ok(output) => format!("Conduit '{}' completed:\n{}", wf.name, output),
+            Err(e) => format!("Conduit '{}' failed: {}", wf.name, e),
         }
     }
 
@@ -542,13 +542,13 @@ impl ChannelBridgeHandle for KernelBridgeAdapter {
                             openfang_types::scheduler::CronAction::SystemEvent { text } => {
                                 text.clone()
                             }
-                            openfang_types::scheduler::CronAction::WorkflowRun {
-                                workflow_id,
+                            openfang_types::scheduler::CronAction::ConduitRun {
+                                conduit_id,
                                 input,
                                 ..
                             } => {
                                 format!(
-                                    "Run workflow {workflow_id}{}",
+                                    "Run workflow {conduit_id}{}",
                                     input
                                         .as_deref()
                                         .map(|i| format!(" with input: {i}"))

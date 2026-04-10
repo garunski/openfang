@@ -250,6 +250,37 @@ a.button:active {
   background: var(--surface2);
 }
 
+/* Project detail → Conduit runs: selectable rows + full-run panel */
+.conduit-runs-table__row {
+  cursor: pointer;
+  transition: background-color var(--transition-fast);
+}
+.conduit-runs-table__row--selected td {
+  background: var(--surface3);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.conduit-run-detail.of-card {
+  padding: 16px;
+}
+.conduit-run-detail__pre {
+  margin: 0;
+  padding: 12px;
+  max-height: 20rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+}
+.conduit-run-detail__pre--step {
+  max-height: 16rem;
+}
+
 /* Analytics trader grids (no .table-wrap wrapper) */
 table.trader-heatmap-table,
 table.trader-trades-table {

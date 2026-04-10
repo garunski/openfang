@@ -165,8 +165,8 @@ impl ProjectStore {
         if let Some(spokes) = patch.spokes {
             updated.spokes = spokes;
         }
-        if let Some(overrides) = patch.workflow_overrides {
-            updated.workflow_overrides = overrides;
+        if let Some(overrides) = patch.conduit_overrides {
+            updated.conduit_overrides = overrides;
         }
         if let Some(admin) = patch.admin_spoke {
             updated.admin_spoke = admin
@@ -424,7 +424,7 @@ fn validate_admin_spoke_references(project: &Project) -> OpenFangResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openfang_types::project::ProjectWorkflowOverrides;
+    use openfang_types::project::ProjectConduitOverrides;
     use std::process::Command;
     use tempfile::tempdir;
 
@@ -509,7 +509,7 @@ mod tests {
                         path: PathBuf::from("x"),
                         labels: vec![],
                     }]),
-                    workflow_overrides: Some(ProjectWorkflowOverrides {
+                    conduit_overrides: Some(ProjectConduitOverrides {
                         max_retries: Some(3),
                         model_routing: None,
                         ..Default::default()
@@ -520,7 +520,7 @@ mod tests {
             .unwrap();
         assert_eq!(u.name, "n2");
         assert_eq!(u.spokes.len(), 1);
-        assert_eq!(u.workflow_overrides.max_retries, Some(3));
+        assert_eq!(u.conduit_overrides.max_retries, Some(3));
     }
 
     #[test]

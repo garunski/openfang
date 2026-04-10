@@ -125,7 +125,7 @@ enum Commands {
     Agent(AgentCommands),
     /// Manage workflows (list, create, run) [*].
     #[command(subcommand)]
-    Workflow(WorkflowCommands),
+    Conduit(ConduitCommands),
     /// Manage event triggers (list, create, delete) [*].
     #[command(subcommand)]
     Trigger(TriggerCommands),
@@ -497,7 +497,7 @@ enum AgentCommands {
 }
 
 #[derive(Subcommand)]
-enum WorkflowCommands {
+enum ConduitCommands {
     /// List all registered workflows.
     List,
     /// Create a workflow from a JSON file.
@@ -507,25 +507,25 @@ enum WorkflowCommands {
     },
     /// Get a workflow by ID.
     Get {
-        /// Workflow ID (UUID).
-        workflow_id: String,
+        /// Conduit ID (UUID).
+        conduit_id: String,
     },
     /// Update a workflow from a JSON file.
     Update {
-        /// Workflow ID (UUID).
-        workflow_id: String,
+        /// Conduit ID (UUID).
+        conduit_id: String,
         /// Path to a JSON file with the updated workflow definition.
         file: PathBuf,
     },
     /// Delete a workflow by ID.
     Delete {
-        /// Workflow ID (UUID).
-        workflow_id: String,
+        /// Conduit ID (UUID).
+        conduit_id: String,
     },
     /// Run a workflow by ID.
     Run {
-        /// Workflow ID (UUID).
-        workflow_id: String,
+        /// Conduit ID (UUID).
+        conduit_id: String,
         /// Input text for the workflow.
         input: String,
     },
@@ -949,15 +949,15 @@ fn main() {
                 value,
             } => cmd_agent_set(&agent_id, &field, &value),
         },
-        Some(Commands::Workflow(sub)) => match sub {
-            WorkflowCommands::List => cmd_workflow_list(),
-            WorkflowCommands::Create { file } => cmd_workflow_create(file),
-            WorkflowCommands::Get { workflow_id } => cmd_workflow_get(&workflow_id),
-            WorkflowCommands::Update { workflow_id, file } => {
-                cmd_workflow_update(&workflow_id, file)
+        Some(Commands::Conduit(sub)) => match sub {
+            ConduitCommands::List => cmd_conduit_list(),
+            ConduitCommands::Create { file } => cmd_conduit_create(file),
+            ConduitCommands::Get { conduit_id } => cmd_conduit_get(&conduit_id),
+            ConduitCommands::Update { conduit_id, file } => {
+                cmd_conduit_update(&conduit_id, file)
             }
-            WorkflowCommands::Delete { workflow_id } => cmd_workflow_delete(&workflow_id),
-            WorkflowCommands::Run { workflow_id, input } => cmd_workflow_run(&workflow_id, &input),
+            ConduitCommands::Delete { conduit_id } => cmd_conduit_delete(&conduit_id),
+            ConduitCommands::Run { conduit_id, input } => cmd_conduit_run(&conduit_id, &input),
         },
         Some(Commands::Trigger(sub)) => match sub {
             TriggerCommands::List { agent_id } => cmd_trigger_list(agent_id.as_deref()),
@@ -3047,13 +3047,13 @@ fn cmd_completion(shell: clap_complete::Shell) {
 }
 
 // ---------------------------------------------------------------------------
-// Workflow commands
+// Conduit commands
 // ---------------------------------------------------------------------------
 
-fn cmd_workflow_list() {
+fn cmd_conduit_list() {
     let base = require_daemon("workflow list");
     let client = daemon_client();
-    let body = daemon_json(client.get(format!("{base}/api/workflows")).send());
+    let body = daemon_json(client.get(format!("{base}/api/conduits")).send());
 
     match body.as_array() {
         Some(workflows) if workflows.is_empty() => println!("No workflows registered."),
@@ -3074,10 +3074,10 @@ fn cmd_workflow_list() {
     }
 }
 
-fn cmd_workflow_create(file: PathBuf) {
+fn cmd_conduit_create(file: PathBuf) {
     let base = require_daemon("workflow create");
     if !file.exists() {
-        eprintln!("Workflow file not found: {}", file.display());
+        eprintln!("Conduit file not found: {}", file.display());
         std::process::exit(1);
     }
     let contents = std::fs::read_to_string(&file).unwrap_or_else(|e| {
@@ -3092,13 +3092,13 @@ fn cmd_workflow_create(file: PathBuf) {
     let client = daemon_client();
     let body = daemon_json(
         client
-            .post(format!("{base}/api/workflows"))
+            .post(format!("{base}/api/conduits"))
             .json(&json_body)
             .send(),
     );
 
-    if let Some(id) = body["workflow_id"].as_str() {
-        println!("Workflow created successfully!");
+    if let Some(id) = body["conduit_id"].as_str() {
+        println!("Conduit created successfully!");
         println!("  ID: {id}");
     } else {
         eprintln!(
@@ -3109,47 +3109,47 @@ fn cmd_workflow_create(file: PathBuf) {
     }
 }
 
-fn cmd_workflow_run(workflow_id: &str, input: &str) {
+fn cmd_conduit_run(conduit_id: &str, input: &str) {
     let base = require_daemon("workflow run");
     let client = daemon_client();
     let body = daemon_json(
         client
-            .post(format!("{base}/api/workflows/{workflow_id}/run"))
+            .post(format!("{base}/api/conduits/{conduit_id}/run"))
             .json(&serde_json::json!({"input": input}))
             .send(),
     );
 
     if let Some(output) = body["output"].as_str() {
-        println!("Workflow completed!");
+        println!("Conduit completed!");
         println!("  Run ID: {}", body["run_id"].as_str().unwrap_or("?"));
         println!("  Output:\n{output}");
     } else {
         eprintln!(
-            "Workflow failed: {}",
+            "Conduit failed: {}",
             body["error"].as_str().unwrap_or("Unknown error")
         );
         std::process::exit(1);
     }
 }
 
-fn cmd_workflow_get(workflow_id: &str) {
+fn cmd_conduit_get(conduit_id: &str) {
     let base = require_daemon("workflow get");
     let client = daemon_client();
     let body = daemon_json(
         client
-            .get(format!("{base}/api/workflows/{workflow_id}"))
+            .get(format!("{base}/api/conduits/{conduit_id}"))
             .send(),
     );
 
     if body.get("error").is_some() {
         eprintln!(
-            "Workflow not found: {}",
+            "Conduit not found: {}",
             body["error"].as_str().unwrap_or("Unknown error")
         );
         std::process::exit(1);
     }
 
-    println!("Workflow: {}", body["name"].as_str().unwrap_or("?"));
+    println!("Conduit: {}", body["name"].as_str().unwrap_or("?"));
     println!("  ID:          {}", body["id"].as_str().unwrap_or("?"));
     println!(
         "  Description: {}",
@@ -3174,10 +3174,10 @@ fn cmd_workflow_get(workflow_id: &str) {
     }
 }
 
-fn cmd_workflow_update(workflow_id: &str, file: PathBuf) {
+fn cmd_conduit_update(conduit_id: &str, file: PathBuf) {
     let base = require_daemon("workflow update");
     if !file.exists() {
-        eprintln!("Workflow file not found: {}", file.display());
+        eprintln!("Conduit file not found: {}", file.display());
         std::process::exit(1);
     }
     let contents = std::fs::read_to_string(&file).unwrap_or_else(|e| {
@@ -3192,14 +3192,14 @@ fn cmd_workflow_update(workflow_id: &str, file: PathBuf) {
     let client = daemon_client();
     let body = daemon_json(
         client
-            .put(format!("{base}/api/workflows/{workflow_id}"))
+            .put(format!("{base}/api/conduits/{conduit_id}"))
             .json(&json_body)
             .send(),
     );
 
     if body["status"].as_str() == Some("updated") {
-        println!("Workflow updated successfully!");
-        println!("  ID: {}", body["workflow_id"].as_str().unwrap_or("?"));
+        println!("Conduit updated successfully!");
+        println!("  ID: {}", body["conduit_id"].as_str().unwrap_or("?"));
     } else {
         eprintln!(
             "Failed to update workflow: {}",
@@ -3209,18 +3209,18 @@ fn cmd_workflow_update(workflow_id: &str, file: PathBuf) {
     }
 }
 
-fn cmd_workflow_delete(workflow_id: &str) {
+fn cmd_conduit_delete(conduit_id: &str) {
     let base = require_daemon("workflow delete");
     let client = daemon_client();
     let body = daemon_json(
         client
-            .delete(format!("{base}/api/workflows/{workflow_id}"))
+            .delete(format!("{base}/api/conduits/{conduit_id}"))
             .send(),
     );
 
     if body["status"].as_str() == Some("removed") {
-        println!("Workflow deleted successfully!");
-        println!("  ID: {}", body["workflow_id"].as_str().unwrap_or("?"));
+        println!("Conduit deleted successfully!");
+        println!("  ID: {}", body["conduit_id"].as_str().unwrap_or("?"));
     } else {
         eprintln!(
             "Failed to delete workflow: {}",

@@ -45,8 +45,8 @@ const CHANNEL_COMMAND_SPECS: &[ChatCommandSpec] = &[
     ChatCommandSpec { name: "providers", desc: "Show configured providers", help: "/providers - show configured providers", section: "Info" },
     ChatCommandSpec { name: "skills", desc: "List installed skills", help: "/skills - list installed skills", section: "Info" },
     ChatCommandSpec { name: "hands", desc: "List available and active hands", help: "/hands - list available and active hands", section: "Info" },
-    ChatCommandSpec { name: "workflows", desc: "List workflows", help: "/workflows - list workflows", section: "Automation" },
-    ChatCommandSpec { name: "workflow", desc: "Run workflow (/workflow run <name> [input])", help: "/workflow run <name> [input] - run a workflow", section: "Automation" },
+    ChatCommandSpec { name: "conduits", desc: "List conduits", help: "/conduits - list conduits", section: "Automation" },
+    ChatCommandSpec { name: "conduit", desc: "Run conduit (/conduit run <name> [input])", help: "/conduit run <name> [input] - run a conduit", section: "Automation" },
     ChatCommandSpec { name: "triggers", desc: "List event triggers", help: "/triggers - list event triggers", section: "Automation" },
     ChatCommandSpec { name: "trigger", desc: "Manage triggers", help: "/trigger add <agent> <pattern> <prompt> | /trigger del <id>", section: "Automation" },
     ChatCommandSpec { name: "schedules", desc: "List cron jobs", help: "/schedules - list cron jobs", section: "Automation" },
@@ -253,12 +253,12 @@ pub trait ChannelBridgeHandle: Send + Sync {
     // ── Automation: workflows, triggers, schedules, approvals ──
 
     /// List all registered workflows as formatted text.
-    async fn list_workflows_text(&self) -> String {
+    async fn list_conduits_text(&self) -> String {
         "Workflows not available.".to_string()
     }
 
     /// Run a workflow by name with the given input text.
-    async fn run_workflow_text(&self, _name: &str, _input: &str) -> String {
+    async fn run_conduit_text(&self, _name: &str, _input: &str) -> String {
         "Workflows not available.".to_string()
     }
 
@@ -1712,9 +1712,9 @@ async fn handle_command(
         "skills" => handle.list_skills_text().await,
         "hands" => handle.list_hands_text().await,
 
-        // ── Automation: workflows, triggers, schedules, approvals ──
-        "workflows" => handle.list_workflows_text().await,
-        "workflow" => {
+        // ── Automation: conduits, triggers, schedules, approvals ──
+        "conduits" => handle.list_conduits_text().await,
+        "conduit" => {
             if args.len() >= 2 && args[0] == "run" {
                 let wf_name = &args[1];
                 let input = if args.len() > 2 {
@@ -1722,9 +1722,9 @@ async fn handle_command(
                 } else {
                     String::new()
                 };
-                handle.run_workflow_text(wf_name, &input).await
+                handle.run_conduit_text(wf_name, &input).await
             } else {
-                "Usage: /workflow run <name> [input]".to_string()
+                "Usage: /conduit run <name> [input]".to_string()
             }
         }
         "triggers" => handle.list_triggers_text().await,

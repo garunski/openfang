@@ -268,7 +268,8 @@ mod tests {
 
     #[test]
     fn test_load_config_defaults() {
-        let config = load_config(None);
+        // Avoid reading the developer's real ~/.openfang/config.toml (log_level may differ).
+        let config = load_config(Some(Path::new("/nonexistent/openfang-defaults.toml")));
         assert_eq!(config.log_level, "info");
     }
 

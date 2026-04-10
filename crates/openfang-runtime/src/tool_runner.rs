@@ -321,8 +321,8 @@ pub async fn execute_tool(
             };
         }
 
-        "run_workflow_cycle" => {
-            return match tool_run_workflow_cycle(input, kernel, caller_agent_id).await {
+        "run_conduit_cycle" => {
+            return match tool_run_conduit_cycle(input, kernel, caller_agent_id).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -378,8 +378,8 @@ pub async fn execute_tool(
                 },
             };
         }
-        "start_project_workflow" => {
-            return match tool_start_project_workflow(input, kernel).await {
+        "start_project_conduit" => {
+            return match tool_start_project_conduit(input, kernel).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -548,8 +548,8 @@ pub async fn execute_tool(
             };
         }
 
-        "record_workflow_outcome" => {
-            return match tool_record_workflow_outcome(input, kernel, caller_agent_id).await {
+        "record_conduit_outcome" => {
+            return match tool_record_conduit_outcome(input, kernel, caller_agent_id).await {
                 Ok((content, is_error)) => ToolResult {
                     tool_use_id: tool_use_id.to_string(),
                     content,
@@ -917,7 +917,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "enforce_quality_gate".to_string(),
-            description: "Run the spoke quality gate (`mise run 001-qa`) on an allowlisted absolute spoke root. Returns JSON with exit_code, stdout, stderr. Emits a structured workflow audit line (JSON) with target `openfang_workflow_audit`.".to_string(),
+            description: "Run the spoke quality gate (`mise run 001-qa`) on an allowlisted absolute spoke root. Returns JSON with exit_code, stdout, stderr. Emits a structured workflow audit line (JSON) with target `openfang_conduit_audit`.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -944,8 +944,8 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "run_workflow_cycle".to_string(),
-            description: "Run the automation workflow cycle in Rust: repeated `trigger_cursor_worker` then `enforce_quality_gate` until the gate passes or `max_retries` is exhausted. Each Cursor round deploys bundled `.cursor/skills/*` into the spoke (same as `trigger_cursor_worker`) before `cursor agent` runs. Emits the same `QualityGate`, `CursorWorker`, and `WorkflowRunOutcome` audit events as the standalone tools. Provide either `workspace` or `task_labels` (with a `repo:<spoke>` label) to resolve the spoke root.".to_string(),
+            name: "run_conduit_cycle".to_string(),
+            description: "Run the automation workflow cycle in Rust: repeated `trigger_cursor_worker` then `enforce_quality_gate` until the gate passes or `max_retries` is exhausted. Each Cursor round deploys bundled `.cursor/skills/*` into the spoke (same as `trigger_cursor_worker`) before `cursor agent` runs. Emits the same `QualityGate`, `CursorWorker`, and `ConduitRunOutcome` audit events as the standalone tools. Provide either `workspace` or `task_labels` (with a `repo:<spoke>` label) to resolve the spoke root.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -956,8 +956,8 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor mode (default: agent)" },
                     "behavior": { "type": "string", "description": "Optional extra behavior passed to each Cursor invocation" },
                     "flags": { "type": "array", "items": { "type": "string" }, "description": "Allowlisted extra cursor agent flags" },
-                    "max_retries": { "type": "integer", "description": "Extra Cursor rounds after a failed gate; default from kernel / project workflow_overrides" },
-                    "project_id": { "type": "string", "description": "Registered project UUID for workflow_overrides.max_retries when set" },
+                    "max_retries": { "type": "integer", "description": "Extra Cursor rounds after a failed gate; default from kernel / project conduit_overrides" },
+                    "project_id": { "type": "string", "description": "Registered project UUID for conduit_overrides.max_retries when set" },
                     "rollback_to_status": { "type": "string", "description": "Recorded on failure outcome (e.g. Ready for Dev); does not edit the backlog task" }
                 },
                 "required": ["task_id", "prompt"]
@@ -1002,15 +1002,15 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "start_project_workflow".to_string(),
+            name: "start_project_conduit".to_string(),
             description: "Start a registered workflow for a backlog task in a project. Validates the task exists and is Ready for Dev. Optionally posts a confirmation to the project's Mattermost channel first. Returns JSON with run_id and output.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "project_id": { "type": "string", "description": "Registered project UUID" },
                     "task_id": { "type": "string", "description": "Backlog task id (e.g. TASK-40)" },
-                    "workflow_id": { "type": "string", "description": "Workflow definition UUID (omit if using workflow_name)" },
-                    "workflow_name": { "type": "string", "description": "Registered workflow name (omit if using workflow_id)" },
+                    "conduit_id": { "type": "string", "description": "Conduit definition UUID (omit if using conduit_name)" },
+                    "conduit_name": { "type": "string", "description": "Registered workflow name (omit if using conduit_id)" },
                     "post_mattermost_confirmation": { "type": "boolean", "description": "If true, post a short confirmation to project mattermost_channel_id before running (requires channel bridge)" }
                 },
                 "required": ["project_id", "task_id"]
@@ -1098,7 +1098,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "git_create_pr".to_string(),
-            description: "Open a GitHub pull request for the current branch using the GitHub REST API. Token from project workflow_overrides.github_token_env, [automation].github_token_env, or GITHUB_TOKEN.".to_string(),
+            description: "Open a GitHub pull request for the current branch using the GitHub REST API. Token from project conduit_overrides.github_token_env, [automation].github_token_env, or GITHUB_TOKEN.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1177,7 +1177,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
             }),
         },
         ToolDefinition {
-            name: "record_workflow_outcome".to_string(),
+            name: "record_conduit_outcome".to_string(),
             description: "Record end-of-run workflow outcome (success, retries used, optional rollback target status) as structured JSON for audit correlation.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
@@ -2252,7 +2252,7 @@ fn resolve_pipeline_workspace(
     Ok(p.display().to_string())
 }
 
-async fn tool_run_workflow_cycle(
+async fn tool_run_conduit_cycle(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
@@ -2630,7 +2630,7 @@ async fn tool_backlog_task_edit(
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
 
-async fn tool_start_project_workflow(
+async fn tool_start_project_conduit(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> Result<(String, bool), String> {
@@ -2645,11 +2645,11 @@ async fn tool_start_project_workflow(
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Missing required parameter 'task_id'".to_string())?;
-    let workflow_id = input["workflow_id"]
+    let conduit_id = input["conduit_id"]
         .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty());
-    let workflow_name = input["workflow_name"]
+    let conduit_name = input["conduit_name"]
         .as_str()
         .map(str::trim)
         .filter(|s| !s.is_empty());
@@ -2657,11 +2657,11 @@ async fn tool_start_project_workflow(
         .as_bool()
         .unwrap_or(false);
     let json = kh
-        .start_project_workflow(
+        .start_project_conduit(
             project_id,
             task_id,
-            workflow_id,
-            workflow_name,
+            conduit_id,
+            conduit_name,
             post_mattermost_confirmation,
         )
         .await?;
@@ -2748,7 +2748,7 @@ async fn tool_git_create_branch(
         .filter(|s| !s.is_empty())
         .unwrap_or("main");
     let cwd = kh.resolve_git_workspace_for_project(project_id, spoke_root)?;
-    let tmpl = kh.workflow_git_branch_template(project_id);
+    let tmpl = kh.conduit_git_branch_template(project_id);
     let branch = crate::git_pipeline::resolve_branch_name(&tmpl, task_id, branch_override);
     crate::git_pipeline::git_create_branch(&cwd, &branch, base_branch).await?;
     let out = serde_json::json!({
@@ -2840,7 +2840,7 @@ async fn tool_git_create_pr(
         .filter(|s| !s.is_empty())
         .unwrap_or("main");
     let cwd = kh.resolve_git_workspace_for_project(project_id, spoke_root)?;
-    let env_name = kh.github_token_env_for_workflow(project_id);
+    let env_name = kh.github_token_env_for_conduit(project_id);
     let token = std::env::var(&env_name)
         .map_err(|_| format!("GitHub token env `{env_name}` is not set"))?;
     let remote = crate::git_pipeline::git_remote_origin_url(&cwd).await?;
@@ -2938,7 +2938,7 @@ async fn tool_record_git_action(
     Ok((serde_json::json!({ "ok": true }).to_string(), false))
 }
 
-async fn tool_record_workflow_outcome(
+async fn tool_record_conduit_outcome(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
     caller_agent_id: Option<&str>,
@@ -2972,14 +2972,14 @@ async fn tool_record_workflow_outcome(
         .filter(|s| !s.is_empty())
         .map(String::from);
     crate::pipeline_audit::emit(
-        crate::pipeline_audit::PipelineAuditEvent::WorkflowRunOutcome {
+        crate::pipeline_audit::PipelineAuditEvent::ConduitRunOutcome {
             timestamp: chrono::Utc::now().to_rfc3339(),
             task_id,
             success,
             retry_count,
             rollback_to_status,
             actor: pipeline_tool_actor(caller_agent_id),
-            tool: "record_workflow_outcome".to_string(),
+            tool: "record_conduit_outcome".to_string(),
         },
     );
     Ok((serde_json::json!({ "ok": true }).to_string(), false))
@@ -4868,28 +4868,28 @@ mod tests {
             )
         }
 
-        fn github_token_env_for_workflow(&self, _project_id: &str) -> String {
+        fn github_token_env_for_conduit(&self, _project_id: &str) -> String {
             "GITHUB_TOKEN".to_string()
         }
 
-        fn workflow_git_branch_template(&self, _project_id: &str) -> String {
+        fn conduit_git_branch_template(&self, _project_id: &str) -> String {
             crate::git_pipeline::default_git_branch_template().to_string()
         }
 
-        async fn start_project_workflow(
+        async fn start_project_conduit(
             &self,
             project_id: &str,
             task_id: &str,
-            workflow_id: Option<&str>,
-            workflow_name: Option<&str>,
+            conduit_id: Option<&str>,
+            conduit_name: Option<&str>,
             post_mattermost_confirmation: bool,
         ) -> Result<String, String> {
             Ok(serde_json::json!({
                 "ok": true,
                 "project_id": project_id,
                 "task_id": task_id,
-                "workflow_id": workflow_id,
-                "workflow_name": workflow_name,
+                "conduit_id": conduit_id,
+                "conduit_name": conduit_name,
                 "post_mattermost_confirmation": post_mattermost_confirmation,
             })
             .to_string())
@@ -4938,12 +4938,12 @@ mod tests {
         assert!(names.contains(&"shell_exec"));
         assert!(names.contains(&"enforce_quality_gate"));
         assert!(names.contains(&"trigger_cursor_worker"));
-        assert!(names.contains(&"run_workflow_cycle"));
+        assert!(names.contains(&"run_conduit_cycle"));
         assert!(!names.contains(&"backlog_task_create"));
         assert!(names.contains(&"backlog_task_list"));
         assert!(names.contains(&"backlog_task_view"));
         assert!(names.contains(&"backlog_task_edit"));
-        assert!(names.contains(&"start_project_workflow"));
+        assert!(names.contains(&"start_project_conduit"));
         assert!(names.contains(&"query_project_status"));
         assert!(names.contains(&"read_project_context"));
         assert!(names.contains(&"update_project_context"));
@@ -4955,7 +4955,7 @@ mod tests {
         assert!(names.contains(&"backlog_doc_view"));
         assert!(names.contains(&"backlog_decision_view"));
         assert!(names.contains(&"record_git_action"));
-        assert!(names.contains(&"record_workflow_outcome"));
+        assert!(names.contains(&"record_conduit_outcome"));
         assert!(names.contains(&"agent_send"));
         assert!(names.contains(&"agent_spawn"));
         assert!(names.contains(&"agent_list"));
@@ -5409,7 +5409,7 @@ mod tests {
         });
         let r1 = execute_tool(
             "t1",
-            "record_workflow_outcome",
+            "record_conduit_outcome",
             &serde_json::json!({
                 "task_id": "TASK-7",
                 "success": false,
@@ -5462,7 +5462,7 @@ mod tests {
         assert!(!r2.is_error, "{}", r2.content);
         let rows = crate::pipeline_audit::take_pipeline_audit_test_buffer();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0]["event"], "workflow_run_outcome");
+        assert_eq!(rows[0]["event"], "conduit_run_outcome");
         assert_eq!(rows[0]["task_id"], "TASK-7");
         assert_eq!(rows[0]["actor"], "coordinator-hand");
         assert_eq!(rows[1]["event"], "git_action");
@@ -5709,18 +5709,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_project_workflow_tool_stub() {
+    async fn test_start_project_conduit_tool_stub() {
         let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
             roots: vec![],
             backlog_roots: vec![],
         });
         let result = execute_tool(
             "tid",
-            "start_project_workflow",
+            "start_project_conduit",
             &serde_json::json!({
                 "project_id": "550e8400-e29b-41d4-a716-446655440000",
                 "task_id": "TASK-40",
-                "workflow_name": "demo",
+                "conduit_name": "demo",
                 "post_mattermost_confirmation": true,
             }),
             Some(&k),

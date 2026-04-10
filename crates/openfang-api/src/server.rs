@@ -330,28 +330,28 @@ pub async fn build_router(
             "/api/schedules/{id}/run",
             axum::routing::post(routes::run_schedule),
         )
-        // Workflow endpoints
+        // Conduit endpoints
         .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
+            "/api/conduits",
+            axum::routing::get(routes::list_conduits).post(routes::create_conduit),
         )
         .route(
-            "/api/workflows/{id}",
-            axum::routing::get(routes::get_workflow)
-                .put(routes::update_workflow)
-                .delete(routes::delete_workflow),
+            "/api/conduits/{id}",
+            axum::routing::get(routes::get_conduit)
+                .put(routes::update_conduit)
+                .delete(routes::remove_conduit),
         )
         .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
+            "/api/conduits/{id}/run",
+            axum::routing::post(routes::run_conduit),
         )
         .route(
-            "/api/workflows/{id}/runs/{run_id}",
-            axum::routing::get(routes::get_workflow_run),
+            "/api/conduits/{id}/runs/{run_id}",
+            axum::routing::get(routes::get_conduit_run),
         )
         .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
+            "/api/conduits/{id}/runs",
+            axum::routing::get(routes::list_conduit_runs),
         )
         // Project endpoints
         .route(
@@ -457,16 +457,16 @@ pub async fn build_router(
             axum::routing::get(routes::get_project_spoke_detail),
         )
         .route(
-            "/api/projects/{id}/workflows",
-            axum::routing::get(routes::list_project_workflows),
+            "/api/projects/{id}/conduits",
+            axum::routing::get(routes::list_project_conduits),
         )
         .route(
-            "/api/projects/{id}/workflow-runs",
-            axum::routing::get(routes::list_project_workflow_runs),
+            "/api/projects/{id}/conduit-runs",
+            axum::routing::get(routes::list_project_conduit_runs),
         )
         .route(
-            "/api/projects/{id}/workflows/{workflow_id}/run",
-            axum::routing::post(routes::run_project_workflow),
+            "/api/projects/{id}/conduits/{conduit_id}/run",
+            axum::routing::post(routes::run_project_conduit),
         )
         // Backlog.md-style task API (cached via BacklogStore)
         .route(
@@ -490,8 +490,8 @@ pub async fn build_router(
             axum::routing::post(routes::backlog_complete_task),
         )
         .route(
-            "/api/projects/{id}/backlog/tasks/{task_id}/workflow-start",
-            axum::routing::post(routes::backlog_start_task_workflow),
+            "/api/projects/{id}/backlog/tasks/{task_id}/conduit-start",
+            axum::routing::post(routes::backlog_start_task_conduit),
         )
         .route(
             "/api/projects/{id}/backlog/tasks/{task_id}",

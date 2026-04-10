@@ -9,9 +9,9 @@ use dashmap::DashMap;
 use openfang_channels::bridge::channel_command_specs;
 use openfang_kernel::error::KernelError;
 use openfang_kernel::triggers::{TriggerId, TriggerPattern};
-use openfang_kernel::workflow::{
-    workflow_from_create_request_json, ErrorMode, StepAgent, StepMode, Workflow, WorkflowId,
-    WorkflowRun, WorkflowRunId, WorkflowRunState, WorkflowStep,
+use openfang_kernel::conduit::{
+    conduit_from_create_request_json, ErrorMode, StepAgent, StepMode, Conduit, ConduitId,
+    ConduitRun, ConduitRunId, ConduitRunState, ConduitStep,
 };
 use openfang_kernel::{BacklogStore, BacklogWatcherManager, OpenFangKernel};
 use openfang_runtime::kernel_handle::KernelHandle;
@@ -786,15 +786,15 @@ pub async fn shutdown(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Workflow routes
+// Conduit routes
 // ---------------------------------------------------------------------------
 
-/// POST /api/workflows — Register a new workflow.
-pub async fn create_workflow(
+/// POST /api/conduits — Register a new workflow.
+pub async fn create_conduit(
     State(state): State<Arc<AppState>>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let workflow = match workflow_from_create_request_json(&req) {
+    let workflow = match conduit_from_create_request_json(&req) {
         Ok(w) => w,
         Err(e) => {
             return (
@@ -804,27 +804,18 @@ pub async fn create_workflow(
         }
     };
 
-    if let Some(pid) = workflow.project_id {
-        if state.kernel.project_store.get(pid).is_none() {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Project not found"})),
-            );
-        }
-    }
-
-    let id = state.kernel.register_workflow(workflow.clone()).await;
-    state.kernel.persist_workflow_to_disk(&workflow);
+    let id = state.kernel.register_conduit(workflow.clone()).await;
+    state.kernel.persist_conduit_to_disk(&workflow);
 
     (
         StatusCode::CREATED,
-        Json(serde_json::json!({"workflow_id": id.to_string()})),
+        Json(serde_json::json!({"conduit_id": id.to_string()})),
     )
 }
 
-/// GET /api/workflows — List all workflows.
-pub async fn list_workflows(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let workflows = state.kernel.workflows.list_workflows().await;
+/// GET /api/conduits — List all workflows.
+pub async fn list_conduits(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let workflows = state.kernel.conduits.list_conduits().await;
     let list: Vec<serde_json::Value> = workflows
         .iter()
         .map(|w| {
@@ -841,13 +832,13 @@ pub async fn list_workflows(State(state): State<Arc<AppState>>) -> impl IntoResp
     Json(list)
 }
 
-/// POST /api/workflows/:id/run — Execute a workflow.
-pub async fn run_workflow(
+/// POST /api/conduits/:id/run — Execute a workflow.
+pub async fn run_conduit(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
+    let conduit_id = ConduitId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -859,7 +850,7 @@ pub async fn run_workflow(
 
     let input = req["input"].as_str().unwrap_or("").to_string();
 
-    match state.kernel.run_workflow(workflow_id, input, None).await {
+    match state.kernel.run_conduit(conduit_id, input, None).await {
         Ok((run_id, output)) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -869,27 +860,26 @@ pub async fn run_workflow(
             })),
         ),
         Err(KernelError::OpenFang(OpenFangError::InvalidInput(msg))) => {
-            tracing::warn!("Workflow run rejected for {id}: {msg}");
+            tracing::warn!("Conduit run rejected for {id}: {msg}");
             (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": msg})),
             )
         }
         Err(e) => {
-            tracing::warn!("Workflow run failed for {id}: {e}");
+            tracing::warn!("Conduit run failed for {id}: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workflow execution failed"})),
+                Json(serde_json::json!({"error": "Conduit execution failed"})),
             )
         }
     }
 }
 
-/// POST /api/projects/:id/workflows/:workflow_id/run — Run a workflow in project context.
+/// POST /api/projects/:id/conduits/:workflow_id/run — Run a workflow in project context.
 ///
-/// Validates [`Workflow::project_id`] matches the URL when set, and that every step agent is
-/// assigned to the project (explicit bind or workspace under a spoke).
-pub async fn run_project_workflow(
+/// Validates that every step agent is assigned to the project (explicit bind or workspace under a spoke).
+pub async fn run_project_conduit(
     State(state): State<Arc<AppState>>,
     Path((id, wf_path_id)): Path<(String, String)>,
     Json(req): Json<serde_json::Value>,
@@ -906,7 +896,7 @@ pub async fn run_project_workflow(
             .into_response();
     }
 
-    let workflow_id = WorkflowId(match wf_path_id.parse() {
+    let conduit_id = ConduitId(match wf_path_id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -921,7 +911,7 @@ pub async fn run_project_workflow(
 
     match state
         .kernel
-        .run_workflow(workflow_id, input, Some(pid))
+        .run_conduit(conduit_id, input, Some(pid))
         .await
     {
         Ok((run_id, output)) => (
@@ -945,29 +935,29 @@ pub async fn run_project_workflow(
             tracing::warn!("Project workflow run failed for {wf_path_id}: {e}");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Workflow execution failed"})),
+                Json(serde_json::json!({"error": "Conduit execution failed"})),
             )
                 .into_response()
         }
     }
 }
 
-fn workflow_run_state_str(state: &WorkflowRunState) -> &'static str {
+fn workflow_run_state_str(state: &ConduitRunState) -> &'static str {
     match state {
-        WorkflowRunState::Pending => "pending",
-        WorkflowRunState::Running => "running",
-        WorkflowRunState::Completed => "completed",
-        WorkflowRunState::Failed => "failed",
+        ConduitRunState::Pending => "pending",
+        ConduitRunState::Running => "running",
+        ConduitRunState::Completed => "completed",
+        ConduitRunState::Failed => "failed",
     }
 }
 
-fn workflow_run_duration_ms(r: &WorkflowRun) -> u64 {
+fn workflow_run_duration_ms(r: &ConduitRun) -> u64 {
     let now = chrono::Utc::now();
     let end = r.completed_at.unwrap_or(now);
     (end - r.started_at).num_milliseconds().max(0) as u64
 }
 
-fn workflow_run_detail_json(r: &WorkflowRun) -> serde_json::Value {
+fn workflow_run_detail_json(r: &ConduitRun) -> serde_json::Value {
     let steps: Vec<serde_json::Value> = r
         .step_results
         .iter()
@@ -986,8 +976,8 @@ fn workflow_run_detail_json(r: &WorkflowRun) -> serde_json::Value {
         .collect();
     serde_json::json!({
         "id": r.id.to_string(),
-        "workflow_id": r.workflow_id.to_string(),
-        "workflow_name": r.workflow_name,
+        "conduit_id": r.conduit_id.to_string(),
+        "conduit_name": r.conduit_name,
         "project_id": r.project_id.map(|p| p.to_string()),
         "state": workflow_run_state_str(&r.state),
         "input": r.input,
@@ -1000,12 +990,12 @@ fn workflow_run_detail_json(r: &WorkflowRun) -> serde_json::Value {
     })
 }
 
-/// GET /api/workflows/:id/runs/:run_id — Single run with step results.
-pub async fn get_workflow_run(
+/// GET /api/conduits/:id/runs/:run_id — Single run with step results.
+pub async fn get_conduit_run(
     State(state): State<Arc<AppState>>,
     Path((wf_path_id, run_path_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match wf_path_id.parse() {
+    let conduit_id = ConduitId(match wf_path_id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -1025,30 +1015,30 @@ pub async fn get_workflow_run(
                 .into_response();
         }
     };
-    let run_id = WorkflowRunId(run_uuid);
-    let Some(run) = state.kernel.workflows.get_run(run_id).await else {
+    let run_id = ConduitRunId(run_uuid);
+    let Some(run) = state.kernel.conduits.get_run(run_id).await else {
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow run not found"})),
+            Json(serde_json::json!({"error": "Conduit run not found"})),
         )
             .into_response();
     };
-    if run.workflow_id != workflow_id {
+    if run.conduit_id != conduit_id {
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow run not found"})),
+            Json(serde_json::json!({"error": "Conduit run not found"})),
         )
             .into_response();
     }
     Json(workflow_run_detail_json(&run)).into_response()
 }
 
-/// GET /api/workflows/:id/runs — List runs for that workflow (newest first).
-pub async fn list_workflow_runs(
+/// GET /api/conduits/:id/runs — List runs for that workflow (newest first).
+pub async fn list_conduit_runs(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
+    let conduit_id = ConduitId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -1061,15 +1051,15 @@ pub async fn list_workflow_runs(
 
     let step_count = state
         .kernel
-        .workflows
-        .get_workflow(workflow_id)
+        .conduits
+        .get_conduit(conduit_id)
         .await
         .map(|w| w.steps.len());
 
     let runs = state
         .kernel
-        .workflows
-        .list_runs_for_workflow(workflow_id, None)
+        .conduits
+        .list_runs_for_conduit(conduit_id, None)
         .await;
 
     let now = chrono::Utc::now();
@@ -1086,8 +1076,8 @@ pub async fn list_workflow_runs(
             };
             serde_json::json!({
                 "id": r.id.to_string(),
-                "workflow_id": r.workflow_id.to_string(),
-                "workflow_name": r.workflow_name,
+                "conduit_id": r.conduit_id.to_string(),
+                "conduit_name": r.conduit_name,
                 "state": workflow_run_state_str(&r.state),
                 "steps_completed": r.step_results.len(),
                 "step_count": step_count,
@@ -1101,12 +1091,12 @@ pub async fn list_workflow_runs(
     Json(list).into_response()
 }
 
-/// GET /api/workflows/:id — Get a single workflow by ID.
-pub async fn get_workflow(
+/// GET /api/conduits/:id — Get a single workflow by ID.
+pub async fn get_conduit(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
+    let conduit_id = ConduitId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -1116,7 +1106,7 @@ pub async fn get_workflow(
         }
     });
 
-    match state.kernel.workflows.get_workflow(workflow_id).await {
+    match state.kernel.conduits.get_conduit(conduit_id).await {
         Some(w) => (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -1130,18 +1120,18 @@ pub async fn get_workflow(
         ),
         None => (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            Json(serde_json::json!({"error": "Conduit not found"})),
         ),
     }
 }
 
-/// PUT /api/workflows/:id — Update a workflow definition.
-pub async fn update_workflow(
+/// PUT /api/conduits/:id — Update a workflow definition.
+pub async fn update_conduit(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Json(req): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
+    let conduit_id = ConduitId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -1151,10 +1141,10 @@ pub async fn update_workflow(
         }
     });
 
-    let Some(existing) = state.kernel.workflows.get_workflow(workflow_id).await else {
+    let Some(existing) = state.kernel.conduits.get_conduit(conduit_id).await else {
         return (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            Json(serde_json::json!({"error": "Conduit not found"})),
         );
     };
 
@@ -1210,7 +1200,7 @@ pub async fn update_workflow(
             _ => ErrorMode::Fail,
         };
 
-        steps.push(WorkflowStep {
+        steps.push(ConduitStep {
             name: step_name,
             agent,
             prompt_template: s["prompt"].as_str().unwrap_or("{{input}}").to_string(),
@@ -1221,75 +1211,39 @@ pub async fn update_workflow(
         });
     }
 
-    let project_id: Option<ProjectId> = match req.get("project_id") {
-        None => existing.project_id,
-        Some(v) if v.is_null() => None,
-        Some(v) => {
-            let Some(s) = v.as_str() else {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "project_id must be a string or null"})),
-                );
-            };
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                match s.parse::<ProjectId>() {
-                    Ok(p) => Some(p),
-                    Err(_) => {
-                        return (
-                            StatusCode::BAD_REQUEST,
-                            Json(serde_json::json!({"error": "Invalid project_id"})),
-                        );
-                    }
-                }
-            }
-        }
-    };
-
-    if let Some(pid) = project_id {
-        if state.kernel.project_store.get(pid).is_none() {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Project not found"})),
-            );
-        }
-    }
-
-    let updated = Workflow {
-        id: workflow_id,
+    let updated = Conduit {
+        id: conduit_id,
         name,
         description,
         steps,
-        project_id,
+        project_id: None,
         created_at: existing.created_at,
     };
 
     if state
         .kernel
-        .workflows
-        .update_workflow(workflow_id, updated)
+        .conduits
+        .update_conduit(conduit_id, updated)
         .await
     {
         (
             StatusCode::OK,
-            Json(serde_json::json!({"status": "updated", "workflow_id": id})),
+            Json(serde_json::json!({"status": "updated", "conduit_id": id})),
         )
     } else {
         (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            Json(serde_json::json!({"error": "Conduit not found"})),
         )
     }
 }
 
-/// DELETE /api/workflows/:id — Delete a workflow definition.
-pub async fn delete_workflow(
+/// DELETE /api/conduits/:id — Delete a workflow definition.
+pub async fn remove_conduit(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> impl IntoResponse {
-    let workflow_id = WorkflowId(match id.parse() {
+    let conduit_id = ConduitId(match id.parse() {
         Ok(u) => u,
         Err(_) => {
             return (
@@ -1299,15 +1253,15 @@ pub async fn delete_workflow(
         }
     });
 
-    if state.kernel.workflows.remove_workflow(workflow_id).await {
+    if state.kernel.conduits.remove_conduit(conduit_id).await {
         (
             StatusCode::OK,
-            Json(serde_json::json!({"status": "removed", "workflow_id": id})),
+            Json(serde_json::json!({"status": "removed", "conduit_id": id})),
         )
     } else {
         (
             StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Workflow not found"})),
+            Json(serde_json::json!({"error": "Conduit not found"})),
         )
     }
 }
@@ -1338,7 +1292,7 @@ pub use backlog_routes::{
     backlog_get_task, backlog_list_archived_milestones, backlog_list_completed,
     backlog_list_decisions, backlog_list_docs_tree, backlog_list_milestones, backlog_list_tasks,
     backlog_overview, backlog_put_task, backlog_reorder_tasks, backlog_search,
-    backlog_start_task_workflow, backlog_statistics, backlog_update_decision, backlog_update_doc,
+    backlog_start_task_conduit, backlog_statistics, backlog_update_decision, backlog_update_doc,
     backlog_update_milestone,
 };
 
@@ -1444,7 +1398,7 @@ fn project_detail_json(p: &Project) -> serde_json::Value {
         "backlog_root": admin_br,
         "spokes": spokes,
         "bound_agents": p.bound_agents,
-        "workflow_overrides": p.workflow_overrides,
+        "conduit_overrides": p.conduit_overrides,
         "mattermost_channel_id": p.mattermost_channel_id,
         "mattermost_team_name": p.mattermost_team_name,
         "mattermost_channel_name": p.mattermost_channel_name,
@@ -1771,7 +1725,7 @@ pub async fn create_project(
         },
     };
 
-    let workflow_overrides = match req.get("workflow_overrides") {
+    let conduit_overrides = match req.get("conduit_overrides") {
         None => Default::default(),
         Some(v) if v.is_null() => Default::default(),
         Some(v) => match serde_json::from_value(v.clone()) {
@@ -1780,7 +1734,7 @@ pub async fn create_project(
                 return (
                     StatusCode::BAD_REQUEST,
                     Json(
-                        serde_json::json!({"error": format!("Invalid 'workflow_overrides': {e}")}),
+                        serde_json::json!({"error": format!("Invalid 'conduit_overrides': {e}")}),
                     ),
                 );
             }
@@ -1919,7 +1873,7 @@ pub async fn create_project(
         name,
         path: PathBuf::from(path_str),
         spokes,
-        workflow_overrides,
+        conduit_overrides,
         admin_spoke,
         mattermost_channel_id,
         mattermost_team_name,
@@ -2013,15 +1967,15 @@ pub async fn update_project(
             }
         }
     }
-    if let Some(v) = req.get("workflow_overrides") {
+    if let Some(v) = req.get("conduit_overrides") {
         if !v.is_null() {
             match serde_json::from_value(v.clone()) {
-                Ok(o) => patch.workflow_overrides = Some(o),
+                Ok(o) => patch.conduit_overrides = Some(o),
                 Err(e) => {
                     return (
                         StatusCode::BAD_REQUEST,
                         Json(
-                            serde_json::json!({"error": format!("Invalid 'workflow_overrides': {e}")}),
+                            serde_json::json!({"error": format!("Invalid 'conduit_overrides': {e}")}),
                         ),
                     );
                 }
@@ -2694,8 +2648,8 @@ pub async fn list_project_spokes(
     Json(rows).into_response()
 }
 
-/// GET /api/projects/:id/workflows — scoped workflow audit rows (`?limit=N`).
-pub async fn list_project_workflows(
+/// GET /api/projects/:id/conduits — scoped pipeline audit rows (`?limit=N`).
+pub async fn list_project_conduits(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<ListProjectWorkflowsQuery>,
@@ -2726,8 +2680,8 @@ pub async fn list_project_workflows(
     Json(rows).into_response()
 }
 
-/// GET /api/projects/:id/workflow-runs — Workflow engine runs started in this project (`?limit=N`, default 50).
-pub async fn list_project_workflow_runs(
+/// GET /api/projects/:id/conduit-runs — Conduit engine runs started in this project (`?limit=N`, default 50).
+pub async fn list_project_conduit_runs(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
     Query(q): Query<ListProjectWorkflowsQuery>,
@@ -2744,21 +2698,21 @@ pub async fn list_project_workflow_runs(
             .into_response();
     }
     let lim = q.limit.unwrap_or(50).clamp(1, 500) as usize;
-    let runs = state.kernel.workflows.list_runs_for_project(pid, lim).await;
-    let mut step_counts: HashMap<WorkflowId, usize> = HashMap::new();
+    let runs = state.kernel.conduits.list_runs_for_project(pid, lim).await;
+    let mut step_counts: HashMap<ConduitId, usize> = HashMap::new();
     for r in &runs {
-        if step_counts.contains_key(&r.workflow_id) {
+        if step_counts.contains_key(&r.conduit_id) {
             continue;
         }
-        if let Some(w) = state.kernel.workflows.get_workflow(r.workflow_id).await {
-            step_counts.insert(r.workflow_id, w.steps.len());
+        if let Some(w) = state.kernel.conduits.get_conduit(r.conduit_id).await {
+            step_counts.insert(r.conduit_id, w.steps.len());
         }
     }
     let now = chrono::Utc::now();
     let list: Vec<serde_json::Value> = runs
         .iter()
         .map(|r| {
-            let step_count = step_counts.get(&r.workflow_id).copied();
+            let step_count = step_counts.get(&r.conduit_id).copied();
             let end = r.completed_at.unwrap_or(now);
             let duration_ms = (end - r.started_at).num_milliseconds().max(0) as u64;
             let input = r.input.as_str();
@@ -2769,8 +2723,8 @@ pub async fn list_project_workflow_runs(
             };
             serde_json::json!({
                 "id": r.id.to_string(),
-                "workflow_id": r.workflow_id.to_string(),
-                "workflow_name": r.workflow_name,
+                "conduit_id": r.conduit_id.to_string(),
+                "conduit_name": r.conduit_name,
                 "state": workflow_run_state_str(&r.state),
                 "steps_completed": r.step_results.len(),
                 "step_count": step_count,
@@ -6253,6 +6207,9 @@ fn resolve_allowlisted_log_path(home: &std::path::Path, key: &str) -> Option<Pat
     {
         return None;
     }
+    if let Some(p) = openfang_filetrace::resolve_trace_log_key(home, key) {
+        return Some(p);
+    }
     match key {
         "daemon" => Some(home.join("logs").join("daemon.log")),
         "openfang" => Some(home.join("openfang.log")),
@@ -6264,15 +6221,12 @@ fn resolve_allowlisted_log_path(home: &std::path::Path, key: &str) -> Option<Pat
 /// GET /api/logs/files — Metadata for allowlisted log files under `kernel.config.home_dir`.
 pub async fn logs_files_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let home = state.kernel.config.home_dir.as_path();
-    let keys: &[(&str, &str)] = &[
-        ("daemon", "daemon.log (daemon output, tee)"),
-        ("openfang", "openfang.log"),
-        ("tui", "tui.log (CLI TUI tracing)"),
-    ];
+    let mut seen: HashSet<String> = HashSet::new();
     let mut files = Vec::new();
-    for (key, label) in keys {
+
+    fn push_file_entry(files: &mut Vec<serde_json::Value>, home: &std::path::Path, key: &str, label: &str) {
         let Some(path) = resolve_allowlisted_log_path(home, key) else {
-            continue;
+            return;
         };
         let mut obj = serde_json::json!({
             "key": key,
@@ -6293,6 +6247,24 @@ pub async fn logs_files_list(State(state): State<Arc<AppState>>) -> impl IntoRes
         }
         files.push(obj);
     }
+
+    let static_keys: &[(&str, &str)] = &[
+        ("daemon", "daemon.log (daemon output, tee)"),
+        ("openfang", "openfang.log"),
+        ("tui", "tui.log (CLI TUI tracing)"),
+    ];
+    for (key, label) in static_keys {
+        seen.insert((*key).to_string());
+        push_file_entry(&mut files, home, key, label);
+    }
+
+    for (key, label) in openfang_filetrace::trace_log_catalog_entries(home) {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        push_file_entry(&mut files, home, &key, &label);
+    }
+
     Json(serde_json::json!({ "files": files }))
 }
 

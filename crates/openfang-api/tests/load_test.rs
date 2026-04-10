@@ -121,12 +121,12 @@ async fn start_test_server() -> TestServer {
         .route("/api/providers", axum::routing::get(routes::list_providers))
         .route("/api/usage", axum::routing::get(routes::usage_stats))
         .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
+            "/api/conduits",
+            axum::routing::get(routes::list_conduits).post(routes::create_conduit),
         )
         .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
+            "/api/conduits/{id}/run",
+            axum::routing::post(routes::run_conduit),
         )
         .route("/api/config", axum::routing::get(routes::get_config))
         .layer(axum::middleware::from_fn(middleware::request_logging))
@@ -450,7 +450,7 @@ async fn load_session_management() {
     );
 }
 
-/// Test: Workflow creation and listing under load.
+/// Test: Conduit creation and listing under load.
 #[tokio::test]
 async fn load_workflow_operations() {
     let server = start_test_server().await;
@@ -463,7 +463,7 @@ async fn load_workflow_operations() {
     let mut handles = Vec::new();
     for i in 0..n {
         let c = client.clone();
-        let url = format!("{}/api/workflows", server.base_url);
+        let url = format!("{}/api/conduits", server.base_url);
         handles.push(tokio::spawn(async move {
             let res = c
                 .post(&url)
@@ -501,7 +501,7 @@ async fn load_workflow_operations() {
     // List all workflows
     let start = Instant::now();
     let workflows: serde_json::Value = client
-        .get(format!("{}/api/workflows", server.base_url))
+        .get(format!("{}/api/conduits", server.base_url))
         .send()
         .await
         .unwrap()

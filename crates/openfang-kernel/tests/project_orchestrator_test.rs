@@ -1,4 +1,4 @@
-//! Per-project workflow-coordinator orchestrator (TASK-47).
+//! Per-project conduit-coordinator orchestrator (TASK-47).
 
 use openfang_kernel::OpenFangKernel;
 use openfang_types::agent::AgentId;

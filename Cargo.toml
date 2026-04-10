@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/openfang-filetrace",
     "crates/openfang-types",
     "crates/openfang-memory",
     "crates/openfang-runtime",

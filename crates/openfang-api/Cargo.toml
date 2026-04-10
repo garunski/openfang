@@ -6,6 +6,7 @@ license.workspace = true
 description = "HTTP/WebSocket API server for the OpenFang Agent OS daemon"
 
 [dependencies]
+openfang-filetrace = { path = "../openfang-filetrace" }
 openfang-types = { path = "../openfang-types" }
 openfang-kernel = { path = "../openfang-kernel" }
 openfang-runtime = { path = "../openfang-runtime" }

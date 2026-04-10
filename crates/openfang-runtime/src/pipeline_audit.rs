@@ -1,7 +1,7 @@
 //! Structured JSON audit lines for automation workflow runs.
 //!
-//! Emits `tracing` events (target `openfang_workflow_audit`, field `line` = one JSON object).
-//! Append the same lines to a file when **`OPENFANG_WORKFLOW_AUDIT_LOG`** is set to a path.
+//! Emits `tracing` events (target `openfang_conduit_audit`, field `line` = one JSON object).
+//! Append the same lines to a file when **`OPENFANG_CONDUIT_AUDIT_LOG`** is set to a path.
 
 use chrono::Utc;
 use serde::Serialize;
@@ -103,7 +103,7 @@ pub enum PipelineAuditEvent {
         actor: String,
         tool: String,
     },
-    WorkflowRunOutcome {
+    ConduitRunOutcome {
         timestamp: String,
         task_id: String,
         success: bool,
@@ -117,16 +117,16 @@ pub enum PipelineAuditEvent {
 
 pub fn emit(event: PipelineAuditEvent) {
     let v = serde_json::to_value(&event)
-        .unwrap_or_else(|_| serde_json::json!({ "event": "workflow_audit_serialize_error" }));
+        .unwrap_or_else(|_| serde_json::json!({ "event": "conduit_audit_serialize_error" }));
     ring_push(&v);
     #[cfg(test)]
     {
         PIPELINE_AUDIT_TEST_RECORDS.lock().unwrap().push(v.clone());
     }
     let line = serde_json::to_string(&v)
-        .unwrap_or_else(|_| r#"{"event":"workflow_audit_line_error"}"#.to_string());
-    info!(target: "openfang_workflow_audit", %line);
-    if let Ok(path) = std::env::var("OPENFANG_WORKFLOW_AUDIT_LOG") {
+        .unwrap_or_else(|_| r#"{"event":"conduit_audit_line_error"}"#.to_string());
+    info!(target: "openfang_conduit_audit", %line);
+    if let Ok(path) = std::env::var("OPENFANG_CONDUIT_AUDIT_LOG") {
         let path = path.trim();
         if !path.is_empty() {
             if let Ok(mut f) = std::fs::OpenOptions::new()
@@ -191,7 +191,7 @@ pub fn log_cursor_worker(
     });
 }
 
-pub fn log_workflow_run_outcome(
+pub fn log_conduit_run_outcome(
     task_id: impl Into<String>,
     success: bool,
     retry_count: u32,
@@ -199,7 +199,7 @@ pub fn log_workflow_run_outcome(
     actor: impl Into<String>,
     tool: impl Into<String>,
 ) {
-    emit(PipelineAuditEvent::WorkflowRunOutcome {
+    emit(PipelineAuditEvent::ConduitRunOutcome {
         timestamp: Utc::now().to_rfc3339(),
         task_id: task_id.into(),
         success,

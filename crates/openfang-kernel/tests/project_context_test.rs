@@ -56,7 +56,7 @@ fn project_context_file_roundtrip_and_workflow_input() {
     assert!(raw.contains("anyhow"));
     assert!(raw.contains("clippy"));
 
-    let inp = kernel.workflow_input_with_project_context(id, "TASK-99");
+    let inp = kernel.conduit_input_with_project_context(id, "TASK-99");
     assert!(inp.contains("TASK-99"));
     assert!(inp.contains("crates/foo"));
 

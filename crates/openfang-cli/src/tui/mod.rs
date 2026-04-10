@@ -272,19 +272,19 @@ impl App {
                 }
                 self.workflows.loading = false;
             }
-            AppEvent::WorkflowRunsLoaded(runs) => {
+            AppEvent::ConduitRunsLoaded(runs) => {
                 self.workflows.runs = runs;
                 if !self.workflows.runs.is_empty() {
                     self.workflows.runs_list_state.select(Some(0));
                 }
                 self.workflows.loading = false;
             }
-            AppEvent::WorkflowRunResult(result) => {
+            AppEvent::ConduitRunResult(result) => {
                 self.workflows.run_result = Some(result);
                 self.workflows.loading = false;
             }
             AppEvent::WorkflowCreated(_id) => {
-                self.workflows.status_msg = "Workflow created!".to_string();
+                self.workflows.status_msg = "Conduit created!".to_string();
                 self.refresh_workflows();
             }
             AppEvent::TriggerListLoaded(list) => {
@@ -1430,7 +1430,7 @@ impl App {
                 steps_json,
             } => {
                 if let Some(backend) = self.backend.to_ref() {
-                    event::spawn_create_workflow(
+                    event::spawn_create_conduit(
                         backend,
                         name,
                         description,
@@ -1442,7 +1442,7 @@ impl App {
             workflows::WorkflowAction::RunWorkflow { id, input } => {
                 if let Some(backend) = self.backend.to_ref() {
                     self.workflows.loading = true;
-                    event::spawn_run_workflow(backend, id, input, self.event_tx.clone());
+                    event::spawn_run_conduit(backend, id, input, self.event_tx.clone());
                 }
             }
         }

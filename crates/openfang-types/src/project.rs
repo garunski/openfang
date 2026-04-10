@@ -44,7 +44,7 @@ impl std::str::FromStr for ProjectId {
 /// Optional workflow settings for a project.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
-pub struct ProjectWorkflowOverrides {
+pub struct ProjectConduitOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_retries: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -81,7 +81,7 @@ impl Default for SpokeDescriptor {
 pub struct ProjectPatch {
     pub name: Option<String>,
     pub spokes: Option<Vec<SpokeDescriptor>>,
-    pub workflow_overrides: Option<ProjectWorkflowOverrides>,
+    pub conduit_overrides: Option<ProjectConduitOverrides>,
     /// `None` = no change; `Some(None)` = clear; `Some(Some(name))` = set.
     pub admin_spoke: Option<Option<String>>,
     /// Mattermost channel id: same semantics as [`Self::admin_spoke`].
@@ -101,7 +101,7 @@ pub struct Project {
     pub name: String,
     pub path: PathBuf,
     pub spokes: Vec<SpokeDescriptor>,
-    pub workflow_overrides: ProjectWorkflowOverrides,
+    pub conduit_overrides: ProjectConduitOverrides,
     /// Explicitly bound agent UUID strings (dashboard / API); persisted in `projects.json`.
     #[serde(default)]
     pub bound_agents: Vec<String>,
@@ -116,7 +116,7 @@ pub struct Project {
     pub mattermost_team_name: Option<String>,
     #[serde(default)]
     pub mattermost_channel_name: Option<String>,
-    /// Agent UUID for the per-project `workflow-coordinator` hand (Mattermost orchestrator).
+    /// Agent UUID for the per-project `conduit-coordinator` hand (Mattermost orchestrator).
     #[serde(default)]
     pub orchestrator_agent_id: Option<String>,
     /// Agent ids that were explicitly unbound or were a previous project orchestrator (capped).
@@ -134,7 +134,7 @@ impl Default for Project {
             name: String::new(),
             path: PathBuf::new(),
             spokes: Vec::new(),
-            workflow_overrides: ProjectWorkflowOverrides::default(),
+            conduit_overrides: ProjectConduitOverrides::default(),
             bound_agents: Vec::new(),
             admin_spoke: None,
             mattermost_channel_id: None,
@@ -327,7 +327,7 @@ impl ProjectContext {
     }
 
     /// Human-readable block prepended to workflow input (truncated to `max_chars`).
-    pub fn workflow_prompt_section(&self, max_chars: usize) -> String {
+    pub fn conduit_prompt_section(&self, max_chars: usize) -> String {
         let mut parts: Vec<String> = Vec::new();
         if !self.repo_structure_summary.trim().is_empty() {
             parts.push(format!(
@@ -453,7 +453,7 @@ mod tests {
 
     #[test]
     fn project_json_default_bound_agents_when_omitted() {
-        let j = r#"{"id":"550e8400-e29b-41d4-a716-446655440000","name":"n","path":"/p","spokes":[],"workflow_overrides":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
+        let j = r#"{"id":"550e8400-e29b-41d4-a716-446655440000","name":"n","path":"/p","spokes":[],"conduit_overrides":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}"#;
         let p: Project = serde_json::from_str(j).unwrap();
         assert!(p.bound_agents.is_empty());
         assert!(p.admin_spoke.is_none());
@@ -481,11 +481,11 @@ mod tests {
     }
 
     #[test]
-    fn project_workflow_overrides_json_omits_none() {
-        let empty = serde_json::to_string(&ProjectWorkflowOverrides::default()).unwrap();
+    fn project_conduit_overrides_json_omits_none() {
+        let empty = serde_json::to_string(&ProjectConduitOverrides::default()).unwrap();
         assert_eq!(empty, "{}");
 
-        let partial = ProjectWorkflowOverrides {
+        let partial = ProjectConduitOverrides {
             max_retries: Some(3),
             model_routing: None,
             ..Default::default()
@@ -561,7 +561,7 @@ mod tests {
         assert!(ctx.repo_structure_summary.contains("crates"));
         assert_eq!(ctx.decision_log.len(), 1);
         assert_eq!(ctx.past_failures.len(), 1);
-        let sec = ctx.workflow_prompt_section(10_000);
+        let sec = ctx.conduit_prompt_section(10_000);
         assert!(sec.contains("Accumulated project"));
         assert!(sec.contains("TASK-1"));
     }

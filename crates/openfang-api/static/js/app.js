@@ -323,7 +323,7 @@ var APP_TOP_PAGES = [
   'overview',
   'projects',
   'agents',
-  'workflows',
+  'conduits',
   'scheduler',
   'channels',
   'skills',
@@ -335,12 +335,13 @@ var APP_TOP_PAGES = [
   'wizard',
 ];
 var APP_PAGE_REDIRECTS = {
+  workflows: 'conduits',
   chat: 'agents/chat',
   templates: 'agents/chat',
   sessions: 'agents/sessions',
   approvals: 'agents/approvals',
   comms: 'agents/comms',
-  triggers: 'workflows',
+  triggers: 'conduits',
   cron: 'scheduler',
   schedules: 'scheduler',
   memory: 'agents/sessions',

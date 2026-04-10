@@ -1140,9 +1140,9 @@ pub struct KernelConfig {
     #[serde(default)]
     pub auth: AuthConfig,
     /// Directory for auto-loading workflow JSON files on startup.
-    /// Defaults to `~/.openfang/workflows`. Set to empty string to disable.
+    /// Defaults to `~/.openfang/conduits`. Set to empty string to disable.
     #[serde(default)]
-    pub workflows_dir: Option<PathBuf>,
+    pub conduits_dir: Option<PathBuf>,
     /// Heartbeat monitor settings.
     #[serde(default)]
     pub heartbeat: HeartbeatSettings,
@@ -1208,7 +1208,7 @@ pub struct AutomationConfig {
     /// Drop `decision_log` entries older than this many days (`0` = no age pruning).
     #[serde(default = "default_project_context_decision_max_age_days")]
     pub project_context_decision_max_age_days: u32,
-    /// Max characters injected into workflow input from [`ProjectContext::workflow_prompt_section`].
+    /// Max characters injected into workflow input from [`ProjectContext::conduit_prompt_section`].
     #[serde(default = "default_project_context_prompt_max_chars")]
     pub project_context_prompt_max_chars: usize,
     /// Default env var for GitHub API token used by `git_create_pr` when a project has no override.
@@ -1633,7 +1633,7 @@ impl Default for KernelConfig {
             provider_enabled: HashMap::new(),
             oauth: OAuthConfig::default(),
             auth: AuthConfig::default(),
-            workflows_dir: None,
+            conduits_dir: None,
             heartbeat: HeartbeatSettings::default(),
             automation: AutomationConfig::default(),
         }

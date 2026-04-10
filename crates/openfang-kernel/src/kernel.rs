@@ -11,7 +11,7 @@ use crate::registry::AgentRegistry;
 use crate::scheduler::AgentScheduler;
 use crate::supervisor::Supervisor;
 use crate::triggers::{TriggerEngine, TriggerId, TriggerPattern};
-use crate::workflow::{StepAgent, StepMode, Workflow, WorkflowEngine, WorkflowId, WorkflowRunId};
+use crate::conduit::{StepAgent, StepMode, Conduit, ConduitEngine, ConduitId, ConduitRunId};
 use openfang_types::project::{Project, ProjectId};
 
 use openfang_memory::MemorySubstrate;
@@ -64,7 +64,7 @@ impl LlmDriver for StubDriver {
 fn pipeline_coordinator_agent_display_name(project: &Project) -> String {
     let raw = project.name.trim();
     if raw.is_empty() {
-        return "Workflow coordinator".to_string();
+        return "Conduit coordinator".to_string();
     }
     let mut label = String::new();
     for ch in raw.chars().take(80) {
@@ -76,9 +76,9 @@ fn pipeline_coordinator_agent_display_name(project: &Project) -> String {
     }
     let label = label.trim().to_string();
     if label.is_empty() {
-        return "Workflow coordinator".to_string();
+        return "Conduit coordinator".to_string();
     }
-    format!("Workflow · {label}")
+    format!("Conduit · {label}")
 }
 
 pub struct OpenFangKernel {
@@ -96,14 +96,16 @@ pub struct OpenFangKernel {
     pub memory: Arc<MemorySubstrate>,
     /// Process supervisor.
     pub supervisor: Supervisor,
-    /// Workflow engine.
-    pub workflows: WorkflowEngine,
+    /// Conduit engine.
+    pub conduits: ConduitEngine,
     /// Event-driven trigger engine.
     pub triggers: TriggerEngine,
     /// Background agent executor.
     pub background: BackgroundExecutor,
     /// Merkle hash chain audit trail.
     pub audit_log: Arc<AuditLog>,
+    /// Scoped rolling trace files (`<home>/logs/trace/`, 48h archive retention).
+    pub scoped_file_trace: Arc<openfang_filetrace::ScopedFileTrace>,
     /// Cost metering engine.
     pub metering: Arc<MeteringEngine>,
     /// Default LLM driver (from kernel config).
@@ -182,7 +184,7 @@ pub struct OpenFangKernel {
     /// Hot-reloadable default model override (set via config hot-reload, read at agent spawn).
     pub default_model_override:
         std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
-    /// Hot-reloadable orchestrator default model (read when spawning workflow-coordinator agents).
+    /// Hot-reloadable orchestrator default model (read when spawning conduit-coordinator agents).
     pub orchestrator_default_model_override:
         std::sync::RwLock<Option<openfang_types::config::DefaultModelConfig>>,
     /// Hot-reloadable memory embedding default (Settings); rebuilds embedding driver on change.
@@ -991,6 +993,13 @@ impl OpenFangKernel {
             &config.home_dir,
         ));
 
+        let scoped_file_trace = std::sync::Arc::new(
+            openfang_filetrace::ScopedFileTrace::new(&config.home_dir).map_err(|e| {
+                KernelError::BootFailed(format!("Failed to init scoped trace logs: {e}"))
+            })?,
+        );
+        openfang_filetrace::spawn_retention_task(std::sync::Arc::clone(&scoped_file_trace));
+
         let kernel = Self {
             config,
             registry: AgentRegistry::new(),
@@ -999,10 +1008,11 @@ impl OpenFangKernel {
             scheduler: AgentScheduler::new(),
             memory: memory.clone(),
             supervisor,
-            workflows: WorkflowEngine::new(),
+            conduits: ConduitEngine::new(),
             triggers: TriggerEngine::new(),
             background,
             audit_log: Arc::new(AuditLog::with_db(memory.usage_conn())),
+            scoped_file_trace,
             metering,
             default_driver: driver,
             wasm_sandbox,
@@ -1218,6 +1228,7 @@ impl OpenFangKernel {
         }
 
         info!("OpenFang kernel booted successfully");
+        kernel.scoped_file_trace.system().info("Kernel boot complete");
         Ok(kernel)
     }
 
@@ -1533,6 +1544,17 @@ impl OpenFangKernel {
             KernelError::OpenFang(OpenFangError::AgentNotFound(agent_id.to_string()))
         })?;
 
+        let preview: String = message.chars().take(240).collect();
+        if let Some(sink) = self.scoped_file_trace.agent(&agent_id.to_string()) {
+            let sn = sender_name.as_deref().unwrap_or("-");
+            sink.info(&format!(
+                "agent_message_in agent={} chars={} sender_name={} preview={preview:?}",
+                entry.name,
+                message.chars().count(),
+                sn
+            ));
+        }
+
         // Dispatch based on module type
         let result = if entry.manifest.module.starts_with("wasm:") {
             self.execute_wasm_agent(&entry, message, kernel_handle)
@@ -1572,6 +1594,13 @@ impl OpenFangKernel {
                     "ok",
                 );
 
+                if let Some(sink) = self.scoped_file_trace.agent(&agent_id.to_string()) {
+                    sink.info(&format!(
+                        "agent_message_out tokens_in={} tokens_out={}",
+                        result.total_usage.input_tokens, result.total_usage.output_tokens
+                    ));
+                }
+
                 Ok(result)
             }
             Err(e) => {
@@ -1586,6 +1615,9 @@ impl OpenFangKernel {
                 // Record the failure in supervisor for health reporting
                 self.supervisor.record_panic();
                 warn!(agent_id = %agent_id, error = %e, "Agent loop failed — recorded in supervisor");
+                if let Some(sink) = self.scoped_file_trace.agent(&agent_id.to_string()) {
+                    sink.error(&format!("agent_message_failed error={e}"));
+                }
                 Err(e)
             }
         }
@@ -3771,8 +3803,8 @@ impl OpenFangKernel {
         Ok(())
     }
 
-    /// Provider/model/credentials for the per-project workflow-coordinator manifest.
-    fn resolve_workflow_coordinator_llm(
+    /// Provider/model/credentials for the per-project conduit-coordinator manifest.
+    fn resolve_conduit_coordinator_llm(
         &self,
         def: &openfang_hands::HandDefinition,
     ) -> (String, String, Option<String>, Option<String>) {
@@ -3829,7 +3861,7 @@ impl OpenFangKernel {
         )
     }
 
-    /// Spawns a dedicated `workflow-coordinator` agent for `project` (readable name; workspace dir is unique per project id).
+    /// Spawns a dedicated `conduit-coordinator` agent for `project` (readable name; workspace dir is unique per project id).
     pub fn activate_pipeline_coordinator_for_project(
         &self,
         project: &Project,
@@ -3837,7 +3869,7 @@ impl OpenFangKernel {
         use openfang_hands::HandError;
         use std::collections::HashMap;
 
-        const HAND_ID: &str = "workflow-coordinator";
+        const HAND_ID: &str = "conduit-coordinator";
 
         let def = self
             .hand_registry
@@ -3866,13 +3898,13 @@ impl OpenFangKernel {
             })?;
 
         let (hand_provider, hand_model, orch_key_env, orch_base_url) =
-            self.resolve_workflow_coordinator_llm(&def);
+            self.resolve_conduit_coordinator_llm(&def);
 
         let agent_name = pipeline_coordinator_agent_display_name(project);
         let workspace_dir = self
             .config
             .effective_workspaces_dir()
-            .join(format!("project-{}-workflow-coordinator", project.id));
+            .join(format!("project-{}-conduit-coordinator", project.id));
 
         let mut manifest = AgentManifest {
             name: agent_name,
@@ -4050,7 +4082,7 @@ impl OpenFangKernel {
             instance = %instance.instance_id,
             agent = %agent_id,
             project_id = %project.id,
-            "Per-project workflow-coordinator activated"
+            "Per-project conduit-coordinator activated"
         );
 
         self.persist_hand_state();
@@ -4184,7 +4216,7 @@ impl OpenFangKernel {
     }
 
     /// Prepends persisted project context to workflow initial input when non-empty.
-    pub fn workflow_input_with_project_context(
+    pub fn conduit_input_with_project_context(
         &self,
         project_id: ProjectId,
         task_id: &str,
@@ -4192,12 +4224,12 @@ impl OpenFangKernel {
         let tid = task_id.trim();
         let ctx = self.load_project_context_resolved(project_id);
         let section =
-            ctx.workflow_prompt_section(self.config.automation.project_context_prompt_max_chars);
+            ctx.conduit_prompt_section(self.config.automation.project_context_prompt_max_chars);
         if section.is_empty() {
             tid.to_string()
         } else {
             format!(
-                "{section}\n\n---\n\n**Workflow task id:** `{tid}`\nUse this task id for backlog and pipeline steps."
+                "{section}\n\n---\n\n**Conduit task id:** `{tid}`\nUse this task id for backlog and pipeline steps."
             )
         }
     }
@@ -4230,11 +4262,11 @@ impl OpenFangKernel {
     }
 
     /// Env var holding GitHub PAT for `git_create_pr` (project override → `[automation].github_token_env` → `GITHUB_TOKEN`).
-    pub fn github_token_env_for_workflow(&self, project_id: &str) -> String {
+    pub fn github_token_env_for_conduit(&self, project_id: &str) -> String {
         use std::str::FromStr;
         if let Ok(id) = ProjectId::from_str(project_id.trim()) {
             if let Some(p) = self.project_store.get(id) {
-                if let Some(ref e) = p.workflow_overrides.github_token_env {
+                if let Some(ref e) = p.conduit_overrides.github_token_env {
                     let t = e.trim();
                     if !t.is_empty() {
                         return t.to_string();
@@ -4253,12 +4285,12 @@ impl OpenFangKernel {
     }
 
     /// Branch name template with `{task_id}` for `git_create_branch`.
-    pub fn workflow_git_branch_template(&self, project_id: &str) -> String {
+    pub fn conduit_git_branch_template(&self, project_id: &str) -> String {
         use std::str::FromStr;
         const DEF: &str = "openfang/task-{task_id}";
         if let Ok(id) = ProjectId::from_str(project_id.trim()) {
             if let Some(p) = self.project_store.get(id) {
-                if let Some(ref t) = p.workflow_overrides.git_branch_name_template {
+                if let Some(ref t) = p.conduit_overrides.git_branch_name_template {
                     let s = t.trim();
                     if !s.is_empty() {
                         return s.to_string();
@@ -4512,12 +4544,12 @@ impl OpenFangKernel {
     }
 
     /// Register a workflow definition.
-    pub async fn register_workflow(&self, workflow: Workflow) -> WorkflowId {
-        self.workflows.register(workflow).await
+    pub async fn register_conduit(&self, workflow: Conduit) -> ConduitId {
+        self.conduits.register(workflow).await
     }
 
     /// Resolve a workflow step's agent from the registry (by id or name).
-    pub fn resolve_workflow_agent(&self, agent_ref: &StepAgent) -> Option<(AgentId, String)> {
+    pub fn resolve_conduit_agent(&self, agent_ref: &StepAgent) -> Option<(AgentId, String)> {
         match agent_ref {
             StepAgent::ById { id } => {
                 let agent_id: AgentId = id.parse().ok()?;
@@ -4531,28 +4563,35 @@ impl OpenFangKernel {
         }
     }
 
-    /// Like [`Self::resolve_workflow_agent`], but maps bundled workflow name `workflow-coordinator-hand`
+    /// Like [`Self::resolve_conduit_agent`], but maps bundled workflow name `conduit-coordinator-hand`
     /// to this project's [`Project::orchestrator_agent_id`]. Per-project coordinators are spawned with
-    /// a display name (`Workflow · …`), not the hand manifest name, so JSON workflows must resolve via
+    /// a display name (`Conduit · …`), not the hand manifest name, so JSON workflows must resolve via
     /// the stored orchestrator id when `project_id` is known.
-    pub fn resolve_workflow_step_agent(
+    pub fn resolve_conduit_step_agent(
         &self,
         agent_ref: &StepAgent,
         project_id: Option<ProjectId>,
     ) -> Option<(AgentId, String)> {
-        const WORKFLOW_COORD_HAND: &str = "workflow-coordinator-hand";
+        const CONDUIT_COORD_HAND: &str = "conduit-coordinator-hand";
         if let Some(pid) = project_id {
             if let StepAgent::ByName { name } = agent_ref {
-                if name.trim().eq_ignore_ascii_case(WORKFLOW_COORD_HAND) {
-                    let proj = self.project_store.get(pid)?;
-                    let raw = proj.orchestrator_agent_id.as_ref()?.trim();
-                    let agent_id: AgentId = raw.parse().ok()?;
-                    let entry = self.registry.get(agent_id)?;
-                    return Some((agent_id, entry.name.clone()));
+                if name.trim().eq_ignore_ascii_case(CONDUIT_COORD_HAND) {
+                    if let Some(proj) = self.project_store.get(pid) {
+                        if let Some(raw) = proj.orchestrator_agent_id.as_ref() {
+                            let raw = raw.trim();
+                            if !raw.is_empty() {
+                                if let Ok(agent_id) = raw.parse::<AgentId>() {
+                                    if let Some(entry) = self.registry.get(agent_id) {
+                                        return Some((agent_id, entry.name.clone()));
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-        self.resolve_workflow_agent(agent_ref)
+        self.resolve_conduit_agent(agent_ref)
     }
 
     /// True when the agent is explicitly bound to the project or its workspace is under a spoke.
@@ -4570,9 +4609,9 @@ impl OpenFangKernel {
         project.workspace_in_spoke_scope(ws.as_path())
     }
 
-    fn validate_workflow_project_agents(
+    fn validate_conduit_project_agents(
         &self,
-        workflow: &Workflow,
+        workflow: &Conduit,
         project_id: ProjectId,
     ) -> Result<(), KernelError> {
         let project = self.project_store.get(project_id).ok_or_else(|| {
@@ -4585,7 +4624,7 @@ impl OpenFangKernel {
                 continue;
             }
             let (agent_id, agent_name) =
-                self.resolve_workflow_step_agent(&step.agent, Some(project_id))
+                self.resolve_conduit_step_agent(&step.agent, Some(project_id))
                     .ok_or_else(|| {
                     KernelError::OpenFang(OpenFangError::InvalidInput(format!(
                         "Agent not found for workflow step '{}'",
@@ -4604,48 +4643,52 @@ impl OpenFangKernel {
 
     /// Run a workflow pipeline end-to-end.
     ///
-    /// `project_context` is set when starting from the dashboard project view. It is merged with
-    /// [`Workflow::project_id`]: if the workflow is assigned to a project, every step agent must
-    /// belong to that project; if only `project_context` is set, the same checks apply for that project.
-    pub async fn run_workflow(
+    /// `project_context` is set when starting from the dashboard project view or project-scoped
+    /// tools. Conduit definitions are global; only this caller-supplied context is used for
+    /// per-project agent validation and run metadata ([`ConduitRun::project_id`]).
+    pub async fn run_conduit(
         &self,
-        workflow_id: WorkflowId,
+        conduit_id: ConduitId,
         input: String,
         project_context: Option<ProjectId>,
-    ) -> KernelResult<(WorkflowRunId, String)> {
+    ) -> KernelResult<(ConduitRunId, String)> {
         let wf_def = self
-            .workflows
-            .get_workflow(workflow_id)
+            .conduits
+            .get_conduit(conduit_id)
             .await
             .ok_or_else(|| {
-                KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
+                KernelError::OpenFang(OpenFangError::Internal("Conduit not found".to_string()))
             })?;
 
-        let effective_project = match (wf_def.project_id, project_context) {
-            (Some(wf_pid), Some(req_pid)) if wf_pid != req_pid => {
-                return Err(KernelError::OpenFang(OpenFangError::InvalidInput(format!(
-                    "Workflow is assigned to project {wf_pid} but run was requested for project {req_pid}"
-                ))));
-            }
-            (Some(wf_pid), _) => Some(wf_pid),
-            (None, Some(req_pid)) => Some(req_pid),
-            (None, None) => None,
-        };
+        let effective_project = project_context;
 
         if let Some(pid) = effective_project {
-            self.validate_workflow_project_agents(&wf_def, pid)?;
+            self.validate_conduit_project_agents(&wf_def, pid)?;
         }
 
         let run_id = self
-            .workflows
-            .create_run(workflow_id, input, effective_project)
+            .conduits
+            .create_run(conduit_id, input, effective_project)
             .await
             .ok_or_else(|| {
-                KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
+                KernelError::OpenFang(OpenFangError::Internal("Conduit not found".to_string()))
             })?;
 
+        self.scoped_file_trace.system().info(&format!(
+            "conduit_run start run_id={run_id} conduit_id={conduit_id} conduit_name={} project={effective_project:?}",
+            wf_def.name
+        ));
+        if let Some(pid) = effective_project {
+            if let Some(sink) = self.scoped_file_trace.project(&pid.to_string()) {
+                sink.info(&format!(
+                    "conduit_run start run_id={run_id} conduit_id={conduit_id} name={}",
+                    wf_def.name
+                ));
+            }
+        }
+
         let resolver =
-            |agent_ref: &StepAgent| self.resolve_workflow_step_agent(agent_ref, effective_project);
+            |agent_ref: &StepAgent| self.resolve_conduit_step_agent(agent_ref, effective_project);
 
         // Message sender: sends to agent and returns (output, in_tokens, out_tokens)
         let send_message = |agent_id: AgentId, message: String| async move {
@@ -4662,22 +4705,26 @@ impl OpenFangKernel {
         };
 
         // SECURITY: Global workflow timeout to prevent runaway execution.
-        // Must cover bundled multi-step templates (e.g. workflow-doc-to-tasks: 900+7200+900s step budgets).
+        // Must cover bundled multi-step templates (e.g. conduit-doc-to-tasks: 900+7200+900s step budgets).
         const MAX_WORKFLOW_SECS: u64 = 10_800; // 3 hours
 
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(MAX_WORKFLOW_SECS),
-            self.workflows.execute_run(run_id, resolver, send_message),
+            self.conduits.execute_run(run_id, resolver, send_message),
         )
         .await
         .map_err(|_| {
             KernelError::OpenFang(OpenFangError::Internal(format!(
-                "Workflow timed out after {MAX_WORKFLOW_SECS}s"
+                "Conduit timed out after {MAX_WORKFLOW_SECS}s"
             )))
         })?
         .map_err(|e| {
-            KernelError::OpenFang(OpenFangError::Internal(format!("Workflow failed: {e}")))
+            KernelError::OpenFang(OpenFangError::Internal(format!("Conduit failed: {e}")))
         })?;
+
+        self.scoped_file_trace.system().info(&format!(
+            "conduit_run completed run_id={run_id} conduit_id={conduit_id}"
+        ));
 
         Ok((run_id, output))
     }
@@ -4708,36 +4755,36 @@ impl OpenFangKernel {
         Ok(root)
     }
 
-    async fn resolve_workflow_id_for_tool(
+    async fn resolve_conduit_id_for_tool(
         &self,
-        workflow_id: Option<&str>,
-        workflow_name: Option<&str>,
-    ) -> Result<WorkflowId, String> {
-        if let Some(raw) = workflow_id.map(str::trim).filter(|s| !s.is_empty()) {
+        conduit_id: Option<&str>,
+        conduit_name: Option<&str>,
+    ) -> Result<ConduitId, String> {
+        if let Some(raw) = conduit_id.map(str::trim).filter(|s| !s.is_empty()) {
             let u = uuid::Uuid::parse_str(raw)
-                .map_err(|_| format!("Invalid workflow_id UUID: {raw}"))?;
-            return Ok(WorkflowId(u));
+                .map_err(|_| format!("Invalid conduit_id UUID: {raw}"))?;
+            return Ok(ConduitId(u));
         }
-        if let Some(name) = workflow_name.map(str::trim).filter(|s| !s.is_empty()) {
-            let list = self.workflows.list_workflows().await;
+        if let Some(name) = conduit_name.map(str::trim).filter(|s| !s.is_empty()) {
+            let list = self.conduits.list_conduits().await;
             let found = list
                 .iter()
                 .find(|w| w.name.eq_ignore_ascii_case(name))
                 .ok_or_else(|| {
                     format!(
-                        "No workflow named '{name}'. Register workflows or pass workflow_id UUID."
+                        "No conduit named '{name}'. Register conduits or pass conduit_id UUID."
                     )
                 })?;
             return Ok(found.id);
         }
-        Err("Provide workflow_id (UUID) or workflow_name.".to_string())
+        Err("Provide conduit_id (UUID) or conduit_name.".to_string())
     }
 
     /// Auto-load workflow definitions from a directory.
     ///
     /// Scans the given directory for `.json` files, deserializes each as a
-    /// `Workflow`, and registers it. Invalid files are skipped with a warning.
-    pub async fn load_workflows_from_dir(&self, dir: &std::path::Path) -> usize {
+    /// `Conduit`, and registers it. Invalid files are skipped with a warning.
+    pub async fn load_conduits_from_dir(&self, dir: &std::path::Path) -> usize {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(e) => {
@@ -4761,10 +4808,10 @@ impl OpenFangKernel {
                     continue;
                 }
             };
-            match serde_json::from_str::<Workflow>(&content) {
+            match serde_json::from_str::<Conduit>(&content) {
                 Ok(wf) => {
                     let name = wf.name.clone();
-                    let wf_id = self.register_workflow(wf).await;
+                    let wf_id = self.register_conduit(wf).await;
                     tracing::info!(path = ?path, id = %wf_id, name = %name, "Auto-loaded workflow");
                     count += 1;
                 }
@@ -4777,12 +4824,12 @@ impl OpenFangKernel {
     }
 
     /// Persist a workflow definition next to other hub workflow JSON files.
-    pub fn persist_workflow_to_disk(&self, workflow: &Workflow) {
+    pub fn persist_conduit_to_disk(&self, workflow: &Conduit) {
         let wf_dir = self
             .config
-            .workflows_dir
+            .conduits_dir
             .clone()
-            .unwrap_or_else(|| self.config.home_dir.join("workflows"));
+            .unwrap_or_else(|| self.config.home_dir.join("conduits"));
         if let Err(e) = std::fs::create_dir_all(&wf_dir) {
             warn!(error = %e, "Failed to create workflows directory");
             return;
@@ -4799,93 +4846,93 @@ impl OpenFangKernel {
     }
 
     /// Load workflow JSON from the configured hub directory, then install bundled defaults.
-    pub async fn init_default_workflows(&self) {
+    pub async fn init_default_conduits(&self) {
         let wf_dir = self
             .config
-            .workflows_dir
+            .conduits_dir
             .clone()
-            .unwrap_or_else(|| self.config.home_dir.join("workflows"));
+            .unwrap_or_else(|| self.config.home_dir.join("conduits"));
         if wf_dir.exists() {
-            let count = self.load_workflows_from_dir(&wf_dir).await;
+            let count = self.load_conduits_from_dir(&wf_dir).await;
             if count > 0 {
                 info!("Auto-loaded {count} workflow(s) from {}", wf_dir.display());
             }
         }
-        self.ensure_bundled_workflow_full_cycle().await;
-        self.ensure_bundled_workflow_doc_to_tasks().await;
+        self.ensure_bundled_conduit_full_cycle().await;
+        self.ensure_bundled_conduit_doc_to_tasks().await;
     }
 
-    async fn ensure_bundled_workflow_full_cycle(&self) {
-        use crate::workflow::{
-            workflow_from_create_request_json, BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME,
+    async fn ensure_bundled_conduit_full_cycle(&self) {
+        use crate::conduit::{
+            conduit_from_create_request_json, BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME,
         };
 
-        let list = self.workflows.list_workflows().await;
+        let list = self.conduits.list_conduits().await;
         if list
             .iter()
-            .any(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME)
+            .any(|w| w.name == BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME)
         {
             return;
         }
 
         let v: serde_json::Value = serde_json::from_str(include_str!(
-            "../bundled/workflows/workflow-full-cycle.json"
+            "../bundled/conduits/conduit-full-cycle.json"
         ))
-        .expect("bundled workflow-full-cycle.json must be valid JSON");
+        .expect("bundled conduit-full-cycle.json must be valid JSON");
 
-        let wf = match workflow_from_create_request_json(&v) {
+        let wf = match conduit_from_create_request_json(&v) {
             Ok(w) => w,
             Err(e) => {
                 tracing::error!(
                     error = %e,
-                    "Invalid bundled workflow-full-cycle workflow template"
+                    "Invalid bundled conduit-full-cycle workflow template"
                 );
                 return;
             }
         };
 
-        let id = self.register_workflow(wf.clone()).await;
-        self.persist_workflow_to_disk(&wf);
+        let id = self.register_conduit(wf.clone()).await;
+        self.persist_conduit_to_disk(&wf);
         info!(
-            workflow_id = %id,
+            conduit_id = %id,
             name = %wf.name,
             "Installed bundled default workflow"
         );
     }
 
-    async fn ensure_bundled_workflow_doc_to_tasks(&self) {
-        use crate::workflow::{
-            workflow_from_create_request_json, BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME,
+    async fn ensure_bundled_conduit_doc_to_tasks(&self) {
+        use crate::conduit::{
+            conduit_from_create_request_json, BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME,
         };
 
-        let list = self.workflows.list_workflows().await;
+        let list = self.conduits.list_conduits().await;
         if list
             .iter()
-            .any(|w| w.name == BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME)
+            .any(|w| w.name == BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME)
         {
             return;
         }
 
         let v: serde_json::Value = serde_json::from_str(include_str!(
-            "../bundled/workflows/workflow-doc-to-tasks.json"
+            "../bundled/conduits/conduit-doc-to-tasks.json"
         ))
-        .expect("bundled workflow-doc-to-tasks.json must be valid JSON");
+        .expect("bundled conduit-doc-to-tasks.json must be valid JSON");
 
-        let wf = match workflow_from_create_request_json(&v) {
+        let wf = match conduit_from_create_request_json(&v) {
             Ok(w) => w,
             Err(e) => {
                 tracing::error!(
                     error = %e,
-                    "Invalid bundled workflow-doc-to-tasks workflow template"
+                    "Invalid bundled conduit-doc-to-tasks workflow template"
                 );
                 return;
             }
         };
 
-        let id = self.register_workflow(wf.clone()).await;
-        self.persist_workflow_to_disk(&wf);
+        let id = self.register_conduit(wf.clone()).await;
+        self.persist_conduit_to_disk(&wf);
         info!(
-            workflow_id = %id,
+            conduit_id = %id,
             name = %wf.name,
             "Installed bundled doc-to-tasks workflow"
         );
@@ -4904,7 +4951,7 @@ impl OpenFangKernel {
             info!("Restoring {} persisted hand(s)", saved_hands.len());
             for (hand_id, config, old_agent_id) in saved_hands {
                 // Per-project workflow coordinators use unique agent IDs; re-sync from `projects.json`.
-                if hand_id == "workflow-coordinator" {
+                if hand_id == "conduit-coordinator" {
                     if let Some(pid_s) = config.get("openfang_project_id").and_then(|v| v.as_str())
                     {
                         if let Ok(pid) = pid_s.parse::<ProjectId>() {
@@ -4917,7 +4964,7 @@ impl OpenFangKernel {
                                             hand = %hand_id,
                                             project_id = %pid,
                                             error = %e,
-                                            "Failed to restore per-project workflow-coordinator"
+                                            "Failed to restore per-project conduit-coordinator"
                                         );
                                     }
                                     continue;
@@ -5144,11 +5191,11 @@ impl OpenFangKernel {
             });
         }
 
-        // Auto-load hub workflows and install bundled defaults (e.g. workflow-full-cycle)
+        // Auto-load hub workflows and install bundled defaults (e.g. conduit-full-cycle)
         {
             let kernel = Arc::clone(self);
             tokio::spawn(async move {
-                kernel.init_default_workflows().await;
+                kernel.init_default_conduits().await;
             });
         }
 
@@ -6541,8 +6588,8 @@ impl OpenFangKernel {
                     }
                 }
             }
-            CronAction::WorkflowRun {
-                workflow_id,
+            CronAction::ConduitRun {
+                conduit_id,
                 input,
                 timeout_secs,
             } => {
@@ -6551,21 +6598,21 @@ impl OpenFangKernel {
                 let timeout = std::time::Duration::from_secs(timeout_s);
                 let delivery = job.delivery.clone();
 
-                let wf_id = match uuid::Uuid::parse_str(workflow_id) {
-                    Ok(uuid) => crate::workflow::WorkflowId(uuid),
+                let wf_id = match uuid::Uuid::parse_str(conduit_id) {
+                    Ok(uuid) => crate::conduit::ConduitId(uuid),
                     Err(_) => {
-                        let all_wfs = self.workflows.list_workflows().await;
-                        if let Some(wf) = all_wfs.iter().find(|w| w.name == *workflow_id) {
+                        let all_wfs = self.conduits.list_conduits().await;
+                        if let Some(wf) = all_wfs.iter().find(|w| w.name == *conduit_id) {
                             wf.id
                         } else {
-                            let err_msg = format!("workflow not found: {workflow_id}");
+                            let err_msg = format!("workflow not found: {conduit_id}");
                             self.cron_scheduler.record_failure(job_id, &err_msg);
                             return Err(err_msg);
                         }
                     }
                 };
 
-                match tokio::time::timeout(timeout, self.run_workflow(wf_id, wf_input, None)).await
+                match tokio::time::timeout(timeout, self.run_conduit(wf_id, wf_input, None)).await
                 {
                     Ok(Ok((_run_id, output))) => {
                         match cron_deliver_response(self, agent_id, &output, &delivery).await {
@@ -7154,7 +7201,7 @@ impl KernelHandle for OpenFangKernel {
         };
         self.project_store
             .get(id)
-            .and_then(|p| p.workflow_overrides.max_retries)
+            .and_then(|p| p.conduit_overrides.max_retries)
             .unwrap_or(base)
     }
 
@@ -7755,12 +7802,12 @@ impl KernelHandle for OpenFangKernel {
         ))
     }
 
-    async fn start_project_workflow(
+    async fn start_project_conduit(
         &self,
         project_id: &str,
         task_id: &str,
-        workflow_id: Option<&str>,
-        workflow_name: Option<&str>,
+        conduit_id: Option<&str>,
+        conduit_name: Option<&str>,
         post_mattermost_confirmation: bool,
     ) -> Result<String, String> {
         let tid = task_id.trim();
@@ -7800,7 +7847,7 @@ impl KernelHandle for OpenFangKernel {
         }
 
         let wf_id = self
-            .resolve_workflow_id_for_tool(workflow_id, workflow_name)
+            .resolve_conduit_id_for_tool(conduit_id, conduit_name)
             .await?;
         let pid: ProjectId = project_id
             .parse()
@@ -7820,11 +7867,11 @@ impl KernelHandle for OpenFangKernel {
                         .to_string()
                 })?;
             let wf_name = self
-                .workflows
-                .get_workflow(wf_id)
+                .conduits
+                .get_conduit(wf_id)
                 .await
                 .map(|w| w.name.clone())
-                .unwrap_or_else(|| "workflow".to_string());
+                .unwrap_or_else(|| "conduit".to_string());
             self.send_channel_message(
                 "mattermost",
                 ch,
@@ -7834,16 +7881,16 @@ impl KernelHandle for OpenFangKernel {
             .await?;
         }
 
-        let wf_input = self.workflow_input_with_project_context(pid, tid);
+        let wf_input = self.conduit_input_with_project_context(pid, tid);
         let (run_id, output) = self
-            .run_workflow(wf_id, wf_input, Some(pid))
+            .run_conduit(wf_id, wf_input, Some(pid))
             .await
             .map_err(|e| e.to_string())?;
 
         serde_json::to_string(&serde_json::json!({
             "ok": true,
             "run_id": run_id.to_string(),
-            "workflow_id": wf_id.to_string(),
+            "conduit_id": wf_id.to_string(),
             "output": output,
         }))
         .map_err(|e| e.to_string())
@@ -7896,12 +7943,12 @@ impl KernelHandle for OpenFangKernel {
         OpenFangKernel::resolve_git_workspace_for_project(self, project_id, spoke_root)
     }
 
-    fn github_token_env_for_workflow(&self, project_id: &str) -> String {
-        OpenFangKernel::github_token_env_for_workflow(self, project_id)
+    fn github_token_env_for_conduit(&self, project_id: &str) -> String {
+        OpenFangKernel::github_token_env_for_conduit(self, project_id)
     }
 
-    fn workflow_git_branch_template(&self, project_id: &str) -> String {
-        OpenFangKernel::workflow_git_branch_template(self, project_id)
+    fn conduit_git_branch_template(&self, project_id: &str) -> String {
+        OpenFangKernel::conduit_git_branch_template(self, project_id)
     }
 
     async fn read_project_context(&self, project_id: &str) -> Result<String, String> {

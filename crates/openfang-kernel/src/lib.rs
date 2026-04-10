@@ -28,7 +28,7 @@ pub mod scheduler;
 pub mod supervisor;
 pub mod triggers;
 pub mod wizard;
-pub mod workflow;
+pub mod conduit;
 
 pub use backlog_store::BacklogStore;
 pub use backlog_watcher::BacklogWatcherManager;

@@ -1,7 +1,7 @@
 // OpenFang Workflows Page — Workflow builder + run history
 'use strict';
 
-function workflowsPage() {
+function conduitsPage() {
   return {
     // -- Workflows state --
     workflows: [],
@@ -21,7 +21,7 @@ function workflowsPage() {
       this.loading = true;
       this.loadError = '';
       try {
-        this.workflows = await OpenFangAPI.get('/api/workflows');
+        this.workflows = await OpenFangAPI.get('/api/conduits');
       } catch(e) {
         this.workflows = [];
         this.loadError = e.message || 'Could not load workflows.';
@@ -37,7 +37,7 @@ function workflowsPage() {
       });
       try {
         var wfName = this.newWf.name;
-        await OpenFangAPI.post('/api/workflows', { name: wfName, description: this.newWf.description, steps: steps });
+        await OpenFangAPI.post('/api/conduits', { name: wfName, description: this.newWf.description, steps: steps });
         this.showCreateModal = false;
         this.newWf = { name: '', description: '', steps: [{ name: '', agent_name: '', mode: 'sequential', prompt: '{{input}}' }] };
         OpenFangToast.success('Workflow "' + wfName + '" created');
@@ -58,7 +58,7 @@ function workflowsPage() {
       this.running = true;
       this.runResult = '';
       try {
-        var res = await OpenFangAPI.post('/api/workflows/' + this.runModal.id + '/run', { input: this.runInput });
+        var res = await OpenFangAPI.post('/api/conduits/' + this.runModal.id + '/run', { input: this.runInput });
         this.runResult = res.output || JSON.stringify(res, null, 2);
         OpenFangToast.success('Workflow completed');
       } catch(e) {
@@ -70,7 +70,7 @@ function workflowsPage() {
 
     async viewRuns(wf) {
       try {
-        var runs = await OpenFangAPI.get('/api/workflows/' + wf.id + '/runs');
+        var runs = await OpenFangAPI.get('/api/conduits/' + wf.id + '/runs');
         this.runResult = JSON.stringify(runs, null, 2);
         this.runModal = wf;
       } catch(e) {
@@ -81,7 +81,7 @@ function workflowsPage() {
     async deleteWorkflow(wf) {
       if (!confirm('Delete workflow "' + wf.name + '"? This cannot be undone.')) return;
       try {
-        await OpenFangAPI.delete('/api/workflows/' + wf.id);
+        await OpenFangAPI.delete('/api/conduits/' + wf.id);
         OpenFangToast.success('Workflow "' + wf.name + '" deleted');
         await this.loadWorkflows();
       } catch(e) {
@@ -91,7 +91,7 @@ function workflowsPage() {
 
     async showEditModal(wf) {
       try {
-        var full = await OpenFangAPI.get('/api/workflows/' + wf.id);
+        var full = await OpenFangAPI.get('/api/conduits/' + wf.id);
         this.editWf = {
           name: full.name || '',
           description: full.description || '',
@@ -120,7 +120,7 @@ function workflowsPage() {
       });
       try {
         var wfName = this.editWf.name;
-        await OpenFangAPI.put('/api/workflows/' + this.editModal.id, { name: wfName, description: this.editWf.description, steps: steps });
+        await OpenFangAPI.put('/api/conduits/' + this.editModal.id, { name: wfName, description: this.editWf.description, steps: steps });
         this.editModal = null;
         OpenFangToast.success('Workflow "' + wfName + '" updated');
         await this.loadWorkflows();

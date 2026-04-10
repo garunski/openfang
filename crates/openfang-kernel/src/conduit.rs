@@ -1,4 +1,4 @@
-//! Workflow engine — multi-step agent pipeline execution.
+//! Conduit engine — multi-step agent pipeline execution.
 //!
 //! A workflow defines a sequence of steps where each step routes
 //! a task to a specific agent. Steps can:
@@ -22,21 +22,21 @@ use uuid::Uuid;
 
 /// Unique identifier for a workflow definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct WorkflowId(pub Uuid);
+pub struct ConduitId(pub Uuid);
 
-impl WorkflowId {
+impl ConduitId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }
 
-impl Default for WorkflowId {
+impl Default for ConduitId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::fmt::Display for WorkflowId {
+impl std::fmt::Display for ConduitId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -44,21 +44,21 @@ impl std::fmt::Display for WorkflowId {
 
 /// Unique identifier for a running workflow instance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct WorkflowRunId(pub Uuid);
+pub struct ConduitRunId(pub Uuid);
 
-impl WorkflowRunId {
+impl ConduitRunId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
     }
 }
 
-impl Default for WorkflowRunId {
+impl Default for ConduitRunId {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl std::fmt::Display for WorkflowRunId {
+impl std::fmt::Display for ConduitRunId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
@@ -66,16 +66,16 @@ impl std::fmt::Display for WorkflowRunId {
 
 /// A workflow definition — a named sequence of steps.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Workflow {
+pub struct Conduit {
     /// Unique identifier.
-    pub id: WorkflowId,
+    pub id: ConduitId,
     /// Human-readable name.
     pub name: String,
     /// Description of what this workflow does.
     pub description: String,
     /// The steps in execution order.
-    pub steps: Vec<WorkflowStep>,
-    /// When set, the workflow is owned by this project; runs validate step agents against it.
+    pub steps: Vec<ConduitStep>,
+    /// Legacy field; ignored. Conduits are global; project context comes from the run request only.
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     /// Created at.
@@ -84,7 +84,7 @@ pub struct Workflow {
 
 /// A single step in a workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowStep {
+pub struct ConduitStep {
     /// Step name for logging/display.
     pub name: String,
     /// Which agent to route this step to.
@@ -148,15 +148,15 @@ pub enum ErrorMode {
     Retry { max_retries: u32 },
 }
 
-/// Workflow name of the bundled doc-2 full-cycle template installed on hub init.
-pub const BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME: &str = "workflow-full-cycle";
+/// Conduit name of the bundled doc-2 full-cycle template installed on hub init.
+pub const BUNDLED_CONDUIT_FULL_CYCLE_CONDUIT_NAME: &str = "conduit-full-cycle";
 
 /// Bundled workflow: knowledge doc → new backlog tasks (status New).
-pub const BUNDLED_WORKFLOW_DOC_TO_TASKS_WORKFLOW_NAME: &str = "workflow-doc-to-tasks";
+pub const BUNDLED_CONDUIT_DOC_TO_TASKS_CONDUIT_NAME: &str = "conduit-doc-to-tasks";
 
-/// Parses the same JSON body shape as `POST /api/workflows` into a new [`Workflow`]
+/// Parses the same JSON body shape as `POST /api/conduits` into a new [`Conduit`]
 /// (fresh id and `created_at`). Shared by the API and bundled default workflow install.
-pub fn workflow_from_create_request_json(req: &serde_json::Value) -> Result<Workflow, String> {
+pub fn conduit_from_create_request_json(req: &serde_json::Value) -> Result<Conduit, String> {
     let name = req["name"].as_str().unwrap_or("unnamed").to_string();
     let description = req["description"].as_str().unwrap_or("").to_string();
 
@@ -200,7 +200,7 @@ pub fn workflow_from_create_request_json(req: &serde_json::Value) -> Result<Work
             _ => ErrorMode::Fail,
         };
 
-        steps.push(WorkflowStep {
+        steps.push(ConduitStep {
             name: step_name,
             agent,
             prompt_template: s["prompt"].as_str().unwrap_or("{{input}}").to_string(),
@@ -211,28 +211,12 @@ pub fn workflow_from_create_request_json(req: &serde_json::Value) -> Result<Work
         });
     }
 
-    let project_id: Option<ProjectId> = match req.get("project_id") {
-        None => None,
-        Some(v) if v.is_null() => None,
-        Some(v) => {
-            let s = v
-                .as_str()
-                .ok_or_else(|| "project_id must be a string or null".to_string())?
-                .trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.parse().map_err(|_| "Invalid project_id".to_string())?)
-            }
-        }
-    };
-
-    Ok(Workflow {
-        id: WorkflowId::new(),
+    Ok(Conduit {
+        id: ConduitId::new(),
         name,
         description,
         steps,
-        project_id,
+        project_id: None,
         created_at: Utc::now(),
     })
 }
@@ -240,7 +224,7 @@ pub fn workflow_from_create_request_json(req: &serde_json::Value) -> Result<Work
 /// The current state of a workflow run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum WorkflowRunState {
+pub enum ConduitRunState {
     Pending,
     Running,
     Completed,
@@ -249,20 +233,20 @@ pub enum WorkflowRunState {
 
 /// A running workflow instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkflowRun {
+pub struct ConduitRun {
     /// Run instance ID.
-    pub id: WorkflowRunId,
+    pub id: ConduitRunId,
     /// The workflow being run.
-    pub workflow_id: WorkflowId,
-    /// Workflow name (copied for quick access).
-    pub workflow_name: String,
+    pub conduit_id: ConduitId,
+    /// Conduit name (copied for quick access).
+    pub conduit_name: String,
     /// Project context when started (dashboard project run or workflow owned by a project).
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     /// Initial input to the workflow.
     pub input: String,
     /// Current state.
-    pub state: WorkflowRunState,
+    pub state: ConduitRunState,
     /// Results from each completed step.
     pub step_results: Vec<StepResult>,
     /// Final output (set when workflow completes).
@@ -294,43 +278,44 @@ pub struct StepResult {
 }
 
 /// The workflow engine — manages definitions and executes pipeline runs.
-pub struct WorkflowEngine {
+pub struct ConduitEngine {
     /// Registered workflow definitions.
-    workflows: Arc<RwLock<HashMap<WorkflowId, Workflow>>>,
+    conduits: Arc<RwLock<HashMap<ConduitId, Conduit>>>,
     /// Active and completed workflow runs.
-    runs: Arc<RwLock<HashMap<WorkflowRunId, WorkflowRun>>>,
+    runs: Arc<RwLock<HashMap<ConduitRunId, ConduitRun>>>,
 }
 
-impl WorkflowEngine {
+impl ConduitEngine {
     /// Create a new workflow engine.
     pub fn new() -> Self {
         Self {
-            workflows: Arc::new(RwLock::new(HashMap::new())),
+            conduits: Arc::new(RwLock::new(HashMap::new())),
             runs: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     /// Register a new workflow definition.
-    pub async fn register(&self, workflow: Workflow) -> WorkflowId {
-        let id = workflow.id;
-        self.workflows.write().await.insert(id, workflow);
-        info!(workflow_id = %id, "Workflow registered");
+    pub async fn register(&self, mut conduit: Conduit) -> ConduitId {
+        conduit.project_id = None;
+        let id = conduit.id;
+        self.conduits.write().await.insert(id, conduit);
+        info!(conduit_id = %id, "Conduit registered");
         id
     }
 
     /// List all registered workflows.
-    pub async fn list_workflows(&self) -> Vec<Workflow> {
-        self.workflows.read().await.values().cloned().collect()
+    pub async fn list_conduits(&self) -> Vec<Conduit> {
+        self.conduits.read().await.values().cloned().collect()
     }
 
     /// Get a specific workflow by ID.
-    pub async fn get_workflow(&self, id: WorkflowId) -> Option<Workflow> {
-        self.workflows.read().await.get(&id).cloned()
+    pub async fn get_conduit(&self, id: ConduitId) -> Option<Conduit> {
+        self.conduits.read().await.get(&id).cloned()
     }
 
     /// Remove a workflow definition.
-    pub async fn remove_workflow(&self, id: WorkflowId) -> bool {
-        self.workflows.write().await.remove(&id).is_some()
+    pub async fn remove_conduit(&self, id: ConduitId) -> bool {
+        self.conduits.write().await.remove(&id).is_some()
     }
 
     /// Update an existing workflow definition.
@@ -338,14 +323,14 @@ impl WorkflowEngine {
     /// Preserves the original `id` and `created_at`. Replaces `name`,
     /// `description`, and `steps`. Returns `true` if the workflow was
     /// found and updated.
-    pub async fn update_workflow(&self, id: WorkflowId, updated: Workflow) -> bool {
-        let mut workflows = self.workflows.write().await;
-        if let Some(existing) = workflows.get_mut(&id) {
+    pub async fn update_conduit(&self, id: ConduitId, updated: Conduit) -> bool {
+        let mut conduits = self.conduits.write().await;
+        if let Some(existing) = conduits.get_mut(&id) {
             existing.name = updated.name;
             existing.description = updated.description;
             existing.steps = updated.steps;
-            existing.project_id = updated.project_id;
-            info!(workflow_id = %id, "Workflow updated");
+            existing.project_id = None;
+            info!(conduit_id = %id, "Conduit updated");
             true
         } else {
             false
@@ -362,20 +347,20 @@ impl WorkflowEngine {
     /// with the kernel handle, since the workflow engine doesn't own the kernel.
     pub async fn create_run(
         &self,
-        workflow_id: WorkflowId,
+        conduit_id: ConduitId,
         input: String,
         project_id: Option<ProjectId>,
-    ) -> Option<WorkflowRunId> {
-        let workflow = self.workflows.read().await.get(&workflow_id)?.clone();
-        let run_id = WorkflowRunId::new();
+    ) -> Option<ConduitRunId> {
+        let conduit_def = self.conduits.read().await.get(&conduit_id)?.clone();
+        let run_id = ConduitRunId::new();
 
-        let run = WorkflowRun {
+        let run = ConduitRun {
             id: run_id,
-            workflow_id,
-            workflow_name: workflow.name,
+            conduit_id,
+            conduit_name: conduit_def.name,
             project_id,
             input,
-            state: WorkflowRunState::Pending,
+            state: ConduitRunState::Pending,
             step_results: Vec::new(),
             output: None,
             error: None,
@@ -388,12 +373,12 @@ impl WorkflowEngine {
 
         // Evict oldest completed/failed runs when we exceed the cap
         if runs.len() > Self::MAX_RETAINED_RUNS {
-            let mut evictable: Vec<(WorkflowRunId, DateTime<Utc>)> = runs
+            let mut evictable: Vec<(ConduitRunId, DateTime<Utc>)> = runs
                 .iter()
                 .filter(|(_, r)| {
                     matches!(
                         r.state,
-                        WorkflowRunState::Completed | WorkflowRunState::Failed
+                        ConduitRunState::Completed | ConduitRunState::Failed
                     )
                 })
                 .map(|(id, r)| (*id, r.started_at))
@@ -413,12 +398,12 @@ impl WorkflowEngine {
     }
 
     /// Get the current state of a workflow run.
-    pub async fn get_run(&self, run_id: WorkflowRunId) -> Option<WorkflowRun> {
+    pub async fn get_run(&self, run_id: ConduitRunId) -> Option<ConduitRun> {
         self.runs.read().await.get(&run_id).cloned()
     }
 
     /// List all workflow runs (optionally filtered by state).
-    pub async fn list_runs(&self, state_filter: Option<&str>) -> Vec<WorkflowRun> {
+    pub async fn list_runs(&self, state_filter: Option<&str>) -> Vec<ConduitRun> {
         self.runs
             .read()
             .await
@@ -426,10 +411,10 @@ impl WorkflowEngine {
             .filter(|r| {
                 state_filter
                     .map(|f| match f {
-                        "pending" => matches!(r.state, WorkflowRunState::Pending),
-                        "running" => matches!(r.state, WorkflowRunState::Running),
-                        "completed" => matches!(r.state, WorkflowRunState::Completed),
-                        "failed" => matches!(r.state, WorkflowRunState::Failed),
+                        "pending" => matches!(r.state, ConduitRunState::Pending),
+                        "running" => matches!(r.state, ConduitRunState::Running),
+                        "completed" => matches!(r.state, ConduitRunState::Completed),
+                        "failed" => matches!(r.state, ConduitRunState::Failed),
                         _ => true,
                     })
                     .unwrap_or(true)
@@ -439,24 +424,24 @@ impl WorkflowEngine {
     }
 
     /// Runs for one workflow definition, newest first.
-    pub async fn list_runs_for_workflow(
+    pub async fn list_runs_for_conduit(
         &self,
-        workflow_id: WorkflowId,
+        conduit_id: ConduitId,
         state_filter: Option<&str>,
-    ) -> Vec<WorkflowRun> {
-        let mut runs: Vec<WorkflowRun> = self
+    ) -> Vec<ConduitRun> {
+        let mut runs: Vec<ConduitRun> = self
             .runs
             .read()
             .await
             .values()
             .filter(|r| {
-                r.workflow_id == workflow_id
+                r.conduit_id == conduit_id
                     && state_filter
                         .map(|f| match f {
-                            "pending" => matches!(r.state, WorkflowRunState::Pending),
-                            "running" => matches!(r.state, WorkflowRunState::Running),
-                            "completed" => matches!(r.state, WorkflowRunState::Completed),
-                            "failed" => matches!(r.state, WorkflowRunState::Failed),
+                            "pending" => matches!(r.state, ConduitRunState::Pending),
+                            "running" => matches!(r.state, ConduitRunState::Running),
+                            "completed" => matches!(r.state, ConduitRunState::Completed),
+                            "failed" => matches!(r.state, ConduitRunState::Failed),
                             _ => true,
                         })
                         .unwrap_or(true)
@@ -472,9 +457,9 @@ impl WorkflowEngine {
         &self,
         project_id: ProjectId,
         limit: usize,
-    ) -> Vec<WorkflowRun> {
+    ) -> Vec<ConduitRun> {
         let lim = limit.max(1);
-        let mut runs: Vec<WorkflowRun> = self
+        let mut runs: Vec<ConduitRun> = self
             .runs
             .read()
             .await
@@ -498,7 +483,7 @@ impl WorkflowEngine {
 
     /// Execute a single step with error mode handling. Returns (output, input_tokens, output_tokens).
     async fn execute_step_with_error_mode<F, Fut>(
-        step: &WorkflowStep,
+        step: &ConduitStep,
         agent_id: AgentId,
         prompt: String,
         send_message: &F,
@@ -581,7 +566,7 @@ impl WorkflowEngine {
     /// so the workflow engine remains decoupled from the kernel.
     pub async fn execute_run<F, Fut>(
         &self,
-        run_id: WorkflowRunId,
+        run_id: ConduitRunId,
         agent_resolver: impl Fn(&StepAgent) -> Option<(AgentId, String)>,
         send_message: F,
     ) -> Result<String, String>
@@ -590,26 +575,26 @@ impl WorkflowEngine {
         Fut: std::future::Future<Output = Result<(String, u64, u64), String>>,
     {
         // Get the run and workflow
-        let (workflow, input) = {
+        let (definition, input) = {
             let mut runs = self.runs.write().await;
-            let run = runs.get_mut(&run_id).ok_or("Workflow run not found")?;
-            run.state = WorkflowRunState::Running;
+            let run = runs.get_mut(&run_id).ok_or("Conduit run not found")?;
+            run.state = ConduitRunState::Running;
 
-            let workflow = self
-                .workflows
+            let definition = self
+                .conduits
                 .read()
                 .await
-                .get(&run.workflow_id)
-                .ok_or("Workflow definition not found")?
+                .get(&run.conduit_id)
+                .ok_or("Conduit definition not found")?
                 .clone();
 
-            (workflow, run.input.clone())
+            (definition, run.input.clone())
         };
 
         info!(
             run_id = %run_id,
-            workflow = %workflow.name,
-            steps = workflow.steps.len(),
+            conduit = %definition.name,
+            steps = definition.steps.len(),
             "Starting workflow execution"
         );
 
@@ -618,8 +603,8 @@ impl WorkflowEngine {
         let mut variables: HashMap<String, String> = HashMap::new();
         let mut i = 0;
 
-        while i < workflow.steps.len() {
-            let step = &workflow.steps[i];
+        while i < definition.steps.len() {
+            let step = &definition.steps[i];
 
             debug!(
                 step = i + 1,
@@ -670,7 +655,7 @@ impl WorkflowEngine {
                         }
                         Err(e) => {
                             if let Some(r) = self.runs.write().await.get_mut(&run_id) {
-                                r.state = WorkflowRunState::Failed;
+                                r.state = ConduitRunState::Failed;
                                 r.error = Some(e.clone());
                                 r.completed_at = Some(Utc::now());
                             }
@@ -683,9 +668,9 @@ impl WorkflowEngine {
                     // Collect consecutive FanOut steps and run them in parallel
                     let mut fan_out_steps = vec![(i, step)];
                     let mut j = i + 1;
-                    while j < workflow.steps.len() {
-                        if matches!(workflow.steps[j].mode, StepMode::FanOut) {
-                            fan_out_steps.push((j, &workflow.steps[j]));
+                    while j < definition.steps.len() {
+                        if matches!(definition.steps[j].mode, StepMode::FanOut) {
+                            fan_out_steps.push((j, &definition.steps[j]));
                             j += 1;
                         } else {
                             break;
@@ -748,7 +733,7 @@ impl WorkflowEngine {
                                     format!("FanOut step '{}' failed: {}", step_name, e);
                                 warn!(%error_msg);
                                 if let Some(r) = self.runs.write().await.get_mut(&run_id) {
-                                    r.state = WorkflowRunState::Failed;
+                                    r.state = ConduitRunState::Failed;
                                     r.error = Some(error_msg.clone());
                                     r.completed_at = Some(Utc::now());
                                 }
@@ -761,7 +746,7 @@ impl WorkflowEngine {
                                 );
                                 warn!(%error_msg);
                                 if let Some(r) = self.runs.write().await.get_mut(&run_id) {
-                                    r.state = WorkflowRunState::Failed;
+                                    r.state = ConduitRunState::Failed;
                                     r.error = Some(error_msg.clone());
                                     r.completed_at = Some(Utc::now());
                                 }
@@ -840,7 +825,7 @@ impl WorkflowEngine {
                         Ok(None) => {}
                         Err(e) => {
                             if let Some(r) = self.runs.write().await.get_mut(&run_id) {
-                                r.state = WorkflowRunState::Failed;
+                                r.state = ConduitRunState::Failed;
                                 r.error = Some(e.clone());
                                 r.completed_at = Some(Utc::now());
                             }
@@ -913,7 +898,7 @@ impl WorkflowEngine {
                             Ok(None) => break,
                             Err(e) => {
                                 if let Some(r) = self.runs.write().await.get_mut(&run_id) {
-                                    r.state = WorkflowRunState::Failed;
+                                    r.state = ConduitRunState::Failed;
                                     r.error = Some(e.clone());
                                     r.completed_at = Some(Utc::now());
                                 }
@@ -935,17 +920,17 @@ impl WorkflowEngine {
         // Mark workflow as completed
         let final_output = current_input.clone();
         if let Some(r) = self.runs.write().await.get_mut(&run_id) {
-            r.state = WorkflowRunState::Completed;
+            r.state = ConduitRunState::Completed;
             r.output = Some(final_output.clone());
             r.completed_at = Some(Utc::now());
         }
 
-        info!(run_id = %run_id, "Workflow completed successfully");
+        info!(run_id = %run_id, "Conduit completed successfully");
         Ok(final_output)
     }
 }
 
-impl Default for WorkflowEngine {
+impl Default for ConduitEngine {
     fn default() -> Self {
         Self::new()
     }
@@ -955,13 +940,13 @@ impl Default for WorkflowEngine {
 mod tests {
     use super::*;
 
-    fn test_workflow() -> Workflow {
-        Workflow {
-            id: WorkflowId::new(),
+    fn test_conduit() -> Conduit {
+        Conduit {
+            id: ConduitId::new(),
             name: "test-pipeline".to_string(),
             description: "A test pipeline".to_string(),
             steps: vec![
-                WorkflowStep {
+                ConduitStep {
                     name: "analyze".to_string(),
                     agent: StepAgent::ByName {
                         name: "analyst".to_string(),
@@ -972,7 +957,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: None,
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "summarize".to_string(),
                     agent: StepAgent::ByName {
                         name: "writer".to_string(),
@@ -995,21 +980,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_register_workflow() {
-        let engine = WorkflowEngine::new();
-        let wf = test_workflow();
+    async fn test_register_conduit() {
+        let engine = ConduitEngine::new();
+        let wf = test_conduit();
         let id = engine.register(wf.clone()).await;
         assert_eq!(id, wf.id);
 
-        let retrieved = engine.get_workflow(id).await;
+        let retrieved = engine.get_conduit(id).await;
         assert!(retrieved.is_some());
         assert_eq!(retrieved.unwrap().name, "test-pipeline");
     }
 
     #[tokio::test]
     async fn test_create_run() {
-        let engine = WorkflowEngine::new();
-        let wf = test_workflow();
+        let engine = ConduitEngine::new();
+        let wf = test_conduit();
         let wf_id = engine.register(wf).await;
 
         let run_id = engine
@@ -1019,33 +1004,33 @@ mod tests {
 
         let run = engine.get_run(run_id.unwrap()).await.unwrap();
         assert_eq!(run.input, "test input");
-        assert!(matches!(run.state, WorkflowRunState::Pending));
+        assert!(matches!(run.state, ConduitRunState::Pending));
     }
 
     #[tokio::test]
-    async fn test_list_workflows() {
-        let engine = WorkflowEngine::new();
-        let wf = test_workflow();
+    async fn test_list_conduits() {
+        let engine = ConduitEngine::new();
+        let wf = test_conduit();
         engine.register(wf).await;
 
-        let list = engine.list_workflows().await;
+        let list = engine.list_conduits().await;
         assert_eq!(list.len(), 1);
     }
 
     #[tokio::test]
-    async fn test_remove_workflow() {
-        let engine = WorkflowEngine::new();
-        let wf = test_workflow();
+    async fn test_remove_conduit() {
+        let engine = ConduitEngine::new();
+        let wf = test_conduit();
         let id = engine.register(wf).await;
 
-        assert!(engine.remove_workflow(id).await);
-        assert!(engine.get_workflow(id).await.is_none());
+        assert!(engine.remove_conduit(id).await);
+        assert!(engine.get_conduit(id).await.is_none());
     }
 
     #[tokio::test]
     async fn test_execute_pipeline() {
-        let engine = WorkflowEngine::new();
-        let wf = test_workflow();
+        let engine = ConduitEngine::new();
+        let wf = test_conduit();
         let wf_id = engine.register(wf).await;
         let run_id = engine
             .create_run(wf_id, "raw data".to_string(), None)
@@ -1063,20 +1048,20 @@ mod tests {
         assert!(output.contains("Processed:"));
 
         let run = engine.get_run(run_id).await.unwrap();
-        assert!(matches!(run.state, WorkflowRunState::Completed));
+        assert!(matches!(run.state, ConduitRunState::Completed));
         assert_eq!(run.step_results.len(), 2);
         assert!(run.output.is_some());
     }
 
     #[tokio::test]
     async fn test_conditional_skip() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "conditional-test".to_string(),
             description: "".to_string(),
             steps: vec![
-                WorkflowStep {
+                ConduitStep {
                     name: "first".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1087,7 +1072,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: None,
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "only-if-error".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1123,13 +1108,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_conditional_executes() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "conditional-test".to_string(),
             description: "".to_string(),
             steps: vec![
-                WorkflowStep {
+                ConduitStep {
                     name: "first".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1140,7 +1125,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: None,
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "only-if-error".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1178,12 +1163,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_loop_until_condition() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "loop-test".to_string(),
             description: "".to_string(),
-            steps: vec![WorkflowStep {
+            steps: vec![ConduitStep {
                 name: "refine".to_string(),
                 agent: StepAgent::ByName {
                     name: "a".to_string(),
@@ -1228,12 +1213,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_loop_max_iterations() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "loop-max-test".to_string(),
             description: "".to_string(),
-            steps: vec![WorkflowStep {
+            steps: vec![ConduitStep {
                 name: "refine".to_string(),
                 agent: StepAgent::ByName {
                     name: "a".to_string(),
@@ -1269,13 +1254,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_error_mode_skip() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "skip-test".to_string(),
             description: "".to_string(),
             steps: vec![
-                WorkflowStep {
+                ConduitStep {
                     name: "will-fail".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1286,7 +1271,7 @@ mod tests {
                     error_mode: ErrorMode::Skip,
                     output_var: None,
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "succeeds".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1327,17 +1312,17 @@ mod tests {
         let run = engine.get_run(run_id).await.unwrap();
         // Only 1 step result (the first was skipped due to error)
         assert_eq!(run.step_results.len(), 1);
-        assert!(matches!(run.state, WorkflowRunState::Completed));
+        assert!(matches!(run.state, ConduitRunState::Completed));
     }
 
     #[tokio::test]
     async fn test_error_mode_retry() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "retry-test".to_string(),
             description: "".to_string(),
-            steps: vec![WorkflowStep {
+            steps: vec![ConduitStep {
                 name: "flaky".to_string(),
                 agent: StepAgent::ByName {
                     name: "a".to_string(),
@@ -1379,13 +1364,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_output_variables() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "vars-test".to_string(),
             description: "".to_string(),
             steps: vec![
-                WorkflowStep {
+                ConduitStep {
                     name: "produce".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1396,7 +1381,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: Some("first_result".to_string()),
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "transform".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1407,7 +1392,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: Some("second_result".to_string()),
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "combine".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1453,13 +1438,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_fan_out_parallel() {
-        let engine = WorkflowEngine::new();
-        let wf = Workflow {
-            id: WorkflowId::new(),
+        let engine = ConduitEngine::new();
+        let wf = Conduit {
+            id: ConduitId::new(),
             name: "fanout-test".to_string(),
             description: "".to_string(),
             steps: vec![
-                WorkflowStep {
+                ConduitStep {
                     name: "task-a".to_string(),
                     agent: StepAgent::ByName {
                         name: "a".to_string(),
@@ -1470,7 +1455,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: None,
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "task-b".to_string(),
                     agent: StepAgent::ByName {
                         name: "b".to_string(),
@@ -1481,7 +1466,7 @@ mod tests {
                     error_mode: ErrorMode::Fail,
                     output_var: None,
                 },
-                WorkflowStep {
+                ConduitStep {
                     name: "collect".to_string(),
                     agent: StepAgent::ByName {
                         name: "c".to_string(),
@@ -1521,7 +1506,7 @@ mod tests {
         vars.insert("name".to_string(), "Alice".to_string());
         vars.insert("task".to_string(), "code review".to_string());
 
-        let result = WorkflowEngine::expand_variables(
+        let result = ConduitEngine::expand_variables(
             "Hello {{name}}, please do {{task}} on {{input}}",
             "main.rs",
             &vars,

@@ -3,11 +3,11 @@
 ## Mattermost → workflow
 
 - **Queries**: answer from context; use `query_project_status` / `backlog_task_view` for data.
-- **Triggers**: `start_project_workflow` with `project_id`, `task_id`, workflow lookup, `post_mattermost_confirmation=true` on Mattermost.
+- **Triggers**: `start_project_conduit` with `project_id`, `task_id`, workflow lookup, `post_mattermost_confirmation=true` on Mattermost.
 
 ## Workflow input
 
-`start_project_workflow` passes the task id string as the workflow run input (same as dashboard runs).
+`start_project_conduit` passes the task id string as the workflow run input (same as dashboard runs).
 
 ## `trigger_cursor_worker` ↔ spoke skills
 

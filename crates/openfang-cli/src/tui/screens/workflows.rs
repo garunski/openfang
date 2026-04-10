@@ -19,7 +19,7 @@ pub struct WorkflowInfo {
 }
 
 #[derive(Clone, Default)]
-pub struct WorkflowRun {
+pub struct ConduitRun {
     pub id: String,
     pub state: String,
     pub duration: String,
@@ -43,7 +43,7 @@ pub struct WorkflowState {
     pub list_state: ListState,
     pub selected_workflow: Option<usize>,
     // Run history
-    pub runs: Vec<WorkflowRun>,
+    pub runs: Vec<ConduitRun>,
     pub runs_list_state: ListState,
     // Create wizard
     pub create_step: usize, // 0=name, 1=desc, 2=steps_json, 3=review
@@ -463,7 +463,7 @@ fn draw_create(f: &mut Frame, area: Rect, state: &WorkflowState) {
 
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            "  Create New Workflow",
+            "  Create New Conduit",
             Style::default()
                 .fg(theme::CYAN)
                 .add_modifier(Modifier::BOLD),
@@ -478,7 +478,7 @@ fn draw_create(f: &mut Frame, area: Rect, state: &WorkflowState) {
     );
 
     let (label, value, placeholder) = match state.create_step {
-        0 => ("Workflow name:", &state.create_name, "my-workflow"),
+        0 => ("Conduit name:", &state.create_name, "my-workflow"),
         1 => (
             "Description:",
             &state.create_desc,
@@ -645,7 +645,7 @@ fn draw_run_result(f: &mut Frame, area: Rect, state: &WorkflowState) {
 
     f.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            "  Workflow Run Result",
+            "  Conduit Run Result",
             Style::default()
                 .fg(theme::CYAN)
                 .add_modifier(Modifier::BOLD),

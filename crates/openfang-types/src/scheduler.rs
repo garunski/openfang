@@ -123,9 +123,9 @@ pub enum CronAction {
         timeout_secs: Option<u64>,
     },
     /// Run a workflow by ID or name.
-    WorkflowRun {
-        /// Workflow UUID or name (resolved by name if not a valid UUID).
-        workflow_id: String,
+    ConduitRun {
+        /// Conduit UUID or name (resolved by name if not a valid UUID).
+        conduit_id: String,
         /// Initial input to the workflow (default: empty).
         input: Option<String>,
         /// Timeout in seconds (10..=3600, default: 120).
@@ -308,13 +308,13 @@ impl CronJob {
                     }
                 }
             }
-            CronAction::WorkflowRun {
-                workflow_id,
+            CronAction::ConduitRun {
+                conduit_id,
                 input,
                 timeout_secs,
             } => {
-                if workflow_id.is_empty() {
-                    return Err("workflow_id must not be empty".into());
+                if conduit_id.is_empty() {
+                    return Err("conduit_id must not be empty".into());
                 }
                 if let Some(i) = input {
                     if i.len() > MAX_TURN_MESSAGE_LEN {
@@ -902,13 +902,13 @@ mod tests {
         assert!(job.validate(0).is_ok());
     }
 
-    // -- Action: WorkflowRun --
+    // -- Action: ConduitRun --
 
     #[test]
     fn workflow_run_valid() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: "my-report-pipeline".into(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: "my-report-pipeline".into(),
             input: Some("generate daily metrics".into()),
             timeout_secs: Some(300),
         };
@@ -918,20 +918,20 @@ mod tests {
     #[test]
     fn workflow_run_empty_id() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: String::new(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: String::new(),
             input: None,
             timeout_secs: None,
         };
         let err = job.validate(0).unwrap_err();
-        assert!(err.contains("workflow_id"), "{err}");
+        assert!(err.contains("conduit_id"), "{err}");
     }
 
     #[test]
     fn workflow_run_input_too_long() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: "test".into(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: "test".into(),
             input: Some("x".repeat(16_385)),
             timeout_secs: None,
         };
@@ -942,8 +942,8 @@ mod tests {
     #[test]
     fn workflow_run_timeout_too_small() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: "test".into(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: "test".into(),
             input: None,
             timeout_secs: Some(9),
         };
@@ -954,8 +954,8 @@ mod tests {
     #[test]
     fn workflow_run_timeout_too_large() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: "test".into(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: "test".into(),
             input: None,
             timeout_secs: Some(3601),
         };
@@ -966,8 +966,8 @@ mod tests {
     #[test]
     fn workflow_run_max_timeout_ok() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: "test".into(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: "test".into(),
             input: None,
             timeout_secs: Some(3600),
         };
@@ -977,8 +977,8 @@ mod tests {
     #[test]
     fn workflow_run_no_input_ok() {
         let mut job = valid_job();
-        job.action = CronAction::WorkflowRun {
-            workflow_id: "550e8400-e29b-41d4-a716-446655440000".into(),
+        job.action = CronAction::ConduitRun {
+            conduit_id: "550e8400-e29b-41d4-a716-446655440000".into(),
             input: None,
             timeout_secs: None,
         };
@@ -987,18 +987,18 @@ mod tests {
 
     #[test]
     fn serde_workflow_run_tag() {
-        let action = CronAction::WorkflowRun {
-            workflow_id: "my-wf".into(),
+        let action = CronAction::ConduitRun {
+            conduit_id: "my-wf".into(),
             input: Some("go".into()),
             timeout_secs: Some(60),
         };
         let json = serde_json::to_string(&action).unwrap();
-        assert!(json.contains("\"kind\":\"workflow_run\""));
+        assert!(json.contains("\"kind\":\"conduit_run\""));
         let back: CronAction = serde_json::from_str(&json).unwrap();
-        if let CronAction::WorkflowRun { workflow_id, .. } = back {
-            assert_eq!(workflow_id, "my-wf");
+        if let CronAction::ConduitRun { conduit_id, .. } = back {
+            assert_eq!(conduit_id, "my-wf");
         } else {
-            panic!("expected WorkflowRun variant");
+            panic!("expected ConduitRun variant");
         }
     }
 }

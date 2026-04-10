@@ -28,7 +28,7 @@ pub fn operation_cost(method: &str, path: &str) -> NonZeroU32 {
         ("POST", "/api/agents") => NonZeroU32::new(50).unwrap(),
         ("POST", p) if p.contains("/message") => NonZeroU32::new(30).unwrap(),
         ("POST", p) if p.contains("/run") => NonZeroU32::new(100).unwrap(),
-        ("POST", p) if p.contains("/workflow-start") => NonZeroU32::new(100).unwrap(),
+        ("POST", p) if p.contains("/conduit-start") => NonZeroU32::new(100).unwrap(),
         ("POST", "/api/skills/install") => NonZeroU32::new(50).unwrap(),
         ("POST", "/api/skills/uninstall") => NonZeroU32::new(10).unwrap(),
         ("POST", "/api/skills/reload") => NonZeroU32::new(5).unwrap(),
@@ -90,7 +90,7 @@ mod tests {
         assert_eq!(operation_cost("GET", "/api/tools").get(), 1);
         assert_eq!(operation_cost("POST", "/api/agents/1/message").get(), 30);
         assert_eq!(operation_cost("POST", "/api/agents").get(), 50);
-        assert_eq!(operation_cost("POST", "/api/workflows/1/run").get(), 100);
+        assert_eq!(operation_cost("POST", "/api/conduits/1/run").get(), 100);
         assert_eq!(operation_cost("GET", "/api/agents/1/session").get(), 5);
         assert_eq!(operation_cost("GET", "/api/skills").get(), 2);
         assert_eq!(operation_cost("GET", "/api/peers").get(), 2);

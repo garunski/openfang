@@ -154,20 +154,20 @@ async fn start_test_server_with_provider(
             axum::routing::delete(routes::delete_trigger),
         )
         .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
+            "/api/conduits",
+            axum::routing::get(routes::list_conduits).post(routes::create_conduit),
         )
         .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
+            "/api/conduits/{id}/run",
+            axum::routing::post(routes::run_conduit),
         )
         .route(
-            "/api/workflows/{id}/runs/{run_id}",
-            axum::routing::get(routes::get_workflow_run),
+            "/api/conduits/{id}/runs/{run_id}",
+            axum::routing::get(routes::get_conduit_run),
         )
         .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
+            "/api/conduits/{id}/runs",
+            axum::routing::get(routes::list_conduit_runs),
         )
         .route(
             "/api/projects",
@@ -216,8 +216,8 @@ async fn start_test_server_with_provider(
             axum::routing::post(routes::start_project_orchestrator),
         )
         .route(
-            "/api/projects/{id}/workflows/{workflow_id}/run",
-            axum::routing::post(routes::run_project_workflow),
+            "/api/projects/{id}/conduits/{conduit_id}/run",
+            axum::routing::post(routes::run_project_conduit),
         )
         .route(
             "/api/projects/{id}/spokes",
@@ -276,8 +276,8 @@ async fn start_test_server_with_provider(
             axum::routing::get(routes::get_project_spoke_detail),
         )
         .route(
-            "/api/projects/{id}/workflows",
-            axum::routing::get(routes::list_project_workflows),
+            "/api/projects/{id}/conduits",
+            axum::routing::get(routes::list_project_conduits),
         )
         .route(
             "/api/projects/{id}/backlog/config",
@@ -300,8 +300,8 @@ async fn start_test_server_with_provider(
             axum::routing::post(routes::backlog_complete_task),
         )
         .route(
-            "/api/projects/{id}/backlog/tasks/{task_id}/workflow-start",
-            axum::routing::post(routes::backlog_start_task_workflow),
+            "/api/projects/{id}/backlog/tasks/{task_id}/conduit-start",
+            axum::routing::post(routes::backlog_start_task_conduit),
         )
         .route(
             "/api/projects/{id}/backlog/tasks/{task_id}",
@@ -1159,7 +1159,7 @@ async fn test_backlog_store_task_api() {
 
     let resp = client
         .post(format!(
-            "{}/api/projects/{}/backlog/tasks/TASK-1/workflow-start",
+            "{}/api/projects/{}/backlog/tasks/TASK-1/conduit-start",
             server.base_url, pid
         ))
         .json(&serde_json::json!({}))
@@ -1956,6 +1956,14 @@ async fn test_project_scoped_agents_spokes_workflows() {
     let body: serde_json::Value = resp.json().await.unwrap();
     let pid = body["project_id"].as_str().unwrap();
 
+    let resp = client
+        .post(format!("{}/api/agents", server.base_url))
+        .json(&serde_json::json!({"manifest_toml": TEST_MANIFEST}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 201);
+
     let ag_list = client
         .get(format!("{}/api/agents", server.base_url))
         .send()
@@ -2116,7 +2124,7 @@ async fn test_project_scoped_agents_spokes_workflows() {
 
     let resp = client
         .get(format!(
-            "{}/api/projects/{}/workflows?limit=5",
+            "{}/api/projects/{}/conduits?limit=5",
             server.base_url, pid
         ))
         .send()
@@ -2313,7 +2321,7 @@ async fn test_workflow_crud() {
 
     // Create workflow
     let resp = client
-        .post(format!("{}/api/workflows", server.base_url))
+        .post(format!("{}/api/conduits", server.base_url))
         .json(&serde_json::json!({
             "name": "test-workflow",
             "description": "Integration test workflow",
@@ -2332,12 +2340,12 @@ async fn test_workflow_crud() {
         .unwrap();
     assert_eq!(resp.status(), 201);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let workflow_id = body["workflow_id"].as_str().unwrap().to_string();
-    assert!(!workflow_id.is_empty());
+    let conduit_id = body["conduit_id"].as_str().unwrap().to_string();
+    assert!(!conduit_id.is_empty());
 
     // List workflows
     let resp = client
-        .get(format!("{}/api/workflows", server.base_url))
+        .get(format!("{}/api/conduits", server.base_url))
         .send()
         .await
         .unwrap();
@@ -2389,7 +2397,7 @@ async fn test_project_workflow_requires_assigned_agents() {
     let agent_name = body["name"].as_str().unwrap().to_string();
 
     let resp = client
-        .post(format!("{}/api/workflows", server.base_url))
+        .post(format!("{}/api/conduits", server.base_url))
         .json(&serde_json::json!({
             "name": "proj-wf",
             "description": "",
@@ -2407,11 +2415,11 @@ async fn test_project_workflow_requires_assigned_agents() {
         .unwrap();
     assert_eq!(resp.status(), 201);
     let body: serde_json::Value = resp.json().await.unwrap();
-    let wf_id = body["workflow_id"].as_str().unwrap().to_string();
+    let wf_id = body["conduit_id"].as_str().unwrap().to_string();
 
     let resp = client
         .post(format!(
-            "{}/api/projects/{}/workflows/{}/run",
+            "{}/api/projects/{}/conduits/{}/run",
             server.base_url, pid, wf_id
         ))
         .json(&serde_json::json!({"input": "hi"}))
@@ -2436,7 +2444,7 @@ async fn test_project_workflow_requires_assigned_agents() {
 
     let resp = client
         .post(format!(
-            "{}/api/projects/{}/workflows/{}/run",
+            "{}/api/projects/{}/conduits/{}/run",
             server.base_url, pid, wf_id
         ))
         .json(&serde_json::json!({"input": "hi"}))
@@ -2450,7 +2458,7 @@ async fn test_project_workflow_requires_assigned_agents() {
     );
 }
 
-/// TASK-46: `workflow-full-cycle` template registers via POST /api/workflows and runs via project route.
+/// TASK-46: `conduit-full-cycle` template registers via POST /api/conduits and runs via project route.
 #[tokio::test]
 async fn test_workflow_full_cycle_workflow_registers_and_project_run() {
     let server = start_test_server().await;
@@ -2480,7 +2488,7 @@ async fn test_workflow_full_cycle_workflow_registers_and_project_run() {
     let pid = body["project_id"].as_str().unwrap();
 
     const COORD_MANIFEST: &str = r#"
-name = "workflow-coordinator-hand"
+name = "conduit-coordinator-hand"
 version = "0.1.0"
 description = "Test stand-in for workflow coordinator workflow steps"
 author = "test"
@@ -2507,22 +2515,21 @@ memory_write = ["self.*"]
     let body: serde_json::Value = resp.json().await.unwrap();
     let agent_id = body["agent_id"].as_str().unwrap();
 
-    let mut wf_template: serde_json::Value = serde_json::from_str(include_str!(concat!(
+    let wf_template: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../openfang-kernel/bundled/workflows/workflow-full-cycle.json"
+        "/../openfang-kernel/bundled/conduits/conduit-full-cycle.json"
     )))
     .unwrap();
-    wf_template["project_id"] = serde_json::json!(pid);
 
     let resp = client
-        .post(format!("{}/api/workflows", server.base_url))
+        .post(format!("{}/api/conduits", server.base_url))
         .json(&wf_template)
         .send()
         .await
         .unwrap();
     assert_eq!(resp.status(), 201);
     let wf_body: serde_json::Value = resp.json().await.unwrap();
-    let wf_id = wf_body["workflow_id"].as_str().unwrap();
+    let wf_id = wf_body["conduit_id"].as_str().unwrap();
 
     let resp = client
         .post(format!("{}/api/projects/{}/agents", server.base_url, pid))
@@ -2534,7 +2541,7 @@ memory_write = ["self.*"]
 
     let resp = client
         .post(format!(
-            "{}/api/projects/{}/workflows/{}/run",
+            "{}/api/projects/{}/conduits/{}/run",
             server.base_url, pid, wf_id
         ))
         .json(&serde_json::json!({
@@ -2891,20 +2898,20 @@ async fn start_test_server_with_auth(api_key: &str) -> TestServer {
             axum::routing::delete(routes::delete_trigger),
         )
         .route(
-            "/api/workflows",
-            axum::routing::get(routes::list_workflows).post(routes::create_workflow),
+            "/api/conduits",
+            axum::routing::get(routes::list_conduits).post(routes::create_conduit),
         )
         .route(
-            "/api/workflows/{id}/run",
-            axum::routing::post(routes::run_workflow),
+            "/api/conduits/{id}/run",
+            axum::routing::post(routes::run_conduit),
         )
         .route(
-            "/api/workflows/{id}/runs/{run_id}",
-            axum::routing::get(routes::get_workflow_run),
+            "/api/conduits/{id}/runs/{run_id}",
+            axum::routing::get(routes::get_conduit_run),
         )
         .route(
-            "/api/workflows/{id}/runs",
-            axum::routing::get(routes::list_workflow_runs),
+            "/api/conduits/{id}/runs",
+            axum::routing::get(routes::list_conduit_runs),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn_with_state(
@@ -3027,7 +3034,7 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
     assert_eq!(resp.status(), 201);
 
     let resp = client
-        .post(format!("{}/api/workflows", server.base_url))
+        .post(format!("{}/api/conduits", server.base_url))
         .json(&serde_json::json!({
             "name": "wf-runs-test-a",
             "description": "test",
@@ -3043,10 +3050,10 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
         .unwrap();
     assert_eq!(resp.status(), 201);
     let wf_a: serde_json::Value = resp.json().await.unwrap();
-    let wf_id_a = wf_a["workflow_id"].as_str().unwrap();
+    let wf_id_a = wf_a["conduit_id"].as_str().unwrap();
 
     let resp = client
-        .post(format!("{}/api/workflows", server.base_url))
+        .post(format!("{}/api/conduits", server.base_url))
         .json(&serde_json::json!({
             "name": "wf-runs-test-b",
             "description": "other",
@@ -3062,11 +3069,11 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
         .unwrap();
     assert_eq!(resp.status(), 201);
     let wf_b: serde_json::Value = resp.json().await.unwrap();
-    let wf_id_b = wf_b["workflow_id"].as_str().unwrap();
+    let wf_id_b = wf_b["conduit_id"].as_str().unwrap();
 
     let resp = client
         .get(format!(
-            "{}/api/workflows/{}/runs",
+            "{}/api/conduits/{}/runs",
             server.base_url, wf_id_a
         ))
         .send()
@@ -3078,7 +3085,7 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
 
     let _ = client
         .post(format!(
-            "{}/api/workflows/{}/run",
+            "{}/api/conduits/{}/run",
             server.base_url, wf_id_a
         ))
         .json(&serde_json::json!({"input": "hello-runs-test"}))
@@ -3088,7 +3095,7 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
 
     let resp = client
         .get(format!(
-            "{}/api/workflows/{}/runs",
+            "{}/api/conduits/{}/runs",
             server.base_url, wf_id_a
         ))
         .send()
@@ -3097,8 +3104,8 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
     assert_eq!(resp.status(), 200);
     let runs_a: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(runs_a.len(), 1);
-    assert_eq!(runs_a[0]["workflow_id"], wf_id_a);
-    assert_ne!(runs_a[0]["workflow_id"], wf_id_b);
+    assert_eq!(runs_a[0]["conduit_id"], wf_id_a);
+    assert_ne!(runs_a[0]["conduit_id"], wf_id_b);
     assert!(runs_a[0]["state"].is_string());
     assert!(runs_a[0]["input_preview"].is_string());
     assert!(
@@ -3111,7 +3118,7 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
 
     let resp = client
         .get(format!(
-            "{}/api/workflows/{}/runs",
+            "{}/api/conduits/{}/runs",
             server.base_url, wf_id_b
         ))
         .send()
@@ -3123,7 +3130,7 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
 
     let resp = client
         .get(format!(
-            "{}/api/workflows/{}/runs/{}",
+            "{}/api/conduits/{}/runs/{}",
             server.base_url, wf_id_a, run_id
         ))
         .send()
@@ -3132,12 +3139,12 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
     assert_eq!(resp.status(), 200);
     let detail: serde_json::Value = resp.json().await.unwrap();
     assert_eq!(detail["id"], run_id);
-    assert_eq!(detail["workflow_id"], wf_id_a);
+    assert_eq!(detail["conduit_id"], wf_id_a);
     assert!(detail["step_results"].is_array());
 
     let resp = client
         .get(format!(
-            "{}/api/workflows/{}/runs/{}",
+            "{}/api/conduits/{}/runs/{}",
             server.base_url, wf_id_b, run_id
         ))
         .send()
@@ -3147,7 +3154,7 @@ async fn test_workflow_runs_filtered_list_and_run_detail() {
 
     let resp = client
         .get(format!(
-            "{}/api/workflows/{}/runs/not-a-uuid",
+            "{}/api/conduits/{}/runs/not-a-uuid",
             server.base_url, wf_id_a
         ))
         .send()
