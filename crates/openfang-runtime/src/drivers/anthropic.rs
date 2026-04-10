@@ -220,7 +220,12 @@ impl LlmDriver for AnthropicDriver {
             if status == 429 || status == 529 {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
-                    warn!(status, retry_ms, "Rate limited, retrying");
+                    warn!(
+                        model = %api_request.model,
+                        status,
+                        retry_ms,
+                        "Rate limited, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }
@@ -327,7 +332,12 @@ impl LlmDriver for AnthropicDriver {
             if status == 429 || status == 529 {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
-                    warn!(status, retry_ms, "Rate limited (stream), retrying");
+                    warn!(
+                        model = %api_request.model,
+                        status,
+                        retry_ms,
+                        "Rate limited (stream), retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }

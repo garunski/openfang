@@ -8,7 +8,10 @@ use crate::context_budget::{apply_context_guard, truncate_tool_result_dynamic, C
 use crate::context_overflow::{recover_from_overflow, RecoveryStage};
 use crate::embedding::EmbeddingDriver;
 use crate::kernel_handle::KernelHandle;
-use crate::llm_driver::{CompletionRequest, DriverConfig, LlmDriver, LlmError, StreamEvent};
+use crate::llm_driver::{
+    log_debug_outbound_completion_request, CompletionRequest, DriverConfig, LlmDriver, LlmError,
+    StreamEvent,
+};
 use crate::llm_errors;
 use crate::loop_guard::{LoopGuard, LoopGuardConfig, LoopGuardVerdict};
 use crate::mcp::McpConnection;
@@ -61,8 +64,8 @@ fn tool_timeout_for(tool_name: &str) -> Duration {
         "trigger_cursor_worker" | "enforce_quality_gate" => {
             Duration::from_secs(CURSOR_WORKER_TIMEOUT_SECS)
         }
-        // Multiple cursor + gate cycles under one tool call.
-        "run_workflow_cycle" => Duration::from_secs(7200),
+        // Multiple cursor + gate cycles under one tool call; project workflow runs the full engine synchronously.
+        "run_workflow_cycle" | "start_project_workflow" => Duration::from_secs(7200),
         _ => Duration::from_secs(TOOL_TIMEOUT_SECS),
     }
 }
@@ -514,6 +517,7 @@ pub async fn run_agent_loop(
                     if iteration == 0 || is_silent_failure {
                         warn!(
                             agent = %manifest.name,
+                            model = %manifest.model.model,
                             iteration,
                             input_tokens = response.usage.input_tokens,
                             output_tokens = response.usage.output_tokens,
@@ -535,6 +539,7 @@ pub async fn run_agent_loop(
                 let text = if text.trim().is_empty() {
                     warn!(
                         agent = %manifest.name,
+                        model = %manifest.model.model,
                         iteration,
                         input_tokens = total_usage.input_tokens,
                         output_tokens = total_usage.output_tokens,
@@ -1010,6 +1015,7 @@ async fn call_with_retry(
     let mut last_error = None;
 
     for attempt in 0..=MAX_RETRIES {
+        log_debug_outbound_completion_request(&request);
         match driver.complete(request.clone()).await {
             Ok(response) => {
                 // Record success with circuit breaker
@@ -1030,6 +1036,7 @@ async fn call_with_retry(
                 }
                 let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
                 warn!(
+                    model = %request.model,
                     attempt,
                     delay_ms = delay,
                     "Rate limited, retrying after delay"
@@ -1049,6 +1056,7 @@ async fn call_with_retry(
                 }
                 let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
                 warn!(
+                    model = %request.model,
                     attempt,
                     delay_ms = delay,
                     "Model overloaded, retrying after delay"
@@ -1065,6 +1073,7 @@ async fn call_with_retry(
                 };
                 let classified = llm_errors::classify_error(&raw_error, status);
                 warn!(
+                    model = %request.model,
                     category = ?classified.category,
                     retryable = classified.is_retryable,
                     raw = %raw_error,
@@ -1118,6 +1127,7 @@ async fn call_with_retry(
                             model = %fb.model,
                             "Trying fallback model"
                         );
+                        log_debug_outbound_completion_request(&fb_request);
                         match fb_driver.complete(fb_request).await {
                             Ok(response) => {
                                 info!(
@@ -1197,6 +1207,7 @@ async fn stream_with_retry(
     let mut last_error = None;
 
     for attempt in 0..=MAX_RETRIES {
+        log_debug_outbound_completion_request(&request);
         match driver.stream(request.clone(), tx.clone()).await {
             Ok(response) => {
                 if let (Some(provider), Some(cooldown)) = (provider, cooldown) {
@@ -1216,6 +1227,7 @@ async fn stream_with_retry(
                 }
                 let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
                 warn!(
+                    model = %request.model,
                     attempt,
                     delay_ms = delay,
                     "Rate limited (stream), retrying after delay"
@@ -1235,6 +1247,7 @@ async fn stream_with_retry(
                 }
                 let delay = std::cmp::max(retry_after_ms, BASE_RETRY_DELAY_MS * 2u64.pow(attempt));
                 warn!(
+                    model = %request.model,
                     attempt,
                     delay_ms = delay,
                     "Model overloaded (stream), retrying after delay"
@@ -1250,6 +1263,7 @@ async fn stream_with_retry(
                 };
                 let classified = llm_errors::classify_error(&raw_error, status);
                 warn!(
+                    model = %request.model,
                     category = ?classified.category,
                     retryable = classified.is_retryable,
                     raw = %raw_error,
@@ -1301,6 +1315,7 @@ async fn stream_with_retry(
                             model = %fb.model,
                             "Trying fallback model (stream)"
                         );
+                        log_debug_outbound_completion_request(&fb_request);
                         match fb_driver.stream(fb_request, tx.clone()).await {
                             Ok(response) => {
                                 info!(
@@ -1693,6 +1708,7 @@ pub async fn run_agent_loop_streaming(
                     if iteration == 0 || is_silent_failure {
                         warn!(
                             agent = %manifest.name,
+                            model = %manifest.model.model,
                             iteration,
                             input_tokens = response.usage.input_tokens,
                             output_tokens = response.usage.output_tokens,
@@ -1714,6 +1730,7 @@ pub async fn run_agent_loop_streaming(
                 let text = if text.trim().is_empty() {
                     warn!(
                         agent = %manifest.name,
+                        model = %manifest.model.model,
                         iteration,
                         input_tokens = total_usage.input_tokens,
                         output_tokens = total_usage.output_tokens,
@@ -3079,6 +3096,10 @@ mod tests {
             Duration::from_secs(3600)
         );
         assert_eq!(tool_timeout_for("run_workflow_cycle"), Duration::from_secs(7200));
+        assert_eq!(
+            tool_timeout_for("start_project_workflow"),
+            Duration::from_secs(7200)
+        );
         assert_eq!(tool_timeout_for("file_read"), Duration::from_secs(120));
         assert_eq!(tool_timeout_for("shell_exec"), Duration::from_secs(120));
     }

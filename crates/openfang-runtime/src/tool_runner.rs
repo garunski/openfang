@@ -504,6 +504,34 @@ pub async fn execute_tool(
                 },
             };
         }
+        "backlog_doc_view" => {
+            return match tool_backlog_doc_view(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
+        "backlog_decision_view" => {
+            return match tool_backlog_decision_view(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
 
         "record_git_action" => {
             return match tool_record_git_action(input, kernel, caller_agent_id).await {
@@ -1105,6 +1133,30 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                 "properties": {
                     "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
                 }
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_doc_view".to_string(),
+            description: "View a Backlog.md document by id via `backlog doc view <doc_id>` (e.g. doc-1). Full document text is in `stdout`; requires allowlisted backlog root.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "doc_id": { "type": "string", "description": "Document id from frontmatter (e.g. doc-11, doc-0001)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                },
+                "required": ["doc_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "backlog_decision_view".to_string(),
+            description: "View a Backlog.md ADR/decision by id via `backlog decision <decision_id> --plain` (same AI-oriented pattern as `backlog task <id> --plain`). Full record is in `stdout`; requires allowlisted backlog root.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "decision_id": { "type": "string", "description": "Decision id from frontmatter (e.g. decision-1, DECISION-2) or numeric key if the CLI accepts it" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                },
+                "required": ["decision_id"]
             }),
         },
         ToolDefinition {
@@ -2394,6 +2446,36 @@ fn backlog_task_id_param(input: &serde_json::Value) -> Result<String, String> {
     Err("Missing required parameter 'task_id'".to_string())
 }
 
+fn backlog_doc_id_param(input: &serde_json::Value) -> Result<String, String> {
+    if let Some(s) = input.get("doc_id").and_then(|v| v.as_str()) {
+        let t = s.trim();
+        if t.is_empty() {
+            return Err("doc_id must be non-empty".to_string());
+        }
+        return Ok(t.to_string());
+    }
+    Err("Missing required parameter 'doc_id'".to_string())
+}
+
+fn backlog_decision_id_param(input: &serde_json::Value) -> Result<String, String> {
+    if let Some(s) = input.get("decision_id").and_then(|v| v.as_str()) {
+        let t = s.trim();
+        if t.is_empty() {
+            return Err("decision_id must be non-empty".to_string());
+        }
+        return Ok(t.to_string());
+    }
+    if let Some(n) = input.get("decision_id").and_then(|v| v.as_u64()) {
+        return Ok(n.to_string());
+    }
+    if let Some(i) = input.get("decision_id").and_then(|v| v.as_i64()) {
+        if i >= 0 {
+            return Ok(i.to_string());
+        }
+    }
+    Err("Missing required parameter 'decision_id'".to_string())
+}
+
 fn optional_pipeline_task_id(input: &serde_json::Value) -> String {
     if let Some(s) = input.get("task_id").and_then(|v| v.as_str()) {
         let t = s.trim();
@@ -2967,6 +3049,48 @@ async fn tool_backlog_doc_list(
     let args = vec!["doc".into(), "list".into(), "--plain".into()];
     let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let parsed = parse_backlog_doc_list_plain(&stdout);
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_doc_view(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let id = backlog_doc_id_param(input)?;
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+    let args = vec!["doc".into(), "view".into(), id.clone()];
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
+    let first_line = stdout.lines().next().unwrap_or("").to_string();
+    let parsed = serde_json::json!({
+        "doc_id": id,
+        "first_line": first_line,
+        "line_count": stdout.lines().count(),
+    });
+    backlog_tool_json_response(code, &stdout, &stderr, parsed)
+}
+
+async fn tool_backlog_decision_view(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let id = backlog_decision_id_param(input)?;
+    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        optional_backlog_root_param(input),
+    )?;
+    let args = vec!["decision".into(), id.clone(), "--plain".into()];
+    let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
+    let first_line = stdout.lines().next().unwrap_or("").to_string();
+    let parsed = serde_json::json!({
+        "decision_id": id,
+        "first_line": first_line,
+        "line_count": stdout.lines().count(),
+    });
     backlog_tool_json_response(code, &stdout, &stderr, parsed)
 }
 
@@ -4828,6 +4952,8 @@ mod tests {
         assert!(names.contains(&"git_create_pr"));
         assert!(names.contains(&"backlog_doc_create"));
         assert!(names.contains(&"backlog_doc_list"));
+        assert!(names.contains(&"backlog_doc_view"));
+        assert!(names.contains(&"backlog_decision_view"));
         assert!(names.contains(&"record_git_action"));
         assert!(names.contains(&"record_workflow_outcome"));
         assert!(names.contains(&"agent_send"));
@@ -5391,6 +5517,68 @@ mod tests {
         .await;
         assert!(result.is_error);
         assert!(result.content.contains("Kernel"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_backlog_doc_view_missing_doc_id() {
+        let root = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![root],
+        });
+        let result = execute_tool(
+            "test-id",
+            "backlog_doc_view",
+            &serde_json::json!({}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("doc_id"), "{}", result.content);
+    }
+
+    #[tokio::test]
+    async fn test_backlog_decision_view_missing_decision_id() {
+        let root = tempfile::tempdir().unwrap().path().canonicalize().unwrap();
+        let k: Arc<dyn KernelHandle> = Arc::new(QaGateStubKernel {
+            roots: vec![],
+            backlog_roots: vec![root],
+        });
+        let result = execute_tool(
+            "test-id",
+            "backlog_decision_view",
+            &serde_json::json!({}),
+            Some(&k),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("decision_id"), "{}", result.content);
     }
 
     #[tokio::test]

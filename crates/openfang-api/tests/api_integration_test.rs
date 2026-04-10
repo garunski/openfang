@@ -300,6 +300,10 @@ async fn start_test_server_with_provider(
             axum::routing::post(routes::backlog_complete_task),
         )
         .route(
+            "/api/projects/{id}/backlog/tasks/{task_id}/workflow-start",
+            axum::routing::post(routes::backlog_start_task_workflow),
+        )
+        .route(
             "/api/projects/{id}/backlog/tasks/{task_id}",
             axum::routing::get(routes::backlog_get_task)
                 .put(routes::backlog_put_task)
@@ -363,6 +367,11 @@ async fn start_test_server_with_provider(
         .route(
             "/api/projects/{id}/backlog/statistics",
             axum::routing::get(routes::backlog_statistics),
+        )
+        .route("/api/logs/files", axum::routing::get(routes::logs_files_list))
+        .route(
+            "/api/logs/files/{key}",
+            axum::routing::get(routes::logs_file_read),
         )
         .route("/api/shutdown", axum::routing::post(routes::shutdown))
         .layer(axum::middleware::from_fn(middleware::request_logging))
@@ -451,6 +460,50 @@ async fn test_health_endpoint() {
     // Detailed fields should NOT appear in public health endpoint
     assert!(body["database"].is_null());
     assert!(body["agent_count"].is_null());
+}
+
+#[tokio::test]
+async fn test_logs_files_allowlist_list_and_read() {
+    let server = start_test_server().await;
+    let home = server.state.kernel.config.home_dir.clone();
+    let log_dir = home.join("logs");
+    std::fs::create_dir_all(&log_dir).unwrap();
+    std::fs::write(log_dir.join("daemon.log"), b"alpha\nbeta\n").unwrap();
+
+    let client = reqwest::Client::new();
+
+    let list = client
+        .get(format!("{}/api/logs/files", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(list.status(), 200);
+    let j: serde_json::Value = list.json().await.unwrap();
+    let files = j["files"].as_array().unwrap();
+    let daemon = files
+        .iter()
+        .find(|f| f["key"] == "daemon")
+        .expect("daemon key");
+    assert!(daemon["exists"].as_bool().unwrap());
+    assert_eq!(daemon["size_bytes"].as_u64().unwrap(), 11);
+
+    let read = client
+        .get(format!("{}/api/logs/files/daemon", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(read.status(), 200);
+    let body: serde_json::Value = read.json().await.unwrap();
+    assert_eq!(body["content"], "alpha\nbeta\n");
+    assert_eq!(body["file_size"], 11);
+    assert_eq!(body["truncated"], false);
+
+    let unknown = client
+        .get(format!("{}/api/logs/files/evil", server.base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unknown.status(), 404);
 }
 
 #[tokio::test]
@@ -1103,6 +1156,17 @@ async fn test_backlog_store_task_api() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 200);
+
+    let resp = client
+        .post(format!(
+            "{}/api/projects/{}/backlog/tasks/TASK-1/workflow-start",
+            server.base_url, pid
+        ))
+        .json(&serde_json::json!({}))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 400);
 
     let resp = client
         .post(format!(

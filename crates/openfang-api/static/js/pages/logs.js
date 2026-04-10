@@ -1,4 +1,4 @@
-// OpenFang Logs Page — Real-time log viewer (SSE streaming + polling fallback) + Audit Trail tab
+// OpenFang Logs Page — Real-time log viewer (SSE streaming + polling fallback) + Audit Trail + Files inspector
 'use strict';
 
 function logsPage() {
@@ -26,6 +26,21 @@ function logsPage() {
     filterAction: '',
     auditLoading: false,
     auditLoadError: '',
+
+    // -- Files (filesystem log inspector) --
+    fileList: [],
+    fileListLoading: false,
+    selectedFileKey: '',
+    fileContent: '',
+    fileChunkLimit: 262144,
+    fileLoadError: '',
+    fileRefreshing: false,
+    fileFollow: true,
+    fileSearch: '',
+    fileLevelFilter: '',
+    fileViewMode: 'formatted', // 'formatted' | 'raw'
+    fileUtf8Lossy: false,
+    _filePollTimer: null,
 
     startStreaming: function() {
       var self = this;
@@ -247,9 +262,238 @@ function logsPage() {
       }
     },
 
+    // -- Files tab: ANSI strip + parse + highlight --
+    stripAnsi: function(s) {
+      if (!s) return '';
+      return s
+        .replace(/\x1b\][^\x07]*\x07/g, '')
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
+        .replace(/\x1b\([0-9A-Za-z]/g, '');
+    },
+
+    escapeHtml: function(s) {
+      return String(s || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    },
+
+    highlightNeedle: function(s, needle) {
+      var plain = String(s || '');
+      if (!needle) return this.escapeHtml(plain);
+      var lowerP = plain.toLowerCase();
+      var nl = needle.toLowerCase();
+      var parts = [];
+      var pos = 0;
+      while (pos < plain.length) {
+        var fi = lowerP.indexOf(nl, pos);
+        if (fi === -1) {
+          parts.push(this.escapeHtml(plain.slice(pos)));
+          break;
+        }
+        parts.push(this.escapeHtml(plain.slice(pos, fi)));
+        parts.push('<mark class="log-search-mark">' + this.escapeHtml(plain.slice(fi, fi + needle.length)) + '</mark>');
+        pos = fi + needle.length;
+      }
+      return parts.join('');
+    },
+
+    parseLogLineAt: function(line, idx) {
+      var plain = this.stripAnsi(line);
+      var ts = '';
+      var level = '';
+      var module = '';
+      var message = plain;
+      var fieldsRaw = '';
+      var m = plain.match(
+        /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)\s+(ERROR|WARN|INFO|DEBUG|TRACE)\s+([^:]+):\s*(.*)$/
+      );
+      if (m) {
+        ts = m[1];
+        level = m[2];
+        module = m[3].trim();
+        message = m[4];
+      } else {
+        var m2 = plain.match(/^(ERROR|WARN|INFO|DEBUG|TRACE)\s+([^:]+):\s*(.*)$/);
+        if (m2) {
+          level = m2[1];
+          module = m2[2].trim();
+          message = m2[3];
+        }
+      }
+      var bm = message.match(/^(.*?)(\s*\{[\s\S]*\})$/);
+      if (bm) {
+        message = bm[1].trim();
+        fieldsRaw = bm[2].trim();
+      }
+      return {
+        id: idx,
+        raw: line,
+        plain: plain,
+        ts: ts,
+        level: level,
+        module: module,
+        message: message,
+        fieldsRaw: fieldsRaw,
+      };
+    },
+
+    get fileLines() {
+      var c = this.fileContent || '';
+      if (!c) return [];
+      var lines = c.split(/\r?\n/);
+      var self = this;
+      return lines.map(function(l, i) {
+        return self.parseLogLineAt(l, i);
+      });
+    },
+
+    get filteredFileLines() {
+      var q = (this.fileSearch || '').toLowerCase();
+      var lv = this.fileLevelFilter;
+      return this.fileLines.filter(function(row) {
+        if (lv && (row.level || '').toUpperCase() !== lv) return false;
+        if (!q) return true;
+        var hay = (
+          (row.ts || '') +
+          ' ' +
+          (row.level || '') +
+          ' ' +
+          (row.module || '') +
+          ' ' +
+          (row.message || '') +
+          ' ' +
+          (row.fieldsRaw || '')
+        ).toLowerCase();
+        return hay.indexOf(q) !== -1;
+      });
+    },
+
+    get fileRawHtml() {
+      var raw = this.fileContent || '';
+      try {
+        if (typeof AnsiUp !== 'undefined' && AnsiUp) {
+          var au = new AnsiUp();
+          return au.ansi_to_html(raw);
+        }
+      } catch(e) { /* fall through */ }
+      return this.escapeHtml(raw).replace(/\n/g, '<br>');
+    },
+
+    fileCellHtml: function(row, field) {
+      var v = row[field] || '';
+      return this.highlightNeedle(v, this.fileSearch);
+    },
+
+    logLevelClass: function(level) {
+      var L = (level || '').toLowerCase();
+      if (L === 'error') return 'log-level-error';
+      if (L === 'warn') return 'log-level-warn';
+      if (L === 'info') return 'log-level-info';
+      if (L === 'debug' || L === 'trace') return 'log-level-debug';
+      return 'log-level-plain';
+    },
+
+    stopFilePoll: function() {
+      if (this._filePollTimer) {
+        clearInterval(this._filePollTimer);
+        this._filePollTimer = null;
+      }
+    },
+
+    startFilePoll: function() {
+      this.stopFilePoll();
+      var self = this;
+      if (this.tab !== 'files' || !this.fileFollow) return;
+      this._filePollTimer = setInterval(function() {
+        if (self.tab === 'files' && self.fileFollow) {
+          self.refreshFileChunk(self.fileFollow);
+        }
+      }, 2000);
+    },
+
+    async enterFilesTab() {
+      this.tab = 'files';
+      await this.loadFileList();
+      if (!this.selectedFileKey && this.fileList.length) {
+        this.selectedFileKey = this.fileList[0].key;
+      }
+      await this.refreshFileChunk(true);
+      this.startFilePoll();
+    },
+
+    async loadFileList() {
+      this.fileListLoading = true;
+      this.fileLoadError = '';
+      try {
+        var data = await OpenFangAPI.get('/api/logs/files');
+        this.fileList = data.files || [];
+      } catch(e) {
+        this.fileList = [];
+        this.fileLoadError = e.message || 'Failed to list log files';
+      }
+      this.fileListLoading = false;
+    },
+
+    async onFileKeyChange() {
+      await this.refreshFileChunk(true);
+      this.startFilePoll();
+    },
+
+    async refreshFileChunk(scrollTail) {
+      if (!this.selectedFileKey) return;
+      this.fileRefreshing = true;
+      if (!scrollTail) this.fileLoadError = '';
+      try {
+        var listData = await OpenFangAPI.get('/api/logs/files');
+        this.fileList = listData.files || [];
+        var f = this.fileList.find(function(x) {
+          return x.key === this.selectedFileKey;
+        }.bind(this));
+        if (!f) {
+          this.fileContent = '';
+          this.fileRefreshing = false;
+          return;
+        }
+        if (!f.exists) {
+          this.fileContent = '';
+          this.fileRefreshing = false;
+          return;
+        }
+        var lim = this.fileChunkLimit;
+        var off = f.size_bytes > lim ? f.size_bytes - lim : 0;
+        var path =
+          '/api/logs/files/' +
+          encodeURIComponent(this.selectedFileKey) +
+          '?offset=' +
+          off +
+          '&limit=' +
+          lim;
+        var data = await OpenFangAPI.get(path);
+        this.fileContent = data.content || '';
+        this.fileUtf8Lossy = data.utf8_lossy === true;
+        if (scrollTail) {
+          this.$nextTick(function() {
+            var el = document.getElementById('log-file-container');
+            if (el) el.scrollTop = el.scrollHeight;
+          });
+        }
+      } catch(e) {
+        this.fileLoadError = e.message || 'Load failed';
+      }
+      this.fileRefreshing = false;
+    },
+
+    setFileFollow: function(on) {
+      this.fileFollow = on;
+      this.startFilePoll();
+    },
+
     destroy: function() {
       if (this._eventSource) { this._eventSource.close(); this._eventSource = null; }
       if (this._pollTimer) { clearInterval(this._pollTimer); this._pollTimer = null; }
-    }
+      this.stopFilePoll();
+    },
   };
 }

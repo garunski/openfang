@@ -490,6 +490,10 @@ pub async fn build_router(
             axum::routing::post(routes::backlog_complete_task),
         )
         .route(
+            "/api/projects/{id}/backlog/tasks/{task_id}/workflow-start",
+            axum::routing::post(routes::backlog_start_task_workflow),
+        )
+        .route(
             "/api/projects/{id}/backlog/tasks/{task_id}",
             axum::routing::get(routes::backlog_get_task)
                 .put(routes::backlog_put_task)
@@ -660,6 +664,12 @@ pub async fn build_router(
         )
         // Live log streaming (SSE)
         .route("/api/logs/stream", axum::routing::get(routes::logs_stream))
+        // Allowlisted filesystem logs (read-only chunks for dashboard inspector)
+        .route("/api/logs/files", axum::routing::get(routes::logs_files_list))
+        .route(
+            "/api/logs/files/{key}",
+            axum::routing::get(routes::logs_file_read),
+        )
         // Peer/Network endpoints
         .route("/api/peers", axum::routing::get(routes::list_peers))
         .route(

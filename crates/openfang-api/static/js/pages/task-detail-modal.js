@@ -23,6 +23,39 @@ function backlogTaskDetailMixins() {
     taskEditSessionKey: 0,
     taskModalTaskActions: true,
     _taskEasymde: null,
+    /** Registered workflows for workflow-start dropdown (from GET /api/workflows). */
+    taskWorkflowsList: [],
+    taskWorkflowsLoading: false,
+    taskWorkflowSelectedId: '',
+    taskWorkflowRunning: false,
+    taskWorkflowRunError: '',
+
+    /**
+     * All registered workflows (GET /api/workflows) with an id.
+     * We do not hide workflows bound to another project — that made the dropdown look empty
+     * whenever every template had a different project_id. The server rejects a bad pairing on start.
+     */
+    get taskWorkflowsForProject() {
+      var list = this.taskWorkflowsList || [];
+      return list.filter(function (w) {
+        return w && w.id != null && String(w.id).trim() !== '';
+      });
+    },
+
+    taskWorkflowOptionLabel(w) {
+      var steps = w.steps != null ? w.steps : '?';
+      var base = (w.name || w.id) + ' (' + steps + ' steps)';
+      var cur = this.selectedProject && this.selectedProject.id ? String(this.selectedProject.id) : '';
+      var bound =
+        w.project_id != null && String(w.project_id).trim() !== ''
+          ? String(w.project_id)
+          : w.projectId != null && String(w.projectId).trim() !== ''
+            ? String(w.projectId)
+            : '';
+      if (!bound) return base + ' — global';
+      if (cur && bound !== cur) return base + ' — other project';
+      return base;
+    },
 
     taskDetailDestroyEasymde() {
       var m = this._taskEasymde;
@@ -99,6 +132,68 @@ function backlogTaskDetailMixins() {
       }
     },
 
+    async loadTaskWorkflowsForModal() {
+      this.taskWorkflowRunError = '';
+      if (!this.selectedProject) {
+        this.taskWorkflowsList = [];
+        return;
+      }
+      this.taskWorkflowsLoading = true;
+      try {
+        var data = await OpenFangAPI.get('/api/workflows');
+        this.taskWorkflowsList = Array.isArray(data) ? data : [];
+        var rows = this.taskWorkflowsForProject;
+        if (
+          this.taskWorkflowSelectedId &&
+          !rows.some(function (w) {
+            return String(w.id) === String(this.taskWorkflowSelectedId);
+          }, this)
+        ) {
+          this.taskWorkflowSelectedId = rows.length ? String(rows[0].id) : '';
+        } else if (!this.taskWorkflowSelectedId && rows.length) {
+          this.taskWorkflowSelectedId = String(rows[0].id);
+        }
+      } catch (e) {
+        this.taskWorkflowsList = [];
+        this.taskWorkflowRunError = e.message || 'Could not load workflows';
+      }
+      this.taskWorkflowsLoading = false;
+    },
+
+    async startTaskWorkflowFromModal() {
+      if (!this.selectedProject || !this.backlogDetailTask || !this.taskWorkflowSelectedId) return;
+      this.taskWorkflowRunning = true;
+      this.taskWorkflowRunError = '';
+      try {
+        var body = { workflowId: this.taskWorkflowSelectedId, postMattermostConfirmation: false };
+        var res = await OpenFangAPI.post(
+          '/api/projects/' +
+            encodeURIComponent(this.selectedProject.id) +
+            '/backlog/tasks/' +
+            encodeURIComponent(this.backlogDetailTask.id) +
+            '/workflow-start',
+          body
+        );
+        if (typeof OpenFangToast !== 'undefined' && OpenFangToast.success) {
+          var rid = res && res.run_id ? res.run_id : '';
+          OpenFangToast.success(
+            rid ? 'Workflow started (run ' + rid.slice(0, 8) + '…)' : 'Workflow started'
+          );
+        }
+        this.closeTaskModal();
+        if (typeof this.invalidateBacklogViews === 'function') this.invalidateBacklogViews();
+        if (this.detailTab === 'overview' && typeof this.loadDetailTab === 'function') {
+          await this.loadDetailTab('overview', true);
+        }
+      } catch (e) {
+        this.taskWorkflowRunError = e.message || 'Workflow start failed';
+        if (typeof OpenFangToast !== 'undefined' && OpenFangToast.error) {
+          OpenFangToast.error(this.taskWorkflowRunError);
+        }
+      }
+      this.taskWorkflowRunning = false;
+    },
+
     openBacklogTaskDetailFromPayload(task) {
       if (!task || !task.id) return;
       this.taskDetailDestroyEasymde();
@@ -110,6 +205,11 @@ function backlogTaskDetailMixins() {
       this.taskModalTaskActions = false;
       this.backlogDetailTask = task;
       this.taskDetailHtml = '';
+      this.taskWorkflowSelectedId = '';
+      var self = this;
+      if (typeof this.loadTaskWorkflowsForModal === 'function') {
+        this.loadTaskWorkflowsForModal().catch(function () {});
+      }
     },
 
     async openBacklogTaskDetail(task) {
@@ -135,6 +235,10 @@ function backlogTaskDetailMixins() {
         this.taskModalError = e.message || 'Failed to load task';
       }
       this.taskModalLoading = false;
+      this.taskWorkflowSelectedId = '';
+      if (!this.taskModalError && typeof this.loadTaskWorkflowsForModal === 'function') {
+        this.loadTaskWorkflowsForModal().catch(function () {});
+      }
     },
 
     closeTaskModal() {
@@ -146,6 +250,10 @@ function backlogTaskDetailMixins() {
       this.taskDetailEditMode = false;
       this.taskEditForm = {};
       this.taskModalTaskActions = true;
+      this.taskWorkflowsList = [];
+      this.taskWorkflowSelectedId = '';
+      this.taskWorkflowRunError = '';
+      this.taskWorkflowRunning = false;
     },
 
     backlogDetailMd(text) {

@@ -3,6 +3,7 @@
 //! Abstracts over multiple LLM providers (Anthropic, OpenAI, Ollama, etc.).
 
 use async_trait::async_trait;
+use openfang_types::config::ThinkingConfig;
 use openfang_types::message::{ContentBlock, Message, StopReason, TokenUsage};
 use openfang_types::tool::{ToolCall, ToolDefinition};
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,47 @@ pub struct CompletionRequest {
     /// System prompt (extracted from messages for APIs that need it separately).
     pub system: Option<String>,
     /// Extended thinking configuration (if supported by the model).
-    pub thinking: Option<openfang_types::config::ThinkingConfig>,
+    pub thinking: Option<ThinkingConfig>,
+}
+
+/// Log the full outbound [`CompletionRequest`] as JSON at `DEBUG`.
+///
+/// Target: `openfang_llm_outbound` (filter logs with `openfang_llm_outbound` or `debug`).
+/// **Payload can include user text and tool data** — use only in trusted environments.
+pub fn log_debug_outbound_completion_request(request: &CompletionRequest) {
+    #[derive(Serialize)]
+    struct OutboundSnapshot<'a> {
+        model: &'a str,
+        max_tokens: u32,
+        temperature: f32,
+        system: &'a Option<String>,
+        thinking: &'a Option<ThinkingConfig>,
+        messages: &'a [Message],
+        tools: &'a [ToolDefinition],
+    }
+    let snap = OutboundSnapshot {
+        model: request.model.as_str(),
+        max_tokens: request.max_tokens,
+        temperature: request.temperature,
+        system: &request.system,
+        thinking: &request.thinking,
+        messages: request.messages.as_slice(),
+        tools: request.tools.as_slice(),
+    };
+    match serde_json::to_string_pretty(&snap) {
+        Ok(payload) => {
+            tracing::debug!(
+                target: "openfang_llm_outbound",
+                payload_len = payload.len(),
+                "LLM outbound completion request (full payload)\n{payload}",
+            );
+        }
+        Err(e) => tracing::debug!(
+            target: "openfang_llm_outbound",
+            error = %e,
+            "LLM outbound completion request (serialization failed)",
+        ),
+    }
 }
 
 /// A response from an LLM completion.

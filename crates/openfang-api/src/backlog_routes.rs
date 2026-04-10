@@ -11,6 +11,7 @@ use openfang_types::backlog::{
     AcceptanceCriterion, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSearchResult,
     BacklogSnapshot, BacklogTask, DecisionStatus, DocTreeNode, TaskPriority,
 };
+use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_types::project::{ProjectId, ADMIN_SPOKE_REQUIRED_MSG};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -662,6 +663,89 @@ pub async fn backlog_complete_task(
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => map_backlog_err(e).into_response(),
+    }
+}
+
+/// POST /api/projects/:id/backlog/tasks/:task_id/workflow-start
+///
+/// Runs the same pipeline as the workflow-coordinator `start_project_workflow` tool:
+/// validates task is **Ready for Dev**, resolves the workflow, then `run_workflow` with project context.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklogStartTaskWorkflowBody {
+    pub workflow_id: Option<String>,
+    pub workflow_name: Option<String>,
+    #[serde(default)]
+    pub post_mattermost_confirmation: bool,
+}
+
+pub async fn backlog_start_task_workflow(
+    State(state): State<Arc<AppState>>,
+    Path((id, task_id)): Path<(String, String)>,
+    Json(body): Json<BacklogStartTaskWorkflowBody>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if let Err(tup) = ensure_project(&state, pid) {
+        return tup.into_response();
+    }
+    let wf_id = body.workflow_id.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let wf_name = body.workflow_name.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if wf_id.is_none() && wf_name.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Provide workflow_id or workflow_name"})),
+        )
+            .into_response();
+    }
+    let project_id = pid.to_string();
+    let tid = task_id.trim();
+    if tid.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "task_id must not be empty"})),
+        )
+            .into_response();
+    }
+    match KernelHandle::start_project_workflow(
+        state.kernel.as_ref(),
+        project_id.as_str(),
+        tid,
+        wf_id,
+        wf_name,
+        body.post_mattermost_confirmation,
+    )
+    .await
+    {
+        Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
+            Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+            Err(_) => (
+                StatusCode::OK,
+                Json(serde_json::json!({ "raw": json_str })),
+            )
+                .into_response(),
+        },
+        Err(msg) => {
+            let lower = msg.to_lowercase();
+            let status = if lower.contains("not found")
+                || lower.contains("unknown project")
+                || lower.contains("no such")
+            {
+                StatusCode::NOT_FOUND
+            } else if lower.contains("required:")
+                || lower.contains("missing")
+                || lower.contains("invalid")
+                || lower.contains("cannot start")
+                || lower.contains("ready for dev")
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, Json(serde_json::json!({ "error": msg }))).into_response()
+        }
     }
 }
 

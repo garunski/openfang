@@ -4007,9 +4007,36 @@ impl OpenFangKernel {
                 .unwrap_or("(none)"),
             spoke_lines
         );
+        let tools_lines: String = def
+            .tools
+            .iter()
+            .map(|t| format!("  - `{t}`"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let tools_block = if tools_lines.is_empty() {
+            "## Available tools (hand manifest)\n\n  - _(none listed)_\n".to_string()
+        } else {
+            format!(
+                "## Available tools (hand manifest)\n\n\
+                 You can invoke these **by tool name** when reasoning about automation:\n\n{tools_lines}\n"
+            )
+        };
+        let skills_block = if def.skills.is_empty() {
+            String::new()
+        } else {
+            let lines: Vec<String> = def
+                .skills
+                .iter()
+                .map(|s| format!("  - `{s}`"))
+                .collect();
+            format!(
+                "\n## Bundled skills (reference)\n\n{}\n",
+                lines.join("\n")
+            )
+        };
         manifest.model.system_prompt = format!(
-            "{}\n\n---\n\n{}",
-            manifest.model.system_prompt, project_block
+            "{}\n\n---\n\n{}\n\n---\n\n{}{}",
+            manifest.model.system_prompt, project_block, tools_block, skills_block
         );
 
         let agent_id = self.spawn_agent_with_parent(manifest, None, None)?;
@@ -4504,6 +4531,30 @@ impl OpenFangKernel {
         }
     }
 
+    /// Like [`Self::resolve_workflow_agent`], but maps bundled workflow name `workflow-coordinator-hand`
+    /// to this project's [`Project::orchestrator_agent_id`]. Per-project coordinators are spawned with
+    /// a display name (`Workflow · …`), not the hand manifest name, so JSON workflows must resolve via
+    /// the stored orchestrator id when `project_id` is known.
+    pub fn resolve_workflow_step_agent(
+        &self,
+        agent_ref: &StepAgent,
+        project_id: Option<ProjectId>,
+    ) -> Option<(AgentId, String)> {
+        const WORKFLOW_COORD_HAND: &str = "workflow-coordinator-hand";
+        if let Some(pid) = project_id {
+            if let StepAgent::ByName { name } = agent_ref {
+                if name.trim().eq_ignore_ascii_case(WORKFLOW_COORD_HAND) {
+                    let proj = self.project_store.get(pid)?;
+                    let raw = proj.orchestrator_agent_id.as_ref()?.trim();
+                    let agent_id: AgentId = raw.parse().ok()?;
+                    let entry = self.registry.get(agent_id)?;
+                    return Some((agent_id, entry.name.clone()));
+                }
+            }
+        }
+        self.resolve_workflow_agent(agent_ref)
+    }
+
     /// True when the agent is explicitly bound to the project or its workspace is under a spoke.
     pub fn agent_assigned_to_project(&self, project: &Project, agent_id: AgentId) -> bool {
         let id_str = agent_id.to_string();
@@ -4534,7 +4585,8 @@ impl OpenFangKernel {
                 continue;
             }
             let (agent_id, agent_name) =
-                self.resolve_workflow_agent(&step.agent).ok_or_else(|| {
+                self.resolve_workflow_step_agent(&step.agent, Some(project_id))
+                    .ok_or_else(|| {
                     KernelError::OpenFang(OpenFangError::InvalidInput(format!(
                         "Agent not found for workflow step '{}'",
                         step.name
@@ -4592,7 +4644,8 @@ impl OpenFangKernel {
                 KernelError::OpenFang(OpenFangError::Internal("Workflow not found".to_string()))
             })?;
 
-        let resolver = |agent_ref: &StepAgent| self.resolve_workflow_agent(agent_ref);
+        let resolver =
+            |agent_ref: &StepAgent| self.resolve_workflow_step_agent(agent_ref, effective_project);
 
         // Message sender: sends to agent and returns (output, in_tokens, out_tokens)
         let send_message = |agent_id: AgentId, message: String| async move {
@@ -4609,7 +4662,8 @@ impl OpenFangKernel {
         };
 
         // SECURITY: Global workflow timeout to prevent runaway execution.
-        const MAX_WORKFLOW_SECS: u64 = 3600; // 1 hour
+        // Must cover bundled multi-step templates (e.g. workflow-doc-to-tasks: 900+7200+900s step budgets).
+        const MAX_WORKFLOW_SECS: u64 = 10_800; // 3 hours
 
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(MAX_WORKFLOW_SECS),
@@ -7725,8 +7779,20 @@ impl KernelHandle for OpenFangKernel {
                 "Task {tid} not found in project backlog (exit {code}): {stderr}"
             ));
         }
-        let status = parse_backlog_plain_status(&stdout)
-            .ok_or_else(|| format!("Could not read task status from backlog output for {tid}"))?;
+        let status = parse_backlog_plain_status(&stdout).ok_or_else(|| {
+            let preview: String = stdout
+                .chars()
+                .take(500)
+                .collect::<String>()
+                .replace('\n', " ");
+            warn!(
+                task_id = %tid,
+                backlog_cwd = %cwd.display(),
+                stdout_preview = %preview,
+                "Could not parse status from `backlog task … --plain` output (check backlog CLI version vs OpenFang parser)"
+            );
+            format!("Could not read task status from backlog output for {tid}")
+        })?;
         if !status.trim().eq_ignore_ascii_case("Ready for Dev") {
             return Err(format!(
                 "Cannot start pipeline: task {tid} status is '{status}' (required: Ready for Dev)"

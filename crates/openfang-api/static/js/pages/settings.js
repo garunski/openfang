@@ -298,6 +298,17 @@ function settingsPage() {
       if (!ok) this.defaultsOrchestratorModel = '';
     },
 
+    /** Interpret POST /api/config/set JSON: throws on reload failure; warns on restart-required. */
+    applyConfigSetResponse(r) {
+      if (!r || typeof r !== 'object') return;
+      if (r.status === 'saved_reload_failed') {
+        throw new Error('Config was written but reload failed. Fix config.toml and use POST /api/config/reload or restart the daemon.');
+      }
+      if (r.status === 'applied_partial') {
+        OpenFangToast.warning('Saved. A full daemon restart is required for some changes to apply.');
+      }
+    },
+
     async saveOrchestratorDefaults() {
       var prov = (this.defaultsOrchestratorProvider || '').trim();
       var mod = (this.defaultsOrchestratorModel || '').trim();
@@ -307,8 +318,13 @@ function settingsPage() {
       }
       this.defaultsSaving = true;
       try {
-        await OpenFangAPI.post('/api/config/set', { path: 'orchestrator_default_model.provider', value: prov });
-        await OpenFangAPI.post('/api/config/set', { path: 'orchestrator_default_model.model', value: mod });
+        var r = await OpenFangAPI.post('/api/config/set', {
+          updates: [
+            { path: 'orchestrator_default_model.provider', value: prov },
+            { path: 'orchestrator_default_model.model', value: mod },
+          ],
+        });
+        this.applyConfigSetResponse(r);
         OpenFangToast.success('Saved. New per-project orchestrators pick this model when created.');
         await this.refreshDefaultsOrchestratorForm();
       } catch(e) {
@@ -362,8 +378,13 @@ function settingsPage() {
       }
       this.defaultsSaving = true;
       try {
-        await OpenFangAPI.post('/api/config/set', { path: 'memory_default_embedding.provider', value: prov });
-        await OpenFangAPI.post('/api/config/set', { path: 'memory_default_embedding.model', value: mod });
+        var r = await OpenFangAPI.post('/api/config/set', {
+          updates: [
+            { path: 'memory_default_embedding.provider', value: prov },
+            { path: 'memory_default_embedding.model', value: mod },
+          ],
+        });
+        this.applyConfigSetResponse(r);
         OpenFangToast.success('Saved. Memory semantic search uses this embedding provider when set.');
         await this.refreshDefaultsMemoryEmbeddingForm();
       } catch(e) {
@@ -480,7 +501,8 @@ function settingsPage() {
       var path = (sectionMeta && sectionMeta.root_level) ? field : key;
       this.configSaving[key] = true;
       try {
-        await OpenFangAPI.post('/api/config/set', { path: path, value: value });
+        var r = await OpenFangAPI.post('/api/config/set', { path: path, value: value });
+        this.applyConfigSetResponse(r);
         this.configDirty[key] = false;
         OpenFangToast.success('Saved ' + field);
       } catch(e) {

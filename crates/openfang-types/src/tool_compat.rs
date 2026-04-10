@@ -25,6 +25,9 @@ pub fn map_tool_name(openclaw_name: &str) -> Option<&'static str> {
         "sessions_list" | "agents_list" | "agent_list" => Some("agent_list"),
         "sessions_spawn" => Some("agent_send"),
 
+        // Workflow: models often shorten the registered tool name.
+        "start_workflow" => Some("start_project_workflow"),
+
         // LLM-hallucinated aliases (fs-* style names)
         "fs-read" | "fs_read" | "fsRead" | "readFile" => Some("file_read"),
         "fs-write" | "fs_write" | "fsWrite" | "writeFile" => Some("file_write"),
@@ -60,6 +63,7 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "enforce_quality_gate"
             | "trigger_cursor_worker"
             | "run_workflow_cycle"
+            | "start_project_workflow"
             | "record_git_action"
             | "record_workflow_outcome"
             | "backlog_task_list"
@@ -67,6 +71,8 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "backlog_task_edit"
             | "backlog_doc_create"
             | "backlog_doc_list"
+            | "backlog_doc_view"
+            | "backlog_decision_view"
             | "web_search"
             | "web_fetch"
             | "browser_navigate"
@@ -181,6 +187,9 @@ mod tests {
         // Unknown names pass through unchanged
         assert_eq!(normalize_tool_name("my_custom_tool"), "my_custom_tool");
         assert_eq!(normalize_tool_name("mcp_server_tool"), "mcp_server_tool");
+
+        assert_eq!(normalize_tool_name("start_workflow"), "start_project_workflow");
+        assert_eq!(normalize_tool_name("start_project_workflow"), "start_project_workflow");
     }
 
     #[test]

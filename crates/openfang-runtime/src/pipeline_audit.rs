@@ -210,8 +210,55 @@ pub fn log_workflow_run_outcome(
     });
 }
 
-/// Parse `status:` from YAML front matter in `backlog task <id> --plain` output.
+fn normalize_backlog_plain_text(text: &str) -> &str {
+    text.strip_prefix('\u{feff}').unwrap_or(text)
+}
+
+/// Strip kanban / `backlog task --plain` decorative glyphs before the real status label.
+fn strip_leading_plain_task_status_markers(s: &str) -> String {
+    let mut rest = s.trim();
+    loop {
+        let t = rest.trim_start();
+        let mut it = t.chars();
+        let Some(c) = it.next() else {
+            return String::new();
+        };
+        if matches!(
+            c,
+            '○' | '●' | '◉' | '◯' | '•' | '·' | '▪' | '▸' | '►' | '‣' | '⦿' | '□' | '■' | '✓'
+                | '✔' | '☐' | '☑'
+        ) || c == '-' || c == '*' || c == '>'
+        {
+            rest = it.as_str();
+            continue;
+        }
+        return t.to_string();
+    }
+}
+
+fn parse_status_line_value(line: &str) -> Option<String> {
+    let t = line.trim();
+    let prefix = "status:";
+    if t.len() < prefix.len() || !t[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        return None;
+    }
+    let raw = t[prefix.len()..].trim();
+    let raw = raw.trim_matches('\'').trim_matches('"').trim();
+    let s = strip_leading_plain_task_status_markers(raw);
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Parse `status:` from `backlog task <id> --plain` output.
+///
+/// Prefer YAML front matter between `---` lines (first `status:` wins). If none is found
+/// (some backlog CLI versions omit closing `---` or print a different plain layout), scan
+/// **all** lines for a leading case-insensitive `status:` — first match wins.
 pub fn parse_backlog_plain_status(text: &str) -> Option<String> {
+    let text = normalize_backlog_plain_text(text);
     let mut in_fm = false;
     for line in text.lines() {
         let t = line.trim();
@@ -224,12 +271,14 @@ pub fn parse_backlog_plain_status(text: &str) -> Option<String> {
             continue;
         }
         if in_fm {
-            if let Some(rest) = t.strip_prefix("status:") {
-                let s = rest.trim().trim_matches('\'').trim_matches('"').to_string();
-                if !s.is_empty() {
-                    return Some(s);
-                }
+            if let Some(s) = parse_status_line_value(t) {
+                return Some(s);
             }
+        }
+    }
+    for line in text.lines() {
+        if let Some(s) = parse_status_line_value(line) {
+            return Some(s);
         }
     }
     None
@@ -251,6 +300,39 @@ mod tests {
     #[test]
     fn parse_backlog_plain_status_none_without_front_matter() {
         assert!(parse_backlog_plain_status("no front matter").is_none());
+    }
+
+    #[test]
+    fn parse_backlog_plain_status_fallback_without_closing_delimiter() {
+        let text = "---\nid: TASK-52\nstatus: Ready for Dev\ncreated_date: 2026-04-10\n\n";
+        assert_eq!(
+            parse_backlog_plain_status(text).as_deref(),
+            Some("Ready for Dev")
+        );
+    }
+
+    #[test]
+    fn parse_backlog_plain_status_case_insensitive_key() {
+        let text = "---\nStatus: Ready for Dev\n---\n";
+        assert_eq!(
+            parse_backlog_plain_status(text).as_deref(),
+            Some("Ready for Dev")
+        );
+    }
+
+    #[test]
+    fn parse_backlog_plain_status_strips_bom() {
+        let text = "\u{feff}---\nstatus: New\n---\n";
+        assert_eq!(parse_backlog_plain_status(text).as_deref(), Some("New"));
+    }
+
+    #[test]
+    fn parse_backlog_plain_status_strips_circle_bullet_before_status() {
+        let text = "---\nstatus: ○ Ready for Dev\n---\n";
+        assert_eq!(
+            parse_backlog_plain_status(text).as_deref(),
+            Some("Ready for Dev")
+        );
     }
 
     #[test]

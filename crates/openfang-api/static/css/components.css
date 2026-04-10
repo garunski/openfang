@@ -1607,8 +1607,36 @@ table.trader-trades-table tr:hover td {
   overflow: hidden;
 }
 
+.chat-wrapper > .page-header {
+  flex-shrink: 0;
+}
+
+/* Dashboard — embedded chat (orchestrator tab + project Agents chat): chrome + scroll inside .messages */
+.project-chat-embed-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Overview → Orchestrator: fixed viewport band so inner .messages scrolls, not the page */
+.project-overview-orchestrator-chat {
+  display: flex;
+  flex-direction: column;
+  height: min(70vh, 720px);
+  max-height: min(70vh, 720px);
+  min-height: 280px;
+  overflow: hidden;
+}
+
 .messages {
   flex: 1;
+  min-height: 0; /* allow flex child to shrink so overflow-y scrolls inside the panel */
   overflow-y: auto;
   padding: 20px 24px;
   scroll-behavior: smooth;
@@ -2115,25 +2143,37 @@ mark.search-highlight {
   box-shadow: var(--shadow-md), var(--shadow-accent);
 }
 
-/* Project detail — Chat tab embed */
+/* Project detail — Agents tab chat: fixed band; message list scrolls inside */
 .project-chat-embed {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: min(72vh, 840px);
+  height: min(76vh, 860px);
+  max-height: min(76vh, 860px);
+  min-height: 320px;
+  overflow: hidden;
 }
 
 @media (max-width: 768px) {
   .project-chat-embed {
     gap: 8px;
-    min-height: min(52vh, 520px);
+    height: min(70vh, 720px);
+    max-height: min(70vh, 720px);
   }
 }
 
 @media (max-width: 480px) {
   .project-chat-embed {
-    min-height: min(45vh, 420px);
+    height: min(64vh, 620px);
+    max-height: min(64vh, 620px);
   }
+}
+
+.project-chat-embed__chat-slot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 /* Project overview — KPI tiles */
@@ -3428,7 +3468,31 @@ mark.search-highlight {
 .log-level-info { color: var(--info); }
 .log-level-warn { color: var(--warning, #f59e0b); }
 .log-level-error { color: var(--error); }
+.log-level-debug { color: var(--text-dim, #94a3b8); }
+.log-level-plain { color: var(--text-muted); }
 .log-timestamp { color: var(--text-muted); font-size: 10px; margin-right: 8px; }
+
+/* Logs page — filesystem file inspector */
+.of-log-files-toolbar { align-items: center; }
+.of-log-files-search { min-width: 160px; }
+.log-file-viewer-card { font-family: var(--font-mono, monospace); padding: 0; }
+.log-file-table { width: 100%; border-collapse: collapse; font-size: 11px; }
+.log-file-table th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--bg-elevated, var(--bg));
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border);
+  font-weight: 600; color: var(--text-dim);
+}
+.log-file-row td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.log-file-row:nth-child(even) { background: rgba(127,127,127,0.04); }
+.log-file-raw-pre {
+  margin: 0; padding: 12px; white-space: pre-wrap; word-break: break-word;
+  font-size: 11px; line-height: 1.45;
+}
+.log-search-mark {
+  background: rgba(250, 204, 21, 0.35);
+  color: inherit; padding: 0 1px; border-radius: 2px;
+}
 
 /* Live log streaming indicator */
 .live-indicator {

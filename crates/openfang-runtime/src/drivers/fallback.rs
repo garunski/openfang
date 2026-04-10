@@ -3,7 +3,10 @@
 //! If the primary driver fails with a non-retryable error, the fallback driver
 //! moves to the next driver in the chain.
 
-use crate::llm_driver::{CompletionRequest, CompletionResponse, LlmDriver, LlmError, StreamEvent};
+use crate::llm_driver::{
+    log_debug_outbound_completion_request, CompletionRequest, CompletionResponse, LlmDriver,
+    LlmError, StreamEvent,
+};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tracing::warn;
@@ -43,12 +46,14 @@ impl LlmDriver for FallbackDriver {
             if !model_name.is_empty() {
                 req.model = model_name.clone();
             }
+            let effective_model = req.model.clone();
+            log_debug_outbound_completion_request(&req);
             match driver.complete(req).await {
                 Ok(response) => return Ok(response),
                 Err(e @ LlmError::RateLimited { .. }) | Err(e @ LlmError::Overloaded { .. }) => {
                     warn!(
                         driver_index = i,
-                        model = %model_name,
+                        model = %effective_model,
                         error = %e,
                         "Driver rate-limited/overloaded, trying next fallback"
                     );
@@ -57,7 +62,7 @@ impl LlmDriver for FallbackDriver {
                 Err(e) => {
                     warn!(
                         driver_index = i,
-                        model = %model_name,
+                        model = %effective_model,
                         error = %e,
                         "Fallback driver failed, trying next"
                     );
@@ -84,12 +89,14 @@ impl LlmDriver for FallbackDriver {
             if !model_name.is_empty() {
                 req.model = model_name.clone();
             }
+            let effective_model = req.model.clone();
+            log_debug_outbound_completion_request(&req);
             match driver.stream(req, tx.clone()).await {
                 Ok(response) => return Ok(response),
                 Err(e @ LlmError::RateLimited { .. }) | Err(e @ LlmError::Overloaded { .. }) => {
                     warn!(
                         driver_index = i,
-                        model = %model_name,
+                        model = %effective_model,
                         error = %e,
                         "Driver rate-limited/overloaded (stream), trying next fallback"
                     );
@@ -98,7 +105,7 @@ impl LlmDriver for FallbackDriver {
                 Err(e) => {
                     warn!(
                         driver_index = i,
-                        model = %model_name,
+                        model = %effective_model,
                         error = %e,
                         "Fallback driver (stream) failed, trying next"
                     );

@@ -10,7 +10,7 @@
 //! 2. Adaptive chunked summarization with merge (handles large histories)
 //! 3. Minimal fallback without LLM (when summarization is unavailable)
 
-use crate::llm_driver::{CompletionRequest, LlmDriver};
+use crate::llm_driver::{log_debug_outbound_completion_request, CompletionRequest, LlmDriver};
 use crate::str_utils::safe_truncate_str;
 use openfang_memory::session::Session;
 use openfang_types::message::{ContentBlock, Message, MessageContent, Role};
@@ -473,6 +473,7 @@ async fn summarize_messages(
     // Retry logic for transient failures
     let mut last_error = String::new();
     for attempt in 0..config.max_retries {
+        log_debug_outbound_completion_request(&request);
         match driver.complete(request.clone()).await {
             Ok(response) => {
                 let summary = response.text();
@@ -588,6 +589,7 @@ async fn summarize_in_chunks(
         thinking: None,
     };
 
+    log_debug_outbound_completion_request(&merge_request);
     match driver.complete(merge_request).await {
         Ok(response) => {
             let merged = response.text();

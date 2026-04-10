@@ -501,7 +501,7 @@ fn convert_tools(request: &CompletionRequest) -> Vec<GeminiToolConfig> {
 }
 
 /// Convert a Gemini response into our CompletionResponse.
-fn convert_response(resp: GeminiResponse) -> Result<CompletionResponse, LlmError> {
+fn convert_response(resp: GeminiResponse, model: &str) -> Result<CompletionResponse, LlmError> {
     let candidate = resp
         .candidates
         .into_iter()
@@ -571,7 +571,11 @@ fn convert_response(resp: GeminiResponse) -> Result<CompletionResponse, LlmError
         }
         None => {
             let reason = candidate.finish_reason.as_deref().unwrap_or("unknown");
-            warn!(finish_reason = %reason, "Gemini returned candidate with no content");
+            warn!(
+                model = %model,
+                finish_reason = %reason,
+                "Gemini returned candidate with no content"
+            );
             return Err(LlmError::Parse(format!(
                 "Gemini returned empty response (finish_reason: {reason})"
             )));
@@ -648,7 +652,12 @@ impl LlmDriver for GeminiDriver {
             if status == 429 || status == 503 {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
-                    warn!(status, retry_ms, "Rate limited/overloaded, retrying");
+                    warn!(
+                        model = %request.model,
+                        status,
+                        retry_ms,
+                        "Rate limited/overloaded, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }
@@ -682,7 +691,7 @@ impl LlmDriver for GeminiDriver {
             let gemini_response: GeminiResponse =
                 serde_json::from_str(&body).map_err(|e| LlmError::Parse(e.to_string()))?;
 
-            return convert_response(gemini_response);
+            return convert_response(gemini_response, &request.model);
         }
 
         Err(LlmError::Api {
@@ -735,8 +744,10 @@ impl LlmDriver for GeminiDriver {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
                     warn!(
+                        model = %request.model,
                         status,
-                        retry_ms, "Rate limited/overloaded (stream), retrying"
+                        retry_ms,
+                        "Rate limited/overloaded (stream), retrying"
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
@@ -1005,6 +1016,7 @@ impl LlmDriver for GeminiDriver {
                 && usage.output_tokens == 0;
             if is_empty_stream {
                 warn!(
+                    model = %request.model,
                     chunks = chunk_count,
                     sse_lines = sse_line_count,
                     finish = ?finish_reason,
@@ -1197,7 +1209,7 @@ mod tests {
         });
 
         let resp: GeminiResponse = serde_json::from_value(json).unwrap();
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
         assert_eq!(completion.tool_calls.len(), 1);
         assert_eq!(completion.tool_calls[0].name, "web_search");
         assert_eq!(
@@ -1295,7 +1307,7 @@ mod tests {
             }),
         };
 
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
         assert_eq!(completion.content.len(), 1);
         assert!(completion.tool_calls.is_empty());
         assert_eq!(completion.stop_reason, StopReason::EndTurn);
@@ -1311,7 +1323,7 @@ mod tests {
             usage_metadata: None,
         };
 
-        let result = convert_response(resp);
+        let result = convert_response(resp, "");
         assert!(result.is_err());
     }
 
@@ -1331,7 +1343,7 @@ mod tests {
             usage_metadata: None,
         };
 
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
         assert_eq!(completion.stop_reason, StopReason::MaxTokens);
     }
 
@@ -1424,7 +1436,7 @@ mod tests {
         });
 
         let resp: GeminiResponse = serde_json::from_value(json).unwrap();
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
         assert_eq!(completion.tool_calls.len(), 1);
         assert_eq!(completion.tool_calls[0].name, "web_search");
         assert_eq!(completion.stop_reason, StopReason::ToolUse);
@@ -1465,7 +1477,7 @@ mod tests {
         });
 
         let resp: GeminiResponse = serde_json::from_value(json).unwrap();
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
 
         match &completion.content[0] {
             ContentBlock::Text {
@@ -1586,7 +1598,7 @@ mod tests {
         });
 
         let resp: GeminiResponse = serde_json::from_value(json).unwrap();
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
 
         match &completion.content[0] {
             ContentBlock::ToolUse {
@@ -1764,7 +1776,7 @@ mod tests {
         });
 
         let resp: GeminiResponse = serde_json::from_value(json).unwrap();
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
         assert_eq!(completion.tool_calls.len(), 2);
 
         // First call has signature
@@ -1826,7 +1838,7 @@ mod tests {
         });
 
         let resp: GeminiResponse = serde_json::from_value(json).unwrap();
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
 
         // Text part should have its signature
         match &completion.content[0] {
@@ -1993,7 +2005,7 @@ mod tests {
                 candidates_token_count: 20,
             }),
         };
-        let completion = convert_response(resp).unwrap();
+        let completion = convert_response(resp, "").unwrap();
         // Should have a Thinking block and a Text block
         assert_eq!(completion.content.len(), 2);
         match &completion.content[0] {

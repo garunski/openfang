@@ -495,7 +495,12 @@ impl LlmDriver for OpenAIDriver {
             if status == 429 {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
-                    warn!(status, retry_ms, "Rate limited, retrying");
+                    warn!(
+                        model = %oai_request.model,
+                        status,
+                        retry_ms,
+                        "Rate limited, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }
@@ -510,14 +515,23 @@ impl LlmDriver for OpenAIDriver {
                 // Groq "tool_use_failed": model generated tool call in XML format.
                 // Parse the failed_generation and convert to a proper tool call response.
                 if status == 400 && body.contains("tool_use_failed") {
-                    if let Some(response) = parse_groq_failed_tool_call(&body) {
-                        warn!("Recovered tool call from Groq failed_generation");
+                    if let Some(response) = parse_groq_failed_tool_call(&body, &oai_request.model) {
+                        warn!(
+                            model = %oai_request.model,
+                            "Recovered tool call from Groq failed_generation"
+                        );
                         return Ok(response);
                     }
                     // If parsing fails, retry on next attempt
                     if attempt < max_retries {
                         let retry_ms = (attempt + 1) as u64 * 1500;
-                        warn!(status, attempt, retry_ms, "tool_use_failed, retrying");
+                        warn!(
+                            model = %oai_request.model,
+                            status,
+                            attempt,
+                            retry_ms,
+                            "tool_use_failed, retrying"
+                        );
                         tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                         continue;
                     }
@@ -558,6 +572,7 @@ impl LlmDriver for OpenAIDriver {
                         .unwrap_or(4096);
                     let cap = extract_max_tokens_limit(&body).unwrap_or(current / 2);
                     warn!(
+                        model = %oai_request.model,
                         old = current,
                         new = cap,
                         "Auto-capping max_tokens to model limit"
@@ -951,7 +966,12 @@ impl LlmDriver for OpenAIDriver {
             if status == 429 {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
-                    warn!(status, retry_ms, "Rate limited (stream), retrying");
+                    warn!(
+                        model = %oai_request.model,
+                        status,
+                        retry_ms,
+                        "Rate limited (stream), retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }
@@ -965,15 +985,21 @@ impl LlmDriver for OpenAIDriver {
 
                 // Groq "tool_use_failed": parse and recover (streaming path)
                 if status == 400 && body.contains("tool_use_failed") {
-                    if let Some(response) = parse_groq_failed_tool_call(&body) {
-                        warn!("Recovered tool call from Groq failed_generation (stream)");
+                    if let Some(response) = parse_groq_failed_tool_call(&body, &oai_request.model) {
+                        warn!(
+                            model = %oai_request.model,
+                            "Recovered tool call from Groq failed_generation (stream)"
+                        );
                         return Ok(response);
                     }
                     if attempt < max_retries {
                         let retry_ms = (attempt + 1) as u64 * 1500;
                         warn!(
+                            model = %oai_request.model,
                             status,
-                            attempt, retry_ms, "tool_use_failed (stream), retrying"
+                            attempt,
+                            retry_ms,
+                            "tool_use_failed (stream), retrying"
                         );
                         tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                         continue;
@@ -1014,7 +1040,12 @@ impl LlmDriver for OpenAIDriver {
                         .or(oai_request.max_completion_tokens)
                         .unwrap_or(4096);
                     let cap = extract_max_tokens_limit(&body).unwrap_or(current / 2);
-                    warn!(old = current, new = cap, "Auto-capping max_tokens (stream)");
+                    warn!(
+                        model = %oai_request.model,
+                        old = current,
+                        new = cap,
+                        "Auto-capping max_tokens (stream)"
+                    );
                     if oai_request.max_completion_tokens.is_some() {
                         oai_request.max_completion_tokens = Some(cap);
                     } else {
@@ -1237,6 +1268,7 @@ impl LlmDriver for OpenAIDriver {
                 && usage.output_tokens == 0;
             if is_empty_stream {
                 warn!(
+                    model = %oai_request.model,
                     chunks = chunk_count,
                     sse_lines = sse_line_count,
                     finish = ?finish_reason,
@@ -1491,7 +1523,7 @@ fn extract_max_tokens_limit(body: &str) -> Option<u32> {
 /// Some models (e.g. Llama 3.3) generate tool calls as XML: `<function=NAME ARGS></function>`
 /// instead of the proper JSON format. Groq rejects these with `tool_use_failed` but includes
 /// the raw generation. We parse it and construct a proper CompletionResponse.
-fn parse_groq_failed_tool_call(body: &str) -> Option<CompletionResponse> {
+fn parse_groq_failed_tool_call(body: &str, model: &str) -> Option<CompletionResponse> {
     let json_body: serde_json::Value = serde_json::from_str(body).ok()?;
     let failed = json_body
         .pointer("/error/failed_generation")
@@ -1537,7 +1569,10 @@ fn parse_groq_failed_tool_call(body: &str) -> Option<CompletionResponse> {
         // No tool calls found — the model generated plain text but Groq rejected it.
         // Return it as a normal text response instead of failing.
         if !failed.trim().is_empty() {
-            warn!("Recovering plain text from Groq failed_generation (no tool calls)");
+            warn!(
+                model = %model,
+                "Recovering plain text from Groq failed_generation (no tool calls)"
+            );
             return Some(CompletionResponse {
                 content: vec![ContentBlock::Text {
                     text: failed.to_string(),
@@ -1578,7 +1613,7 @@ mod tests {
     #[test]
     fn test_parse_groq_failed_tool_call() {
         let body = r#"{"error":{"message":"Failed to call a function.","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"<function=web_fetch{\"url\": \"https://example.com\"}></function>\n"}}"#;
-        let result = parse_groq_failed_tool_call(body);
+        let result = parse_groq_failed_tool_call(body, "llama-3.3");
         assert!(result.is_some());
         let resp = result.unwrap();
         assert_eq!(resp.tool_calls.len(), 1);
@@ -1592,7 +1627,7 @@ mod tests {
     #[test]
     fn test_parse_groq_failed_tool_call_with_space() {
         let body = r#"{"error":{"message":"Failed","type":"invalid_request_error","code":"tool_use_failed","failed_generation":"<function=shell_exec {\"command\": \"ls -la\"}></function>"}}"#;
-        let result = parse_groq_failed_tool_call(body);
+        let result = parse_groq_failed_tool_call(body, "llama-3.3");
         assert!(result.is_some());
         let resp = result.unwrap();
         assert_eq!(resp.tool_calls[0].name, "shell_exec");

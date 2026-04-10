@@ -530,7 +530,12 @@ impl LlmDriver for VertexAIDriver {
             if status == 429 || status == 503 {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
-                    warn!(status, retry_ms, "Rate limited/overloaded, retrying");
+                    warn!(
+                        model = %request.model,
+                        status,
+                        retry_ms,
+                        "Rate limited/overloaded, retrying"
+                    );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;
                 }
@@ -610,8 +615,10 @@ impl LlmDriver for VertexAIDriver {
                 if attempt < max_retries {
                     let retry_ms = (attempt + 1) as u64 * 2000;
                     warn!(
+                        model = %request.model,
                         status,
-                        retry_ms, "Rate limited/overloaded (stream), retrying"
+                        retry_ms,
+                        "Rate limited/overloaded (stream), retrying"
                     );
                     tokio::time::sleep(std::time::Duration::from_millis(retry_ms)).await;
                     continue;

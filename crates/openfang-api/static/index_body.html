@@ -2724,8 +2724,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/path"]</pre>
                       </button>
                     </div>
                     <template x-if="orchestratorIsActive() && orchestratorAgentIdString()">
-                      <div class="project-overview-orchestrator-chat mt-3" style="min-height:min(52vh,560px);display:flex;flex-direction:column">
-<div x-data="chatPageProjectOrchestratorFactory(selectedProject)" class="chat-wrapper" style="flex:1;min-height:min(64vh,720px);display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg);overflow:hidden">
+                      <div class="project-overview-orchestrator-chat mt-3">
+<div x-data="chatPageProjectOrchestratorFactory(selectedProject)" class="chat-wrapper project-chat-embed-panel">
 <!-- Chat header with back button -->
 <div class="page-header" x-show="currentAgent">
 <div class="flex items-center gap-2" style="min-width:0">
@@ -3068,8 +3068,8 @@ x-model="inputText"
                         </div>
                       </div>
                       <template x-if="projectChatSelectedAgentId" :key="projectChatSelectedAgentId">
-                        <div @close-chat.window="clearProjectChatAgent()">
-                          <div x-data="chatPageProjectEmbed()" class="chat-wrapper" style="flex:1;min-height:min(64vh,720px);display:flex;flex-direction:column;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--bg);overflow:hidden">
+                        <div class="project-chat-embed__chat-slot" @close-chat.window="clearProjectChatAgent()">
+                          <div x-data="chatPageProjectEmbed()" class="chat-wrapper project-chat-embed-panel">
             <!-- Chat header with back button -->
             <div class="page-header" x-show="currentAgent">
               <div class="flex items-center gap-2" style="min-width:0">
@@ -4844,6 +4844,24 @@ x-model="inputText"
                           <li><a :href="refUrl" class="text-accent" x-text="refUrl" target="_blank" rel="noopener noreferrer"></a></li>
                         </template>
                       </ul>
+                    </section>
+                    <section class="task-detail-modal__section" x-show="taskModalTaskActions && !taskDetailEditMode && selectedProject">
+                      <h4 class="task-detail-modal__section-title">Workflow pipeline</h4>
+                      <p class="text-xs text-dim">Runs the same path as the orchestrator <code>start_project_workflow</code> tool with this <strong>project_id</strong> and <strong>task id</strong>. Task status must be <strong>Ready for Dev</strong>.</p>
+                      <div class="flex gap-2 flex-wrap items-center mt-2">
+                        <select class="form-select" style="min-width:220px;max-width:100%" x-model="taskWorkflowSelectedId" :disabled="taskWorkflowsLoading || taskWorkflowRunning">
+                          <template x-for="w in taskWorkflowsForProject" :key="w.id">
+                            <option :value="w.id" x-text="taskWorkflowOptionLabel(w)"></option>
+                          </template>
+                        </select>
+                        <button type="button" class="button is-primary is-small" @click="startTaskWorkflowFromModal()" :disabled="taskWorkflowRunning || taskWorkflowsLoading || !taskWorkflowSelectedId || !taskWorkflowsForProject.length">
+                          <span x-show="!taskWorkflowRunning">Start workflow</span>
+                          <span x-show="taskWorkflowRunning">Starting…</span>
+                        </button>
+                      </div>
+                      <p class="text-xs text-dim mt-1" x-show="taskWorkflowsLoading">Loading workflows…</p>
+                      <p class="text-xs text-danger mt-1" x-show="taskWorkflowRunError && !taskWorkflowRunning" x-text="taskWorkflowRunError"></p>
+                      <p class="text-xs text-dim mt-1" x-show="!taskWorkflowsLoading && !taskWorkflowsForProject.length">No registered workflows. Add workflows via the API or workflow JSON under the hub.</p>
                     </section>
                     <template x-if="taskDetailEditMode">
                       <div class="task-detail-modal__edit-fields">
@@ -6919,10 +6937,29 @@ x-model="inputText"
             <button class="button is-ghost is-small" @click="verifyChain()">Verify Chain</button>
             <span class="badge" :class="chainValid === true ? 'badge-running' : chainValid === false ? 'badge-crashed' : ''" x-text="chainValid === true ? 'VALID' : chainValid === false ? 'BROKEN' : ''" x-show="chainValid !== null"></span>
           </div>
+          <div class="flex gap-2 items-center flex-wrap of-log-files-toolbar" x-show="tab === 'files'">
+            <select class="form-select" style="min-width:200px" x-model="selectedFileKey" @change="onFileKeyChange()">
+              <template x-for="f in fileList" :key="f.key">
+                <option :value="f.key" x-text="f.label + (f.exists ? '' : ' (missing)')"></option>
+              </template>
+            </select>
+            <button type="button" class="button is-ghost is-small" @click="refreshFileChunk(true)" :disabled="fileRefreshing || !selectedFileKey" title="Reload tail">
+              <i class="fa fa-refresh" :class="{ 'fa-spin': fileRefreshing }" aria-hidden="true"></i><span style="margin-left:6px">Refresh</span>
+            </button>
+            <div class="toggle" :class="{ active: fileFollow }" @click="setFileFollow(!fileFollow)" title="Tail / follow"></div>
+            <span class="text-xs text-dim" x-text="fileFollow ? 'Following tail' : 'Follow off'"></span>
+            <div class="flex gap-1 items-center">
+              <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileViewMode === 'formatted' }" @click="fileViewMode = 'formatted'">Formatted</button>
+              <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileViewMode === 'raw' }" @click="fileViewMode = 'raw'">Raw</button>
+            </div>
+            <input class="form-input of-log-files-search" style="width:min(280px, 100%)" placeholder="Search (client-side)…" x-model.debounce.150ms="fileSearch">
+            <span class="text-xs text-dim" x-show="fileUtf8Lossy">UTF-8 lossy decode</span>
+          </div>
         </div>
         <div class="of-tabs">
-          <div class="of-tab" :class="{ active: tab === 'live' }" @click="tab = 'live'">Live</div>
-          <div class="of-tab" :class="{ active: tab === 'audit' }" @click="tab = 'audit'; if (!auditEntries.length && !auditLoading) loadAudit()">Audit Trail</div>
+          <div class="of-tab" :class="{ active: tab === 'live' }" @click="tab = 'live'; stopFilePoll()">Live</div>
+          <div class="of-tab" :class="{ active: tab === 'audit' }" @click="tab = 'audit'; stopFilePoll(); if (!auditEntries.length && !auditLoading) loadAudit()">Audit Trail</div>
+          <div class="of-tab" :class="{ active: tab === 'files' }" @click="enterFilesTab()">Files</div>
         </div>
         <div class="page-body" x-init="startStreaming()">
           <!-- Live logs tab -->
@@ -7003,6 +7040,65 @@ x-model="inputText"
               <h4>No audit entries yet</h4>
               <p class="hint">Activity will appear here as agents operate.</p>
             </div>
+            </div>
+          </div>
+
+          <!-- Files (allowlisted log files on disk) -->
+          <div x-show="tab === 'files'">
+            <div x-show="fileListLoading" class="loading-state"><div class="spinner"></div><span>Loading file list…</span></div>
+            <div x-show="!fileListLoading && fileLoadError" class="error-state">
+              <span class="error-icon">!</span>
+              <p x-text="fileLoadError"></p>
+              <button type="button" class="button is-ghost is-small" @click="loadFileList(); refreshFileChunk(true)">Retry</button>
+            </div>
+            <div x-show="!fileListLoading">
+              <div class="flex flex-wrap gap-2 mb-3 items-center">
+                <span class="text-xs text-dim">Level</span>
+                <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': !fileLevelFilter }" @click="fileLevelFilter = ''">All</button>
+                <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileLevelFilter === 'ERROR' }" @click="fileLevelFilter = 'ERROR'">ERROR</button>
+                <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileLevelFilter === 'WARN' }" @click="fileLevelFilter = 'WARN'">WARN</button>
+                <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileLevelFilter === 'INFO' }" @click="fileLevelFilter = 'INFO'">INFO</button>
+                <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileLevelFilter === 'DEBUG' }" @click="fileLevelFilter = 'DEBUG'">DEBUG</button>
+                <button type="button" class="button is-ghost is-small" :class="{ 'is-primary': fileLevelFilter === 'TRACE' }" @click="fileLevelFilter = 'TRACE'">TRACE</button>
+                <span class="text-xs text-dim ml-2" x-text="filteredFileLines.length + ' lines (filtered)'"></span>
+              </div>
+              <div class="of-card log-file-viewer-card" id="log-file-container" style="max-height:70vh;overflow:auto">
+                <template x-if="fileViewMode === 'raw'">
+                  <div>
+                    <div class="empty-state" x-show="!fileContent.length" style="padding:20px">
+                      <h4>No log content</h4>
+                      <p class="hint">File missing or empty.</p>
+                    </div>
+                    <pre class="log-file-raw-pre" x-show="fileContent.length" x-html="fileRawHtml"></pre>
+                  </div>
+                </template>
+                <template x-if="fileViewMode === 'formatted'">
+                  <div>
+                    <div class="empty-state" x-show="!fileContent.length" style="padding:20px">
+                      <h4>No log content</h4>
+                      <p class="hint">File missing or empty. Pick another file or check OpenFang home logs.</p>
+                    </div>
+                    <table class="log-file-table" x-show="fileContent.length && filteredFileLines.length">
+                      <thead><tr><th>Time</th><th>Lvl</th><th>Module</th><th>Message</th><th>Fields</th></tr></thead>
+                      <tbody>
+                        <template x-for="row in filteredFileLines" :key="row.id">
+                          <tr class="log-file-row">
+                            <td class="log-file-ts text-xs" style="white-space:nowrap" x-html="fileCellHtml(row, 'ts')"></td>
+                            <td><span class="log-level text-xs" :class="logLevelClass(row.level)" x-html="fileCellHtml(row, 'level')"></span></td>
+                            <td class="log-file-mod text-xs truncate" style="max-width:140px" :title="row.module" x-html="fileCellHtml(row, 'module')"></td>
+                            <td class="log-file-msg text-xs" x-html="fileCellHtml(row, 'message')"></td>
+                            <td class="log-file-fields text-xs text-dim" style="max-width:200px" :title="row.fieldsRaw" x-html="fileCellHtml(row, 'fieldsRaw')"></td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                    <div class="empty-state" x-show="fileContent.length && !filteredFileLines.length" style="padding:20px">
+                      <h4>No matching lines</h4>
+                      <p class="hint">Adjust search or level filters.</p>
+                    </div>
+                  </div>
+                </template>
+              </div>
             </div>
           </div>
         </div>

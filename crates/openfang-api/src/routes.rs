@@ -1337,8 +1337,9 @@ pub use backlog_routes::{
     backlog_delete_task, backlog_get_config, backlog_get_decision, backlog_get_doc,
     backlog_get_task, backlog_list_archived_milestones, backlog_list_completed,
     backlog_list_decisions, backlog_list_docs_tree, backlog_list_milestones, backlog_list_tasks,
-    backlog_overview, backlog_put_task, backlog_reorder_tasks, backlog_search, backlog_statistics,
-    backlog_update_decision, backlog_update_doc, backlog_update_milestone,
+    backlog_overview, backlog_put_task, backlog_reorder_tasks, backlog_search,
+    backlog_start_task_workflow, backlog_statistics, backlog_update_decision, backlog_update_doc,
+    backlog_update_milestone,
 };
 
 fn project_store_error_response(e: OpenFangError) -> (StatusCode, Json<serde_json::Value>) {
@@ -6238,6 +6239,157 @@ fn classify_audit_level(action: &str) -> &'static str {
     } else {
         "info"
     }
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem log files (allowlisted, read-only; client parses / searches)
+// ---------------------------------------------------------------------------
+
+/// Resolve `key` to a path under OpenFang home. Keys are lowercase `[a-z0-9_]`.
+fn resolve_allowlisted_log_path(home: &std::path::Path, key: &str) -> Option<PathBuf> {
+    if !key
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return None;
+    }
+    match key {
+        "daemon" => Some(home.join("logs").join("daemon.log")),
+        "openfang" => Some(home.join("openfang.log")),
+        "tui" => Some(home.join("tui.log")),
+        _ => None,
+    }
+}
+
+/// GET /api/logs/files — Metadata for allowlisted log files under `kernel.config.home_dir`.
+pub async fn logs_files_list(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let home = state.kernel.config.home_dir.as_path();
+    let keys: &[(&str, &str)] = &[
+        ("daemon", "daemon.log (daemon output, tee)"),
+        ("openfang", "openfang.log"),
+        ("tui", "tui.log (CLI TUI tracing)"),
+    ];
+    let mut files = Vec::new();
+    for (key, label) in keys {
+        let Some(path) = resolve_allowlisted_log_path(home, key) else {
+            continue;
+        };
+        let mut obj = serde_json::json!({
+            "key": key,
+            "label": label,
+            "path": path.display().to_string(),
+            "exists": false,
+            "size_bytes": 0u64,
+            "modified_ms": serde_json::Value::Null,
+        });
+        if let Ok(meta) = std::fs::metadata(&path) {
+            obj["exists"] = serde_json::json!(true);
+            obj["size_bytes"] = serde_json::json!(meta.len());
+            if let Ok(st) = meta.modified() {
+                if let Ok(d) = st.duration_since(std::time::UNIX_EPOCH) {
+                    obj["modified_ms"] = serde_json::json!(d.as_millis() as u64);
+                }
+            }
+        }
+        files.push(obj);
+    }
+    Json(serde_json::json!({ "files": files }))
+}
+
+/// GET /api/logs/files/:key — Read a UTF-8 chunk from an allowlisted log (`offset` + `limit` bytes).
+pub async fn logs_file_read(
+    State(state): State<Arc<AppState>>,
+    Path(key): Path<String>,
+    Query(params): Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let key = key.trim();
+    let home = state.kernel.config.home_dir.as_path();
+    let Some(path) = resolve_allowlisted_log_path(home, key) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "unknown log key"})),
+        )
+            .into_response();
+    };
+
+    let offset: u64 = params
+        .get("offset")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let limit: usize = params
+        .get("limit")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(256 * 1024)
+        .clamp(1, 1024 * 1024);
+
+    let Ok(meta) = std::fs::metadata(&path) else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "file not found",
+                "key": key,
+            })),
+        )
+            .into_response();
+    };
+    let file_size = meta.len();
+    if offset > file_size {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "offset past end of file",
+                "file_size": file_size,
+            })),
+        )
+            .into_response();
+    }
+
+    let mut f = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("open failed: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    use std::io::{Read, Seek};
+    if let Err(e) = f.seek(std::io::SeekFrom::Start(offset)) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("seek failed: {e}")})),
+        )
+            .into_response();
+    }
+
+    let mut buf = vec![0u8; limit];
+    let n = match f.read(&mut buf) {
+        Ok(n) => n,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("read failed: {e}")})),
+            )
+                .into_response();
+        }
+    };
+    buf.truncate(n);
+    let valid_utf8 = std::str::from_utf8(&buf).is_ok();
+    let content = String::from_utf8_lossy(&buf).into_owned();
+    let next_offset = offset.saturating_add(n as u64);
+
+    Json(serde_json::json!({
+        "key": key,
+        "content": content,
+        "offset": offset,
+        "next_offset": next_offset,
+        "bytes_read": n,
+        "file_size": file_size,
+        "truncated": next_offset < file_size,
+        "utf8_lossy": !valid_utf8,
+    }))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -11194,32 +11346,15 @@ pub async fn config_schema(State(state): State<Arc<AppState>>) -> impl IntoRespo
 // Config Set endpoint
 // ---------------------------------------------------------------------------
 
-/// POST /api/config/set — Set a single config value and persist to config.toml.
+/// POST /api/config/set — Set config value(s) and persist to config.toml.
 ///
-/// Accepts JSON `{ "path": "section.key", "value": "..." }`.
-/// Writes the value to the TOML config file and triggers a reload.
+/// Single: `{ "path": "section.key", "value": ... }`.
+/// Batch (one write + one reload): `{ "updates": [ { "path": "a.b", "value": ... }, ... ] }` (max 32 entries).
 pub async fn config_set(
     State(state): State<Arc<AppState>>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
-    let path = match body.get("path").and_then(|v| v.as_str()) {
-        Some(p) => p.to_string(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"status": "error", "error": "missing 'path' field"})),
-            );
-        }
-    };
-    let value = match body.get("value") {
-        Some(v) => v.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"status": "error", "error": "missing 'value' field"})),
-            );
-        }
-    };
+    const MAX_BATCH: usize = 32;
 
     let config_path = state.kernel.config.home_dir.join("config.toml");
 
@@ -11233,44 +11368,79 @@ pub async fn config_set(
         toml::value::Table::new()
     };
 
-    // Convert JSON value to TOML value
-    let toml_val = json_to_toml_value(&value);
+    let audit_label: String;
+    let response_json: serde_json::Value;
 
-    // Parse "section.key" path and set value
-    let parts: Vec<&str> = path.split('.').collect();
-    match parts.len() {
-        1 => {
-            table.insert(parts[0].to_string(), toml_val);
-        }
-        2 => {
-            let section = table
-                .entry(parts[0].to_string())
-                .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-            if let toml::Value::Table(ref mut t) = section {
-                t.insert(parts[1].to_string(), toml_val);
-            }
-        }
-        3 => {
-            let section = table
-                .entry(parts[0].to_string())
-                .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-            if let toml::Value::Table(ref mut t) = section {
-                let sub = t
-                    .entry(parts[1].to_string())
-                    .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
-                if let toml::Value::Table(ref mut t2) = sub {
-                    t2.insert(parts[2].to_string(), toml_val);
-                }
-            }
-        }
-        _ => {
+    if let Some(updates) = body.get("updates").and_then(|u| u.as_array()) {
+        if updates.is_empty() {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(
-                    serde_json::json!({"status": "error", "error": "path too deep (max 3 levels)"}),
-                ),
+                Json(serde_json::json!({"status": "error", "error": "updates array must be non-empty"})),
             );
         }
+        if updates.len() > MAX_BATCH {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"status": "error", "error": format!("updates: max {MAX_BATCH} entries")})),
+            );
+        }
+        let mut paths: Vec<String> = Vec::with_capacity(updates.len());
+        for item in updates {
+            let path = match item.get("path").and_then(|v| v.as_str()) {
+                Some(p) if !p.is_empty() => p.to_string(),
+                _ => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"status": "error", "error": "each update needs non-empty \"path\""})),
+                    );
+                }
+            };
+            let value = match item.get("value") {
+                Some(v) => v,
+                None => {
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({"status": "error", "error": format!("update missing \"value\" for path {path:?}")})),
+                    );
+                }
+            };
+            if let Err(e) = apply_config_set_path(&mut table, &path, value) {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"status": "error", "error": e})),
+                );
+            }
+            paths.push(path);
+        }
+        audit_label = format!("config set batch: {}", paths.join(", "));
+        response_json = serde_json::json!({ "paths": paths });
+    } else {
+        let path = match body.get("path").and_then(|v| v.as_str()) {
+            Some(p) => p.to_string(),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"status": "error", "error": "missing 'path' field (or use \"updates\" array)"})),
+                );
+            }
+        };
+        let value = match body.get("value") {
+            Some(v) => v,
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({"status": "error", "error": "missing 'value' field"})),
+                );
+            }
+        };
+        if let Err(e) = apply_config_set_path(&mut table, &path, value) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"status": "error", "error": e})),
+            );
+        }
+        audit_label = format!("config set: {path}");
+        response_json = serde_json::json!({ "path": path });
     }
 
     // Write back
@@ -11307,14 +11477,71 @@ pub async fn config_set(
     state.kernel.audit_log.record(
         "system",
         openfang_runtime::audit::AuditAction::ConfigChange,
-        format!("config set: {path}"),
+        audit_label,
         "completed",
     );
 
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({"status": reload_status, "path": path})),
-    )
+    let mut out = response_json;
+    if let serde_json::Value::Object(ref mut map) = out {
+        map.insert("status".to_string(), serde_json::Value::String(reload_status.to_string()));
+    }
+
+    (StatusCode::OK, Json(out))
+}
+
+/// Apply one dotted path into a root TOML table (`section.key` or `a.b.c`, max 3 levels).
+fn apply_config_set_path(
+    table: &mut toml::value::Table,
+    path: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    let toml_val = json_to_toml_value(value);
+    let parts: Vec<&str> = path.split('.').collect();
+    match parts.len() {
+        1 => {
+            table.insert(parts[0].to_string(), toml_val);
+            Ok(())
+        }
+        2 => {
+            let section = table
+                .entry(parts[0].to_string())
+                .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+            if let toml::Value::Table(ref mut t) = section {
+                t.insert(parts[1].to_string(), toml_val);
+                Ok(())
+            } else {
+                Err(format!(
+                    "config key {:?} already exists and is not a table (cannot set {:?})",
+                    parts[0], parts[1]
+                ))
+            }
+        }
+        3 => {
+            let section = table
+                .entry(parts[0].to_string())
+                .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+            if let toml::Value::Table(ref mut t) = section {
+                let sub = t
+                    .entry(parts[1].to_string())
+                    .or_insert_with(|| toml::Value::Table(toml::value::Table::new()));
+                if let toml::Value::Table(ref mut t2) = sub {
+                    t2.insert(parts[2].to_string(), toml_val);
+                    Ok(())
+                } else {
+                    Err(format!(
+                        "config path {:?}.{:?} is not a table",
+                        parts[0], parts[1]
+                    ))
+                }
+            } else {
+                Err(format!(
+                    "config key {:?} already exists and is not a table",
+                    parts[0]
+                ))
+            }
+        }
+        _ => Err("path too deep (max 3 levels)".to_string()),
+    }
 }
 
 /// Convert a serde_json::Value to a toml::Value.

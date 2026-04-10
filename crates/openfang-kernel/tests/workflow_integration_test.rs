@@ -412,15 +412,13 @@ async fn test_workflow_e2e_with_groq() {
 // ---------------------------------------------------------------------------
 // Doc-2 workflow-full-cycle template (TASK-46)
 // Canonical JSON: `openfang-kernel/bundled/workflows/workflow-full-cycle.json`
-// (keep in sync with `openfang-custom/.mise/workflows/workflow-full-cycle.json`).
 // ---------------------------------------------------------------------------
 // Doc-to-tasks template
 // Canonical JSON: `openfang-kernel/bundled/workflows/workflow-doc-to-tasks.json`
-// (keep in sync with `openfang-custom/.mise/workflows/workflow-doc-to-tasks.json`).
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_pipeline_full_cycle_template_parses() {
+fn test_workflow_full_cycle_template_parses() {
     let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
     let wf = workflow_from_create_request_json(&v).expect("parse template");
@@ -465,7 +463,7 @@ fn test_pipeline_doc_to_tasks_template_parses() {
 }
 
 #[tokio::test]
-async fn test_pipeline_full_cycle_execute_run_mock() {
+async fn test_workflow_full_cycle_execute_run_mock() {
     let raw = include_str!("../bundled/workflows/workflow-full-cycle.json");
     let v: serde_json::Value = serde_json::from_str(raw).unwrap();
     let wf = workflow_from_create_request_json(&v).expect("parse");
@@ -495,7 +493,7 @@ async fn test_pipeline_full_cycle_execute_run_mock() {
 }
 
 #[tokio::test]
-async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
+async fn init_default_workflows_installs_bundled_workflow_full_cycle() {
     let config = test_config("ollama", "test-model", "OLLAMA_API_KEY");
     let kernel = OpenFangKernel::boot_with_config(config).expect("Kernel should boot");
     kernel.init_default_workflows().await;
@@ -503,7 +501,7 @@ async fn init_default_workflows_installs_bundled_pipeline_full_cycle() {
     assert!(
         wfs.iter()
             .any(|w| w.name == BUNDLED_WORKFLOW_FULL_CYCLE_WORKFLOW_NAME),
-        "bundled pipeline should be registered"
+        "bundled workflow-full-cycle should be registered"
     );
     assert!(
         wfs.iter()
