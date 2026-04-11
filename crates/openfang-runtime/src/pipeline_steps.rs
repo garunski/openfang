@@ -86,12 +86,22 @@ pub(crate) fn parse_cursor_agent_extra_flags(
     }
 }
 
+#[derive(Clone, Copy)]
+struct CursorStreamCtx<'a> {
+    task_id: &'a str,
+    workspace: &'a str,
+    mode: &'a str,
+    model: &'a str,
+}
+
 /// Reads an async byte stream to EOF, appends to `acc`, and emits `tracing` events per read so
 /// daemon logs show live progress (avoids pipe deadlock while the child runs).
 async fn stream_child_bytes_to_string<R: tokio::io::AsyncRead + Unpin>(
     mut reader: R,
     stream_label: &'static str,
     acc: &mut String,
+    ctx: Option<CursorStreamCtx<'_>>,
+    chunk_counter: &mut u32,
 ) -> Result<(), std::io::Error> {
     let mut buf = [0u8; 4096];
     loop {
@@ -100,7 +110,33 @@ async fn stream_child_bytes_to_string<R: tokio::io::AsyncRead + Unpin>(
             break;
         }
         let chunk = String::from_utf8_lossy(&buf[..n]);
+        let prev_len = acc.len();
         acc.push_str(&chunk);
+        if let Some(c) = ctx {
+            if prev_len == 0 && n > 0 {
+                info!(
+                    task_id = c.task_id,
+                    workspace = c.workspace,
+                    mode = c.mode,
+                    model = c.model,
+                    stream = stream_label,
+                    bytes = n,
+                    "cursor agent stream started"
+                );
+            }
+            *chunk_counter = chunk_counter.wrapping_add(1);
+            if (*chunk_counter).is_multiple_of(20) && n > 0 {
+                info!(
+                    task_id = c.task_id,
+                    workspace = c.workspace,
+                    mode = c.mode,
+                    model = c.model,
+                    stream = stream_label,
+                    total_bytes = acc.len(),
+                    "cursor agent stream progress"
+                );
+            }
+        }
         let preview: String = chunk.chars().take(900).collect();
         let truncated = chunk.chars().count() > 900;
         info!(
@@ -250,6 +286,24 @@ pub(crate) async fn run_cursor_worker(
         }
     })?;
 
+    let child_pid = child.id();
+    crate::pipeline_audit::log_cursor_worker_start(
+        task_id,
+        workspace_str.as_str(),
+        mode,
+        model_cli,
+        child_pid,
+        actor,
+    );
+    info!(
+        task_id,
+        workspace = %workspace_str,
+        mode,
+        model = %model_cli,
+        pid = ?child_pid,
+        "cursor agent subprocess running (streaming output)"
+    );
+
     let stdout_pipe = child
         .stdout
         .take()
@@ -259,18 +313,41 @@ pub(crate) async fn run_cursor_worker(
         .take()
         .ok_or_else(|| "cursor agent: stderr not piped".to_string())?;
 
+    let stream_ctx = CursorStreamCtx {
+        task_id,
+        workspace: workspace_str.as_str(),
+        mode,
+        model: model_cli,
+    };
+
     let (stdout_res, stderr_res, wait_res) = tokio::time::timeout(
         std::time::Duration::from_secs(TRIGGER_CURSOR_WORKER_TIMEOUT_SECS),
         async move {
+            let mut stdout_chunks = 0u32;
+            let mut stderr_chunks = 0u32;
             tokio::join!(
                 async move {
                     let mut acc = String::new();
-                    stream_child_bytes_to_string(stdout_pipe, "stdout", &mut acc).await?;
+                    stream_child_bytes_to_string(
+                        stdout_pipe,
+                        "stdout",
+                        &mut acc,
+                        Some(stream_ctx),
+                        &mut stdout_chunks,
+                    )
+                    .await?;
                     Ok::<String, std::io::Error>(acc)
                 },
                 async move {
                     let mut acc = String::new();
-                    stream_child_bytes_to_string(stderr_pipe, "stderr", &mut acc).await?;
+                    stream_child_bytes_to_string(
+                        stderr_pipe,
+                        "stderr",
+                        &mut acc,
+                        Some(stream_ctx),
+                        &mut stderr_chunks,
+                    )
+                    .await?;
                     Ok::<String, std::io::Error>(acc)
                 },
                 child.wait(),
@@ -287,6 +364,14 @@ pub(crate) async fn run_cursor_worker(
 
     let status = wait_res.map_err(|e| format!("Failed to wait for cursor agent: {e}"))?;
     let exit_code = status.code().unwrap_or(-1);
+    info!(
+        task_id,
+        workspace = %workspace_str,
+        mode,
+        model = %model_cli,
+        exit_code,
+        "cursor agent subprocess finished"
+    );
     let structured_output: Option<serde_json::Value> = serde_json::from_str(stdout.trim()).ok();
 
     crate::pipeline_audit::log_cursor_worker(

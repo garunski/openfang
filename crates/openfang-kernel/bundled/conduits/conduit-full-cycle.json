@@ -1,12 +1,12 @@
 {
   "name": "conduit-full-cycle",
-  "description": "Doc-2 style six-phase automation: resolve context → backlog In Progress → Cursor explore (ask) → Cursor implement (agent) → quality gate → Done + git audit. Each step is one orchestrator turn using native tools.",
+  "description": "Doc-2 style six-phase automation: resolve context → backlog In Progress → Cursor explore (ask) → Cursor implement (agent) → quality gate → Done + git audit. Each step is one orchestrator turn using native tools (same binding and recovery patterns as conduit-doc-to-tasks).",
   "project_id": null,
   "steps": [
     {
       "name": "resolve_context",
       "agent_name": "conduit-coordinator-hand",
-      "prompt": "You are the OpenFang conduit orchestrator (full implementation cycle).\n\n**Run payload** (read first — binding lines are ground truth):\n{{input}}\n\n---\n\n**Phase 1 — resolve context (tools first).**\n\n1. Read `[OpenFang conduit binding]` at the top. `project_id` and `trigger_task_id` there are authoritative.\n2. Use **this payload’s** `[OpenFang resolved paths]` and `[OpenFang trigger task snapshot]` first. Optionally call `read_project_context` / `resolve_conduit_context` / `backlog_task_view` (with `project_id`) if you need fresher data.\n3. **Forbidden:** Do not ask the user for `project_id` when it is in the binding block.\n4. Resolve the **absolute spoke root** for Cursor and `enforce_quality_gate` from task text, `configured_spokes`, or `repo:<label>` references.\n5. If the task state is wrong for starting this pipeline, say so and **stop**.\n\n**Reply format:**\n### Phase1_facts\n- project_id: <uuid>\n- task_id: <id>\n- task_status: <string>\n- absolute_workspace: <path>\n- channel_context_line: <verbatim `[OpenFang channel context: …]` from payload or empty>",
+      "prompt": "You are the OpenFang conduit orchestrator (full implementation cycle).\n\n**Run payload** (read first — binding lines are ground truth):\n{{input}}\n\n---\n\n**Phase 1 — lock context (tools before any user question).**\n\n1. Read `[OpenFang conduit binding]` at the top of the run payload. Copy `project_id` and `trigger_task_id` **character-for-character** — they are **never** \"pending\" or unknown if present.\n2. **First tool call (mandatory — OpenFang built-in only):** Call the tool whose name is **exactly** `resolve_conduit_context` with JSON arguments: `project_id` and `task_id` copied verbatim from the binding (`task_id` = `trigger_task_id` value). **Never** call tools whose names contain `mcp:`, `google:mcp`, `execute_tool`, or any MCP proxy to reach OpenFang/backlog data — they are not allowed for this agent and will fail with permission errors. **Never** invent UUIDs, placeholders (e.g. `TASK_ID_PLACEHOLDER`), or substitute IDs. After `resolve_conduit_context` returns, optionally `read_project_context` or `backlog_task_view` (always pass `project_id`) if you still need more detail.\n3. **Forbidden:** Do not ask the user for `project_id` or `trigger_task_id` when they appear in the binding block. Do not reply with a wall of repeated prior-phase text.\n4. Use **this payload’s** `[OpenFang resolved paths]` and `[OpenFang trigger task snapshot]` first. Resolve the **absolute spoke root** for Cursor and `enforce_quality_gate` from task text, `configured_spokes`, or `repo:<label>` references.\n5. If the task state is wrong for starting this pipeline, say so and **stop**.\n6. If a line `[OpenFang channel context: …]` exists in the payload, repeat it **verbatim** under your summary for later `channel_send`.\n\n**Reply format (use these headings):**\n### Phase1_facts\n- project_id: <uuid>\n- trigger_task_id: <id>\n- task_status: <string>\n- absolute_workspace: <path>\n- mattermost_channel_id: <id or empty>\n- channel_context_line: <verbatim line or empty>\n\n**Pipeline:** Full cycle may set task **In Progress** then **Done** only after a passing quality gate.",
       "mode": "sequential",
       "timeout_secs": 900,
       "error_mode": "fail"
@@ -14,7 +14,7 @@
     {
       "name": "backlog_in_progress",
       "agent_name": "conduit-coordinator-hand",
-      "prompt": "**Prior step output** (use Phase1_facts):\n{{input}}\n\n---\n\n**Phase 2 — backlog In Progress.** Call `backlog_task_edit` with the same **`project_id`** and **`task_id`** as Phase1_facts to set the task to **In Progress**. Confirm success or error briefly.",
+      "prompt": "**Original conduit payload (binding + paths — use if Phase1_facts is missing or wrong):**\n{{run_input}}\n\n---\n\n**Prior step output** (extract `Phase1_facts`; do not paste the full history back):\n{{input}}\n\n---\n\n**Phase 2 — backlog In Progress.** Call `backlog_task_edit` with the same **`project_id`** and **`task_id`** as Phase1_facts (or from the original binding above) to set the task to **In Progress**. Confirm success or error briefly.",
       "mode": "sequential",
       "timeout_secs": 600,
       "error_mode": "fail"
@@ -22,7 +22,7 @@
     {
       "name": "explore_cursor",
       "agent_name": "conduit-coordinator-hand",
-      "prompt": "**Prior steps** (carry `absolute_workspace` and `task_id`):\n{{input}}\n\n---\n\n**Phase 3 — explore (read-only).** Call `trigger_cursor_worker` with:\n- `workspace`: absolute path from Phase1_facts\n- `mode`: \"ask\"\n- `behavior`: reference `.cursor/skills/explore/SKILL.md` in that workspace\n- `prompt`: map architecture and files relevant to the task\nSummarize findings briefly for the implement phase.",
+      "prompt": "**Original conduit payload (recover `project_id`, paths, and task id if prior output is unusable):**\n{{run_input}}\n\n---\n\n**Prior steps** (carry `absolute_workspace` and task id from Phase1_facts):\n{{input}}\n\n---\n\n**Phase 3 — explore (read-only).** Call `trigger_cursor_worker` as soon as `absolute_workspace` is known from Phase1_facts **or** from the original payload (`configured_spokes`, `repo:` labels).\n\nParameters:\n- `workspace`: absolute spoke path from Phase1_facts\n- `mode`: \"ask\"\n- `behavior`: reference `.cursor/skills/explore/SKILL.md` in that workspace\n- `prompt`: map architecture and files relevant to the task\n\nSummarize findings briefly for the implement phase.",
       "mode": "sequential",
       "timeout_secs": 3600,
       "error_mode": "fail"
@@ -30,7 +30,7 @@
     {
       "name": "implement_cursor",
       "agent_name": "conduit-coordinator-hand",
-      "prompt": "**Prior steps output:**\n{{input}}\n\n---\n\n**Phase 4 — implement.** Call `trigger_cursor_worker` with:\n- `workspace`: absolute spoke from Phase1_facts\n- `mode`: \"agent\"\n- `prompt`: full implementation instructions with path to the task markdown and acceptance criteria\n- optional `behavior`: extra notes; reference test-write skill only if appropriate\nReply with a short outcome summary.",
+      "prompt": "**Original conduit payload (binding + task text if Phase1_facts or prior steps omitted them):**\n{{run_input}}\n\n---\n\n**Prior steps output** (Phase1_facts + explore summary; do not dump full history):\n{{input}}\n\n---\n\n**Phase 4 — implement.** Call `trigger_cursor_worker` with:\n- `workspace`: absolute spoke from Phase1_facts\n- `mode`: \"agent\"\n- `prompt`: full implementation instructions with path to the task markdown and acceptance criteria\n- optional `behavior`: extra notes; reference test-write skill only if appropriate\n\nReply with a short outcome summary.",
       "mode": "sequential",
       "timeout_secs": 7200,
       "error_mode": "retry",
@@ -39,7 +39,7 @@
     {
       "name": "quality_gate",
       "agent_name": "conduit-coordinator-hand",
-      "prompt": "**Prior steps output:**\n{{input}}\n\n---\n\n**Phase 5 — quality gate.** Call `enforce_quality_gate` with `spoke_root` = absolute workspace from Phase1_facts and `task_id` from Phase1_facts. Report exit status.",
+      "prompt": "**Original conduit payload (for `project_id` / spoke if missing above):**\n{{run_input}}\n\n---\n\n**Prior steps output:**\n{{input}}\n\n---\n\n**Phase 5 — quality gate.** Call `enforce_quality_gate` with `spoke_root` = absolute workspace from Phase1_facts and `task_id` = trigger task id from Phase1_facts. Report exit status.",
       "mode": "sequential",
       "timeout_secs": 3600,
       "error_mode": "fail"
@@ -47,7 +47,7 @@
     {
       "name": "finalize_done_git",
       "agent_name": "conduit-coordinator-hand",
-      "prompt": "**Prior steps output:**\n{{input}}\n\n---\n\n**Phase 6 — finalize.** If the quality gate passed: `backlog_task_edit` → **Done**. Use `record_git_action` / git tools per runbook. If the gate failed, do **not** mark Done; summarize fixes needed.",
+      "prompt": "**Original conduit payload (channel id for Mattermost if needed):**\n{{run_input}}\n\n---\n\n**Prior steps output:**\n{{input}}\n\n---\n\n**Phase 6 — finalize.** If the quality gate passed: `backlog_task_edit` → **Done** (same `project_id` and task id as Phase1_facts). Use `record_git_action` / git tools per runbook. If the gate failed, do **not** mark Done; summarize fixes needed. If `mattermost_channel_id` is set (Phase1_facts, original payload, or `read_project_context`), you may `channel_send` a short summary; never invent an id.",
       "mode": "sequential",
       "timeout_secs": 1200,
       "error_mode": "fail"

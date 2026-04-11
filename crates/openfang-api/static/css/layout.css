@@ -570,6 +570,7 @@
   .security-grid { grid-template-columns: 1fr; }
   .cost-charts-row { grid-template-columns: 1fr; }
   .overview-grid { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .overview-dashboard { grid-template-columns: 1fr; }
   .page-body { padding: 16px; }
 }
 
@@ -756,6 +757,8 @@
   .stat-card-lg .stat-value { font-size: 22px; }
   .of-card-grid { grid-template-columns: 1fr; }
   .overview-grid { grid-template-columns: 1fr; }
+  .overview-dashboard { grid-template-columns: 1fr; }
+  .overview-dashboard__aside { position: static; }
   .input-area { padding: 8px 12px; }
   .main-content { padding: 0; }
   .table-wrap { font-size: 10px; }

@@ -79,6 +79,19 @@ pub enum PipelineAuditEvent {
         actor: String,
         tool: String,
     },
+    /// Emitted when the Cursor CLI child process has been spawned (in-progress).
+    CursorWorkerStart {
+        timestamp: String,
+        task_id: String,
+        workspace: String,
+        mode: String,
+        /// Cursor CLI `--model` value (e.g. `auto`, `sonnet-4`).
+        model: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        child_pid: Option<u32>,
+        actor: String,
+        tool: String,
+    },
     CursorWorker {
         timestamp: String,
         task_id: String,
@@ -172,6 +185,26 @@ pub fn log_quality_gate(
         exit_code,
         actor: actor.into(),
         tool: "enforce_quality_gate".to_string(),
+    });
+}
+
+pub fn log_cursor_worker_start(
+    task_id: impl Into<String>,
+    workspace: impl Into<String>,
+    mode: impl Into<String>,
+    model: impl Into<String>,
+    child_pid: Option<u32>,
+    actor: impl Into<String>,
+) {
+    emit(PipelineAuditEvent::CursorWorkerStart {
+        timestamp: Utc::now().to_rfc3339(),
+        task_id: task_id.into(),
+        workspace: workspace.into(),
+        mode: mode.into(),
+        model: model.into(),
+        child_pid,
+        actor: actor.into(),
+        tool: "trigger_cursor_worker".to_string(),
     });
 }
 
@@ -371,5 +404,22 @@ mod tests {
         };
         let line = serde_json::to_string(&ev).unwrap();
         assert!(!line.contains('\n'));
+    }
+
+    #[test]
+    fn cursor_worker_start_event_serializes_with_event_tag() {
+        let ev = PipelineAuditEvent::CursorWorkerStart {
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            task_id: "TASK-1".to_string(),
+            workspace: "/tmp/ws".to_string(),
+            mode: "ask".to_string(),
+            model: "sonnet-4".to_string(),
+            child_pid: Some(4242),
+            actor: "coord".to_string(),
+            tool: "trigger_cursor_worker".to_string(),
+        };
+        let v: serde_json::Value = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["event"], "cursor_worker_start");
+        assert_eq!(v["child_pid"], 4242);
     }
 }

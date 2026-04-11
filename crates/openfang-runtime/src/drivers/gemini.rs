@@ -447,6 +447,24 @@ fn sanitize_gemini_turns(contents: Vec<GeminiContent>) -> Vec<GeminiContent> {
         final_merged.push(entry);
     }
 
+    // Step 6: Gemini requires the conversation to start from `user`, and a `model` turn
+    // that contains `functionCall` must immediately follow `user` or `functionResponse`
+    // content — not another `model` turn. After orphan stripping / session repair, we can
+    // end up with one or more leading `model` entries before the first `user`; that
+    // yields `INVALID_ARGUMENT: Please ensure that function call turn comes immediately
+    // after a user turn or after a function response turn` and often `prompt_token_count=0`.
+    let has_user = final_merged
+        .iter()
+        .any(|c| c.role.as_deref() == Some("user"));
+    if has_user {
+        while matches!(
+            final_merged.first().and_then(|c| c.role.as_deref()),
+            Some("model")
+        ) {
+            final_merged.remove(0);
+        }
+    }
+
     final_merged
 }
 
@@ -2151,6 +2169,34 @@ mod tests {
         let sanitized = sanitize_gemini_turns(contents);
         assert_eq!(sanitized.len(), 1);
         assert_eq!(sanitized[0].parts.len(), 2);
+    }
+
+    #[test]
+    fn test_sanitize_strips_leading_model_when_user_exists_later() {
+        let contents = vec![
+            GeminiContent {
+                role: Some("model".to_string()),
+                parts: vec![GeminiPart::Text {
+                    text: "orphaned prefix".to_string(),
+                    thought_signature: None,
+                }],
+            },
+            GeminiContent {
+                role: Some("user".to_string()),
+                parts: vec![GeminiPart::Text {
+                    text: "continue".to_string(),
+                    thought_signature: None,
+                }],
+            },
+        ];
+
+        let sanitized = sanitize_gemini_turns(contents);
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].role.as_deref(), Some("user"));
+        assert!(matches!(
+            &sanitized[0].parts[0],
+            GeminiPart::Text { text, .. } if text == "continue"
+        ));
     }
 
     #[test]

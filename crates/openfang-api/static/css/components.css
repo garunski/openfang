@@ -3464,6 +3464,38 @@ mark.search-highlight {
   margin-top: 16px;
 }
 
+/* Global Overview page — two-column dashboard (projects + system sidebar) */
+.overview-dashboard {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 20px;
+  align-items: start;
+}
+.overview-dashboard__main {
+  min-width: 0;
+}
+.overview-dashboard .overview-projects-box {
+  margin-bottom: 0;
+}
+.overview-sidebar-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.overview-dashboard__aside {
+  min-width: 0;
+}
+@media (min-width: 1025px) {
+  .overview-dashboard {
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 380px);
+  }
+  .overview-dashboard__aside {
+    position: sticky;
+    top: 12px;
+    align-self: start;
+  }
+}
+
 .health-indicator {
   display: inline-flex;
   align-items: center;

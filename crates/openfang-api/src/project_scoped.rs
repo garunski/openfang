@@ -110,6 +110,18 @@ pub fn flatten_pipeline_event(ev: &Value) -> Value {
                 ev.get("exit_code").and_then(|x| x.as_i64()).unwrap_or(-1)
             ),
         ),
+        "cursor_worker_start" => (
+            "cursor",
+            format!(
+                "running model={} mode={} pid={}",
+                ev.get("model").and_then(|x| x.as_str()).unwrap_or(""),
+                ev.get("mode").and_then(|x| x.as_str()).unwrap_or(""),
+                ev.get("child_pid")
+                    .and_then(|x| x.as_u64())
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ),
+        ),
         "cursor_worker" => (
             "cursor",
             format!(

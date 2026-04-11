@@ -388,7 +388,26 @@ fn convert_messages(
         }
     }
 
+    strip_leading_vertex_model_turns(&mut contents);
+
     (contents, system_instruction)
+}
+
+/// Match Gemini API: `contents` must not begin with `model` when a `user` turn exists later
+/// (same rule as `sanitize_gemini_turns` step 6 in `gemini.rs`).
+fn strip_leading_vertex_model_turns(contents: &mut Vec<VertexContent>) {
+    let has_user = contents
+        .iter()
+        .any(|c| c.role.as_deref() == Some("user"));
+    if !has_user {
+        return;
+    }
+    while matches!(
+        contents.first().and_then(|c| c.role.as_deref()),
+        Some("model")
+    ) {
+        contents.remove(0);
+    }
 }
 
 fn extract_system(messages: &[Message], system: &Option<String>) -> Option<VertexContent> {

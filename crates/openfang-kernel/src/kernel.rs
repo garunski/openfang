@@ -1654,7 +1654,13 @@ impl OpenFangKernel {
 
                 // Record the failure in supervisor for health reporting
                 self.supervisor.record_panic();
-                warn!(agent_id = %agent_id, error = %e, "Agent loop failed — recorded in supervisor");
+                warn!(
+                    model_id = %entry.manifest.model.model,
+                    agent_id = %agent_id,
+                    agent_name = %entry.name,
+                    error = %e,
+                    "Agent loop failed — recorded in supervisor"
+                );
                 self.trace_agent_file_only(
                     agent_id,
                     format!("agent_message_failed error={e}"),
@@ -1776,7 +1782,9 @@ impl OpenFangKernel {
             let by_tokens = needs_compaction_by_tokens(estimated, &config);
             if by_tokens && !by_messages {
                 info!(
+                    model_id = %entry.manifest.model.model,
                     agent_id = %agent_id,
+                    agent_name = %entry.name,
                     estimated_tokens = estimated,
                     messages = session.messages.len(),
                     "Token-based compaction triggered (messages below threshold but tokens above)"
@@ -1786,7 +1794,9 @@ impl OpenFangKernel {
                 let threshold = (headroom as f64 * 0.8) as u64;
                 if estimated as u64 > threshold && session.messages.len() > 4 {
                     info!(
+                        model_id = %entry.manifest.model.model,
                         agent_id = %agent_id,
+                        agent_name = %entry.name,
                         estimated_tokens = estimated,
                         quota_headroom = headroom,
                         "Quota-headroom compaction triggered (session would consume >80% of remaining quota)"
@@ -1816,7 +1826,12 @@ impl OpenFangKernel {
         if manifest.workspace.is_none() {
             let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
             if let Err(e) = ensure_workspace(&workspace_dir) {
-                warn!(agent_id = %agent_id, "Failed to backfill workspace (streaming): {e}");
+                warn!(
+                    model_id = %entry.manifest.model.model,
+                    agent_id = %agent_id,
+                    agent_name = %entry.name,
+                    "Failed to backfill workspace (streaming): {e}"
+                );
             } else {
                 manifest.workspace = Some(workspace_dir);
                 let _ = self
@@ -1838,7 +1853,12 @@ impl OpenFangKernel {
                 let ws_skills = workspace.join("skills");
                 if ws_skills.exists() {
                     if let Err(e) = snapshot.load_workspace_skills(&ws_skills) {
-                        warn!(agent_id = %agent_id, "Failed to load workspace skills (streaming): {e}");
+                        warn!(
+                            model_id = %entry.manifest.model.model,
+                            agent_id = %agent_id,
+                            agent_name = %entry.name,
+                            "Failed to load workspace skills (streaming): {e}"
+                        );
                     }
                 }
             }
@@ -1849,6 +1869,15 @@ impl OpenFangKernel {
         // and workspace skill tools are visible to the LLM.
         let tools = self.available_tools_with_registry(agent_id, Some(&skill_snapshot));
         let tools = entry.mode.filter_tools(tools);
+
+        info!(
+            model_id = %manifest.model.model,
+            agent_id = %agent_id,
+            agent_name = %entry.name,
+            tool_count = tools.len(),
+            tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
+            "Tools selected for LLM request (streaming)"
+        );
 
         // Build the structured system prompt via prompt_builder
         {
@@ -1983,17 +2012,33 @@ impl OpenFangKernel {
         let handle = tokio::spawn(async move {
             // Auto-compact if the session is large before running the loop
             if needs_compact {
-                info!(agent_id = %agent_id, messages = session.messages.len(), "Auto-compacting session");
+                info!(
+                    model_id = %manifest.model.model,
+                    agent_id = %agent_id,
+                    agent_name = %manifest.name,
+                    messages = session.messages.len(),
+                    "Auto-compacting session"
+                );
                 match kernel_clone.compact_agent_session(agent_id).await {
                     Ok(msg) => {
-                        info!(agent_id = %agent_id, "{msg}");
+                        info!(
+                            model_id = %manifest.model.model,
+                            agent_id = %agent_id,
+                            agent_name = %manifest.name,
+                            "{msg}"
+                        );
                         // Reload the session after compaction
                         if let Ok(Some(reloaded)) = memory.get_session(session.id) {
                             session = reloaded;
                         }
                     }
                     Err(e) => {
-                        warn!(agent_id = %agent_id, "Auto-compaction failed: {e}");
+                        warn!(
+                            model_id = %manifest.model.model,
+                            agent_id = %agent_id,
+                            agent_name = %manifest.name,
+                            "Auto-compaction failed: {e}"
+                        );
                     }
                 }
             }
@@ -2073,7 +2118,12 @@ impl OpenFangKernel {
                     if session.messages.len() > messages_before {
                         let new_messages = session.messages[messages_before..].to_vec();
                         if let Err(e) = memory.append_canonical(agent_id, &new_messages, None) {
-                            warn!(agent_id = %agent_id, "Failed to update canonical session (streaming): {e}");
+                            warn!(
+                                model_id = %manifest.model.model,
+                                agent_id = %agent_id,
+                                agent_name = %manifest.name,
+                                "Failed to update canonical session (streaming): {e}"
+                            );
                         }
                     }
 
@@ -2128,10 +2178,23 @@ impl OpenFangKernel {
                         let estimated = estimate_token_count(&session.messages, None, None);
                         if needs_compaction_by_tokens(estimated, &config) {
                             let kc = kernel_clone.clone();
+                            let model_id_log = model.clone();
+                            let agent_name_log = manifest.name.clone();
                             tokio::spawn(async move {
-                                info!(agent_id = %agent_id, estimated_tokens = estimated, "Post-loop compaction triggered");
+                                info!(
+                                    model_id = %model_id_log,
+                                    agent_id = %agent_id,
+                                    agent_name = %agent_name_log,
+                                    estimated_tokens = estimated,
+                                    "Post-loop compaction triggered"
+                                );
                                 if let Err(e) = kc.compact_agent_session(agent_id).await {
-                                    warn!(agent_id = %agent_id, "Post-loop compaction failed: {e}");
+                                    warn!(
+                                        model_id = %model_id_log,
+                                        agent_id = %agent_id,
+                                        agent_name = %agent_name_log,
+                                        "Post-loop compaction failed: {e}"
+                                    );
                                 }
                             });
                         }
@@ -2141,7 +2204,13 @@ impl OpenFangKernel {
                 }
                 Err(e) => {
                     kernel_clone.supervisor.record_panic();
-                    warn!(agent_id = %agent_id, error = %e, "Streaming agent loop failed");
+                    warn!(
+                        model_id = %manifest.model.model,
+                        agent_id = %agent_id,
+                        agent_name = %manifest.name,
+                        error = %e,
+                        "Streaming agent loop failed"
+                    );
                     Err(KernelError::OpenFang(e))
                 }
             }
@@ -2349,16 +2418,33 @@ impl OpenFangKernel {
                 false
             };
             if by_messages || by_tokens || by_quota {
-                info!(agent_id = %agent_id, messages = session.messages.len(), estimated_tokens = estimated, "Pre-emptive compaction before LLM call");
+                info!(
+                    model_id = %entry.manifest.model.model,
+                    agent_id = %agent_id,
+                    agent_name = %entry.name,
+                    messages = session.messages.len(),
+                    estimated_tokens = estimated,
+                    "Pre-emptive compaction before LLM call"
+                );
                 match self.compact_agent_session(agent_id).await {
                     Ok(msg) => {
-                        info!(agent_id = %agent_id, "{msg}");
+                        info!(
+                            model_id = %entry.manifest.model.model,
+                            agent_id = %agent_id,
+                            agent_name = %entry.name,
+                            "{msg}"
+                        );
                         if let Ok(Some(reloaded)) = self.memory.get_session(session.id) {
                             session = reloaded;
                         }
                     }
                     Err(e) => {
-                        warn!(agent_id = %agent_id, "Pre-emptive compaction failed: {e}");
+                        warn!(
+                            model_id = %entry.manifest.model.model,
+                            agent_id = %agent_id,
+                            agent_name = %entry.name,
+                            "Pre-emptive compaction failed: {e}"
+                        );
                     }
                 }
             }
@@ -2373,7 +2459,12 @@ impl OpenFangKernel {
         if manifest.workspace.is_none() {
             let workspace_dir = self.config.effective_workspaces_dir().join(&manifest.name);
             if let Err(e) = ensure_workspace(&workspace_dir) {
-                warn!(agent_id = %agent_id, "Failed to backfill workspace: {e}");
+                warn!(
+                    model_id = %entry.manifest.model.model,
+                    agent_id = %agent_id,
+                    agent_name = %entry.name,
+                    "Failed to backfill workspace: {e}"
+                );
             } else {
                 manifest.workspace = Some(workspace_dir);
                 // Persist updated workspace in registry
@@ -2396,7 +2487,12 @@ impl OpenFangKernel {
                 let ws_skills = workspace.join("skills");
                 if ws_skills.exists() {
                     if let Err(e) = snapshot.load_workspace_skills(&ws_skills) {
-                        warn!(agent_id = %agent_id, "Failed to load workspace skills: {e}");
+                        warn!(
+                            model_id = %entry.manifest.model.model,
+                            agent_id = %agent_id,
+                            agent_name = %entry.name,
+                            "Failed to load workspace skills: {e}"
+                        );
                     }
                 }
             }
@@ -2409,8 +2505,9 @@ impl OpenFangKernel {
         let tools = entry.mode.filter_tools(tools);
 
         info!(
-            agent = %entry.name,
+            model_id = %manifest.model.model,
             agent_id = %agent_id,
+            agent_name = %entry.name,
             tool_count = tools.len(),
             tool_names = ?tools.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(),
             "Tools selected for LLM request"
