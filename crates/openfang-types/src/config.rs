@@ -995,7 +995,8 @@ pub struct KernelConfig {
     pub home_dir: PathBuf,
     /// Data directory for databases (default: ~/.openfang/data).
     pub data_dir: PathBuf,
-    /// Log level (trace, debug, info, warn, error).
+    /// `tracing` filter when the process environment has no `RUST_LOG`: a single level (`info`,
+    /// `trace`, …) or a full `RUST_LOG`-style directive string (e.g. `warn,openfang_kernel::conduit=debug`).
     pub log_level: String,
     /// API listen address (e.g., "0.0.0.0:4200").
     #[serde(alias = "listen_addr")]

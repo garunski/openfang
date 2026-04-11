@@ -270,6 +270,13 @@ pub trait KernelHandle: Send + Sync {
         Vec::new()
     }
 
+    /// Admin backlog directory for a registered project (`<admin_spoke>/backlog`).
+    /// Used by native `backlog_*` tools when `project_id` is set without `backlog_root`.
+    fn resolve_project_backlog_cwd(&self, project_id: &str) -> Result<PathBuf, String> {
+        let _ = project_id;
+        Err("resolve_project_backlog_cwd not available".to_string())
+    }
+
     /// `[automation].max_retries` for workflow/coordinator retry after failed quality gate.
     fn automation_max_retries(&self) -> u32 {
         2
@@ -311,6 +318,15 @@ pub trait KernelHandle: Send + Sync {
     /// Load persisted per-project workflow context (`<home>/projects/<id>/context.json`) as JSON.
     async fn read_project_context(&self, _project_id: &str) -> Result<String, String> {
         Err("read_project_context not available".to_string())
+    }
+
+    /// Same JSON as `read_project_context` plus optional live `trigger_task_snapshot` from backlog CLI.
+    async fn resolve_conduit_context(
+        &self,
+        _project_id: &str,
+        _task_id: Option<&str>,
+    ) -> Result<String, String> {
+        Err("resolve_conduit_context not available".to_string())
     }
 
     /// Patch per-project context (append failures/decisions, set summaries); returns updated JSON.

@@ -472,7 +472,10 @@ impl ConduitEngine {
         runs
     }
 
-    /// Replace `{{var_name}}` references in a template with stored variable values.
+    /// Replace `{{input}}` and `{{var_name}}` references in a template with values.
+    ///
+    /// The engine seeds `run_input` in `vars` at run start so templates can use `{{run_input}}`
+    /// in later steps.
     fn expand_variables(template: &str, input: &str, vars: &HashMap<String, String>) -> String {
         let mut result = template.replace("{{input}}", input);
         for (key, value) in vars {
@@ -601,6 +604,9 @@ impl ConduitEngine {
         let mut current_input = input;
         let mut all_outputs: Vec<String> = Vec::new();
         let mut variables: HashMap<String, String> = HashMap::new();
+        // Stable copy of the run's initial payload for `{{run_input}}` in step templates
+        // (e.g. phase 2+ recovery when phase 1 output is unusable).
+        variables.insert("run_input".to_string(), current_input.clone());
         let mut i = 0;
 
         while i < definition.steps.len() {

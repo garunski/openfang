@@ -691,8 +691,13 @@ pub async fn run_agent_loop(
                 // Execute each tool call with loop guard, timeout, and truncation
                 let mut tool_result_blocks = Vec::new();
                 for tool_call in deduplicate_tool_calls(&response) {
+                    let exec_input = tool_runner::merge_project_id_from_conduit_binding(
+                        &tool_call.name,
+                        tool_call.input.clone(),
+                        &messages,
+                    );
                     // Loop guard check
-                    let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
+                    let verdict = loop_guard.check(&tool_call.name, &exec_input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
                             warn!(tool = %tool_call.name, "Circuit breaker triggered");
@@ -751,7 +756,7 @@ pub async fn run_agent_loop(
                             event: openfang_types::agent::HookEvent::BeforeToolCall,
                             data: serde_json::json!({
                                 "tool_name": &tool_call.name,
-                                "input": &tool_call.input,
+                                "input": &exec_input,
                             }),
                         };
                         if let Err(reason) = hook_reg.fire(&ctx) {
@@ -779,7 +784,7 @@ pub async fn run_agent_loop(
                         tool_runner::execute_tool(
                             &tool_call.id,
                             &tool_call.name,
-                            &tool_call.input,
+                            &exec_input,
                             kernel.as_ref(),
                             Some(&allowed_tool_names),
                             Some(&caller_id_str),
@@ -1858,8 +1863,13 @@ pub async fn run_agent_loop_streaming(
                 // Execute each tool call with loop guard, timeout, and truncation
                 let mut tool_result_blocks = Vec::new();
                 for tool_call in deduplicate_tool_calls(&response) {
+                    let exec_input = tool_runner::merge_project_id_from_conduit_binding(
+                        &tool_call.name,
+                        tool_call.input.clone(),
+                        &messages,
+                    );
                     // Loop guard check
-                    let verdict = loop_guard.check(&tool_call.name, &tool_call.input);
+                    let verdict = loop_guard.check(&tool_call.name, &exec_input);
                     match &verdict {
                         LoopGuardVerdict::CircuitBreak(msg) => {
                             warn!(tool = %tool_call.name, "Circuit breaker triggered (streaming)");
@@ -1917,7 +1927,7 @@ pub async fn run_agent_loop_streaming(
                             event: openfang_types::agent::HookEvent::BeforeToolCall,
                             data: serde_json::json!({
                                 "tool_name": &tool_call.name,
-                                "input": &tool_call.input,
+                                "input": &exec_input,
                             }),
                         };
                         if let Err(reason) = hook_reg.fire(&ctx) {
@@ -1945,7 +1955,7 @@ pub async fn run_agent_loop_streaming(
                         tool_runner::execute_tool(
                             &tool_call.id,
                             &tool_call.name,
-                            &tool_call.input,
+                            &exec_input,
                             kernel.as_ref(),
                             Some(&allowed_tool_names),
                             Some(&caller_id_str),

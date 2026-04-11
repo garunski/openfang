@@ -360,5 +360,16 @@ mod dashboard_embed_tests {
                 && super::WEBCHAT_HTML.contains("projectChatAgents"),
             "expected inline project Chat tab (no iframe)"
         );
+        assert!(
+            super::WEBCHAT_HTML.contains("openChatLogsModal")
+                && super::WEBCHAT_HTML.contains("chatLogsModalOpen")
+                && super::WEBCHAT_HTML.contains("loadChatTraceLogs"),
+            "expected chat agent trace log modal wiring"
+        );
+        assert!(
+            super::WEBCHAT_HTML.contains("openConduitRunTraceModal")
+                && super::WEBCHAT_HTML.contains("conduitRunTraceModalOpen"),
+            "expected project conduit run trace modal wiring"
+        );
     }
 }

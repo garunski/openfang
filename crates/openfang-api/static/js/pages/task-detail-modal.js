@@ -170,7 +170,7 @@ function backlogTaskDetailMixins() {
         if (typeof OpenFangToast !== 'undefined' && OpenFangToast.success) {
           var rid = res && res.run_id ? res.run_id : '';
           OpenFangToast.success(
-            rid ? 'Workflow started (run ' + rid.slice(0, 8) + '…)' : 'Workflow started'
+            rid ? 'Conduit started (run ' + rid.slice(0, 8) + '…)' : 'Conduit started'
           );
         }
         this.closeTaskModal();
@@ -183,8 +183,9 @@ function backlogTaskDetailMixins() {
         if (typeof OpenFangToast !== 'undefined' && OpenFangToast.error) {
           OpenFangToast.error(this.taskConduitRunError);
         }
+      } finally {
+        this.taskConduitRunning = false;
       }
-      this.taskConduitRunning = false;
     },
 
     openBacklogTaskDetailFromPayload(task) {

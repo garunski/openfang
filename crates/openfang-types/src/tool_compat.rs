@@ -44,12 +44,27 @@ pub fn map_tool_name(openclaw_name: &str) -> Option<&'static str> {
 ///
 /// If the name is already a known OpenFang tool, returns it as-is.
 /// Otherwise, tries to map it through [`map_tool_name`].
+/// Strips a single provider prefix after the last `:` (e.g. Groq/OpenAI may emit
+/// `open_project_context:read_project_context` while capabilities list `read_project_context`).
 /// Returns the original name if no mapping is found.
 pub fn normalize_tool_name(name: &str) -> &str {
-    if is_known_openfang_tool(name) {
-        return name;
+    fn resolved(s: &str) -> Option<&str> {
+        if is_known_openfang_tool(s) {
+            return Some(s);
+        }
+        map_tool_name(s)
     }
-    map_tool_name(name).unwrap_or(name)
+
+    let name = name.trim();
+    if let Some((_prefix, tail)) = name.rsplit_once(':') {
+        let t = tail.trim();
+        if !t.is_empty() {
+            if let Some(r) = resolved(t) {
+                return r;
+            }
+        }
+    }
+    resolved(name).unwrap_or(name)
 }
 
 /// Check if a tool name is a known OpenFang built-in tool.
@@ -64,8 +79,16 @@ pub fn is_known_openfang_tool(name: &str) -> bool {
             | "trigger_cursor_worker"
             | "run_conduit_cycle"
             | "start_project_conduit"
+            | "read_project_context"
+            | "resolve_conduit_context"
+            | "update_project_context"
+            | "query_project_status"
+            | "channel_send"
             | "record_git_action"
             | "record_conduit_outcome"
+            | "git_create_branch"
+            | "git_commit_and_push"
+            | "git_create_pr"
             | "backlog_task_list"
             | "backlog_task_view"
             | "backlog_task_edit"
@@ -190,11 +213,21 @@ mod tests {
 
         assert_eq!(normalize_tool_name("start_workflow"), "start_project_conduit");
         assert_eq!(normalize_tool_name("start_project_conduit"), "start_project_conduit");
+
+        // Provider namespaced ids → canonical OpenFang name (capability allowlist match)
+        assert_eq!(
+            normalize_tool_name("open_project_context:read_project_context"),
+            "read_project_context"
+        );
+        assert_eq!(
+            normalize_tool_name("  open_project_context:read_project_context  "),
+            "read_project_context"
+        );
     }
 
     #[test]
     fn test_is_known_openfang_tool() {
-        // All 23 built-in tools + location_get
+        // Core built-ins + conduit / backlog orchestration tools
         let known = [
             "file_read",
             "file_write",
@@ -220,6 +253,22 @@ mod tests {
             "schedule_delete",
             "image_analyze",
             "location_get",
+            "read_project_context",
+            "update_project_context",
+            "query_project_status",
+            "channel_send",
+            "enforce_quality_gate",
+            "trigger_cursor_worker",
+            "run_conduit_cycle",
+            "start_project_conduit",
+            "record_git_action",
+            "record_conduit_outcome",
+            "git_create_branch",
+            "git_commit_and_push",
+            "git_create_pr",
+            "backlog_task_list",
+            "backlog_task_view",
+            "backlog_task_edit",
         ];
         for tool in &known {
             assert!(is_known_openfang_tool(tool), "Expected {tool} to be known");

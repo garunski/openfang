@@ -1220,12 +1220,7 @@ pub async fn update_conduit(
         created_at: existing.created_at,
     };
 
-    if state
-        .kernel
-        .conduits
-        .update_conduit(conduit_id, updated)
-        .await
-    {
+    if state.kernel.update_conduit_traced(conduit_id, updated).await {
         (
             StatusCode::OK,
             Json(serde_json::json!({"status": "updated", "conduit_id": id})),
@@ -1253,7 +1248,7 @@ pub async fn remove_conduit(
         }
     });
 
-    if state.kernel.conduits.remove_conduit(conduit_id).await {
+    if state.kernel.remove_conduit_traced(conduit_id).await {
         (
             StatusCode::OK,
             Json(serde_json::json!({"status": "removed", "conduit_id": id})),
@@ -1884,6 +1879,15 @@ pub async fn create_project(
     match state.kernel.project_store.register(project) {
         Ok(id) => match state.kernel.project_store.get(id) {
             Some(p) => {
+                state.kernel.trace_system_event(format!(
+                    "project_created project_id={id} name={} path={}",
+                    p.name,
+                    p.path.display()
+                ));
+                state.kernel.trace_project_event(
+                    id,
+                    format!("project_registered name={}", p.name),
+                );
                 if let Err(e) = state.kernel.sync_project_mattermost_orchestrator(None, &p) {
                     tracing::warn!(
                         project_id = %id,
@@ -2026,6 +2030,7 @@ pub async fn update_project(
     let before = state.kernel.project_store.get(pid);
     match state.kernel.project_store.update(pid, patch) {
         Ok(p) => {
+            state.kernel.trace_project_event(pid, "project_updated");
             if let Err(e) = state
                 .kernel
                 .sync_project_mattermost_orchestrator(before.as_ref(), &p)
@@ -2070,6 +2075,13 @@ pub async fn delete_project(
     }
     match state.kernel.project_store.remove(pid) {
         Ok(removed) => {
+            state.kernel.trace_project_event(
+                pid,
+                format!("project_deleted name={}", removed.name),
+            );
+            state
+                .kernel
+                .trace_system_event(format!("project_deleted project_id={pid}"));
             state.backlog_watcher.stop_watching(&pid);
             state.backlog_store.unload(&pid);
             (StatusCode::OK, Json(project_detail_json(&removed)))
@@ -2563,6 +2575,10 @@ pub async fn bind_project_agent(
     };
     match state.kernel.project_store.bind_agent(pid, aid.to_string()) {
         Ok(()) => {
+            state.kernel.trace_project_event(
+                pid,
+                format!("project_agent_bound agent_id={aid} agent_name={}", entry.name),
+            );
             let Some(project) = state.kernel.project_store.get(pid) else {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -2598,11 +2614,20 @@ pub async fn unbind_project_agent(
             .into_response();
     }
     match state.kernel.project_store.unbind_agent(pid, &agent_id) {
-        Ok(()) => (
+        Ok(()) => {
+            state.kernel.trace_project_event(
+                pid,
+                format!(
+                    "project_agent_unbound agent_id={}",
+                    agent_id.trim()
+                ),
+            );
+            (
             StatusCode::OK,
             Json(serde_json::json!({"ok": true, "agent_id": agent_id.trim()})),
         )
-            .into_response(),
+            .into_response()
+        }
         Err(e) => project_agent_binding_error_response(e).into_response(),
     }
 }
@@ -2736,6 +2761,170 @@ pub async fn list_project_conduit_runs(
         })
         .collect();
     Json(list).into_response()
+}
+
+/// Tail size (per file) when scanning scoped trace logs for conduit run lines.
+const CONDUIT_RUN_TRACE_TAIL_BYTES: u64 = 8 * 1024 * 1024;
+
+fn project_trace_log_api_key(project_id: ProjectId) -> String {
+    format!(
+        "trace_prj_{}",
+        project_id.0.to_string().replace('-', "_")
+    )
+}
+
+/// Read up to `max_tail` bytes from the end of `path` as lossy UTF-8.
+fn read_path_tail_utf8(
+    path: &std::path::Path,
+    max_tail: u64,
+) -> Result<(String, u64, bool), std::io::Error> {
+    let meta = std::fs::metadata(path)?;
+    let len = meta.len();
+    let tail_truncated = len > max_tail;
+    let start = len.saturating_sub(max_tail);
+    let mut f = std::fs::File::open(path)?;
+    use std::io::{Read, Seek, SeekFrom};
+    f.seek(SeekFrom::Start(start))?;
+    let to_read = (len - start) as usize;
+    let mut buf = vec![0u8; to_read];
+    f.read_exact(&mut buf)?;
+    Ok((
+        String::from_utf8_lossy(&buf).into_owned(),
+        len,
+        tail_truncated,
+    ))
+}
+
+fn filter_lines_containing(text: &str, needle: &str) -> Vec<String> {
+    text.lines()
+        .filter(|l| l.contains(needle))
+        .map(std::string::ToString::to_string)
+        .collect()
+}
+
+fn conduit_run_trace_from_allowlisted_key(
+    home: &std::path::Path,
+    key: &str,
+    needle: &str,
+) -> (Vec<String>, serde_json::Value) {
+    let mut meta = serde_json::json!({
+        "key": key,
+        "exists": false,
+        "file_size": serde_json::Value::Null,
+        "tail_scanned": false,
+        "tail_truncated": false,
+    });
+    let Some(path) = resolve_allowlisted_log_path(home, key) else {
+        return (Vec::new(), meta);
+    };
+    let Ok((s, file_size, tail_truncated)) = read_path_tail_utf8(&path, CONDUIT_RUN_TRACE_TAIL_BYTES)
+    else {
+        return (Vec::new(), meta);
+    };
+    meta["exists"] = serde_json::json!(true);
+    meta["file_size"] = serde_json::json!(file_size);
+    meta["tail_scanned"] = serde_json::json!(true);
+    meta["tail_truncated"] = serde_json::json!(tail_truncated);
+    let lines = filter_lines_containing(&s, needle);
+    (lines, meta)
+}
+
+/// GET /api/projects/:id/conduit-runs/:run_id/trace — Trace lines mentioning `run_id=<uuid>` in system + project scoped logs (tail scan).
+pub async fn project_conduit_run_trace(
+    State(state): State<Arc<AppState>>,
+    Path((id, run_path_id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    let pid = match parse_project_id_param(&id) {
+        Ok(p) => p,
+        Err(tup) => return tup.into_response(),
+    };
+    if state.kernel.project_store.get(pid).is_none() {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Project not found"})),
+        )
+            .into_response();
+    }
+    let run_uuid = match uuid::Uuid::parse_str(run_path_id.trim()) {
+        Ok(u) => u,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid run ID"})),
+            )
+                .into_response();
+        }
+    };
+    let run_id = ConduitRunId(run_uuid);
+    let Some(run) = state.kernel.conduits.get_run(run_id).await else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Conduit run not found"})),
+        )
+            .into_response();
+    };
+    if run.project_id != Some(pid) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Conduit run not found"})),
+        )
+            .into_response();
+    }
+
+    let home = state.kernel.config.home_dir.as_path();
+    let needle = format!("run_id={run_uuid}");
+    let prj_key = project_trace_log_api_key(pid);
+    let (sys_lines, sys_meta) =
+        conduit_run_trace_from_allowlisted_key(home, "trace_system", &needle);
+    let (prj_lines, prj_meta) = conduit_run_trace_from_allowlisted_key(home, &prj_key, &needle);
+
+    let mut content = String::new();
+    content.push_str("--- trace_system ---\n");
+    if sys_lines.is_empty() {
+        content.push_str("(no matching lines in scanned tail)\n");
+    } else {
+        content.push_str(&sys_lines.join("\n"));
+        content.push('\n');
+    }
+    content.push_str("\n--- ");
+    content.push_str(&prj_key);
+    content.push_str(" ---\n");
+    if prj_lines.is_empty() {
+        content.push_str("(no matching lines in scanned tail)\n");
+    } else {
+        content.push_str(&prj_lines.join("\n"));
+        content.push('\n');
+    }
+
+    let mut note_parts: Vec<String> = Vec::new();
+    if sys_meta["tail_truncated"].as_bool() == Some(true)
+        || prj_meta["tail_truncated"].as_bool() == Some(true)
+    {
+        note_parts.push(format!(
+            "Only the last {} MiB of each log file was scanned; older lines may be in archive segments.",
+            CONDUIT_RUN_TRACE_TAIL_BYTES / (1024 * 1024)
+        ));
+    }
+    if sys_lines.is_empty() && prj_lines.is_empty() {
+        note_parts.push(
+            "No trace lines reference this run_id in the scanned tail (run may predate tracing)."
+                .to_string(),
+        );
+    }
+
+    Json(serde_json::json!({
+        "run_id": run_uuid.to_string(),
+        "project_id": pid.to_string(),
+        "conduit_id": run.conduit_id.to_string(),
+        "needle": needle,
+        "content": content,
+        "note": note_parts.join(" "),
+        "sources": [
+            {"key": "trace_system", "line_count": sys_lines.len(), "meta": sys_meta},
+            {"key": prj_key.clone(), "line_count": prj_lines.len(), "meta": prj_meta},
+        ]
+    }))
+    .into_response()
 }
 
 // ---------------------------------------------------------------------------

@@ -41,6 +41,7 @@ pub(crate) trait PipelineExecutor: Send + Sync {
         prompt: &str,
         mode: &str,
         behavior: Option<&str>,
+        cursor_model: &str,
         extra_flags: &[String],
         actor: &str,
     ) -> Result<PipelineCursorOutput, String>;
@@ -68,6 +69,7 @@ impl PipelineExecutor for LivePipelineExecutor {
         prompt: &str,
         mode: &str,
         behavior: Option<&str>,
+        cursor_model: &str,
         extra_flags: &[String],
         actor: &str,
     ) -> Result<PipelineCursorOutput, String> {
@@ -78,6 +80,7 @@ impl PipelineExecutor for LivePipelineExecutor {
             prompt,
             mode,
             behavior,
+            cursor_model,
             extra_flags,
             actor,
         )
@@ -124,6 +127,7 @@ impl PipelineRunner {
         max_retries: u32,
         mode: &str,
         behavior: Option<&str>,
+        cursor_model: &str,
         extra_flags: &[String],
         rollback_to_status: Option<&str>,
     ) -> Result<PipelineRunOk, PipelineRunErr> {
@@ -141,6 +145,7 @@ impl PipelineRunner {
                     &current_prompt,
                     mode,
                     behavior,
+                    cursor_model,
                     extra_flags,
                     &actor,
                 )
@@ -260,6 +265,7 @@ mod tests {
             _prompt: &str,
             _mode: &str,
             _behavior: Option<&str>,
+            _cursor_model: &str,
             _extra_flags: &[String],
             _actor: &str,
         ) -> Result<PipelineCursorOutput, String> {
@@ -290,6 +296,7 @@ mod tests {
                 2,
                 "agent",
                 None,
+                "auto",
                 &[],
                 Some("In Progress"),
             )
@@ -315,7 +322,7 @@ mod tests {
         ])));
         let runner = PipelineRunner::with_executor(mock, None);
         let ok = runner
-            .run("TASK-2", "/w", "task", 2, "agent", None, &[], None)
+            .run("TASK-2", "/w", "task", 2, "agent", None, "auto", &[], None)
             .await
             .unwrap();
         assert_eq!(ok.retry_count, 1);
@@ -344,6 +351,7 @@ mod tests {
                 1,
                 "agent",
                 None,
+                "auto",
                 &[],
                 Some("Ready for Dev"),
             )

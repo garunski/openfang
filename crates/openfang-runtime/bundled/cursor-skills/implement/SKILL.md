@@ -8,7 +8,7 @@ description: >-
 
 # Implement (Cursor agent contract)
 
-Use this skill on **every** headless `cursor agent` run with `--mode agent` when implementing backlog-driven work. The task summary in the user prompt is not enough; follow this process end-to-end.
+Use this skill on **every** headless `cursor agent` run for full read/write implementation (OpenFang `mode` `agent` omits `--mode` on the CLI; Cursor runs with write-capable tools). The task summary in the user prompt is not enough; follow this process end-to-end.
 
 ## Objective
 
@@ -17,7 +17,7 @@ Turn the described backlog task into merged code (or repo artifacts) that **pass
 ## Inputs
 
 - **Task source**: A filesystem path to the task markdown (preferred) and/or task id plus repo context from the orchestrator prompt.
-- **Workspace**: The spoke root (`-d` / `workspace`). All commands run from here unless stated otherwise.
+- **Workspace**: The spoke root (`--workspace` / OpenFang `workspace` parameter). All commands run from here unless stated otherwise.
 
 ## Process
 

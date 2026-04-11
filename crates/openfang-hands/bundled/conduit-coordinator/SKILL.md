@@ -1,13 +1,20 @@
-# Workflow Coordinator
+# Conduit coordinator
 
-## Mattermost → workflow
+## Mattermost → conduit
 
-- **Queries**: answer from context; use `query_project_status` / `backlog_task_view` for data.
-- **Triggers**: `start_project_conduit` with `project_id`, `task_id`, workflow lookup, `post_mattermost_confirmation=true` on Mattermost.
+- **Queries**: answer from context; use `query_project_status`, `backlog_task_view` (with **`project_id`**), or `resolve_conduit_context` for a single JSON bundle.
+- **Triggers**: `start_project_conduit` with `project_id`, `task_id`, **`conduit_name`** (e.g. `conduit-doc-to-tasks`, `conduit-full-cycle`), optional `conduit_id`, and `post_mattermost_confirmation=true` on Mattermost.
 
-## Workflow input
+## Conduit run payload (dashboard / `start_project_conduit`)
 
-`start_project_conduit` passes the task id string as the workflow run input (same as dashboard runs).
+The first user message includes:
+
+- **`[OpenFang conduit binding]`** — `project_id`, `trigger_task_id`, optional Mattermost id, `admin_spoke`, `configured_spokes` (configured paths may be relative to the project record).
+- **`[OpenFang resolved paths]`** — authoritative **absolute** `admin_backlog_root` and `spoke.<name>=…` (do not guess or ask the user).
+- **`[OpenFang trigger task snapshot]`** — plaintext from **`backlog task <trigger_task_id> --plain`** when the run was prepared (parse description, doc refs, labels here).
+- Optional **accumulated project context** from `context.json` (trimmed).
+
+Treat binding + resolved paths + snapshot as authoritative. Call `read_project_context` / `update_project_context` for **persisted** notes (repo layout, conventions, failures, decisions). Call `resolve_conduit_context` to **refresh** the same JSON shape plus an optional live **`trigger_task_snapshot`**.
 
 ## `trigger_cursor_worker` ↔ spoke skills
 

@@ -426,6 +426,9 @@
                 <button type="button" class="button is-ghost is-small" @click="toggleSearch()" title="Search messages (Ctrl+F)" aria-label="Search messages">
                   <i class="fa fa-search" aria-hidden="true"></i>
                 </button>
+                <button type="button" class="button is-ghost is-small" @click="openChatLogsModal()" title="Server trace log for this agent" aria-label="View agent trace log">
+                  <i class="fa fa-file-text-o" aria-hidden="true"></i>
+                </button>
                 <button type="button" class="button is-ghost is-small" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F" aria-label="Toggle focus mode">
                   <i class="fa fa-expand" aria-hidden="true" x-show="!$store.app.focusMode"></i>
                   <i class="fa fa-compress" aria-hidden="true" x-show="$store.app.focusMode"></i>
@@ -673,6 +676,30 @@
                 </div>
               </div>
             </div>
+            <template x-if="chatLogsModalOpen">
+              <div class="of-modal-overlay" style="z-index:3000" @click.self="closeChatLogsModal()" @keydown.escape.window="closeChatLogsModal()">
+                <div class="of-modal" style="max-width:min(920px,96vw);width:min(920px,96vw);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true" aria-labelledby="of-chat-logs-title" @click.stop>
+                  <div class="of-modal-header">
+                    <h3 id="of-chat-logs-title">Agent trace log</h3>
+                    <div class="of-modal-header__actions">
+                      <button type="button" class="button is-ghost is-small" @click="loadChatTraceLogs()" :disabled="chatLogsLoading" title="Reload from disk">Refresh</button>
+                      <button type="button" class="button is-ghost is-small" @click="copyChatLogsToClipboard()" x-show="chatLogsBody && chatLogsBody.length" title="Copy to clipboard">Copy</button>
+                      <button type="button" class="of-modal-close" @click="closeChatLogsModal()" aria-label="Close">&times;</button>
+                    </div>
+                  </div>
+                  <div class="text-xs text-dim" style="padding:0 16px 8px" x-show="currentAgent && currentAgent.id">
+                    <span class="font-mono" x-text="traceKeyForAgentId(currentAgent.id)"></span>
+                  </div>
+                  <p class="text-xs text-dim" style="padding:0 16px 8px;margin:0" x-show="chatLogsNote" x-text="chatLogsNote"></p>
+                  <p class="text-sm" style="padding:0 16px;color:var(--danger);margin:0" x-show="chatLogsError" x-text="chatLogsError"></p>
+                  <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px" x-show="chatLogsLoading">
+                    <div class="spinner"></div>
+                    <span class="text-xs text-dim" style="margin-left:10px">Loading…</span>
+                  </div>
+                  <pre x-show="!chatLogsLoading && !chatLogsError" style="flex:1;min-height:200px;max-height:calc(88vh - 140px);overflow:auto;margin:0 16px 16px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;border:1px solid var(--border);font-family:var(--font-mono,monospace)" x-text="chatLogsBody"></pre>
+                </div>
+              </div>
+            </template>
           </div>
         </template>
 
@@ -2775,6 +2802,9 @@ Generating...
 <button type="button" class="button is-ghost is-small" @click="toggleSearch()" title="Search messages (Ctrl+F)" aria-label="Search messages">
 <i class="fa fa-search" aria-hidden="true"></i>
 </button>
+<button type="button" class="button is-ghost is-small" @click="openChatLogsModal()" title="Server trace log for this agent" aria-label="View agent trace log">
+<i class="fa fa-file-text-o" aria-hidden="true"></i>
+</button>
 <button type="button" class="button is-ghost is-small" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F" aria-label="Toggle focus mode">
 <i class="fa fa-expand" aria-hidden="true" x-show="!$store.app.focusMode"></i>
 <i class="fa fa-compress" aria-hidden="true" x-show="$store.app.focusMode"></i>
@@ -3022,6 +3052,30 @@ x-model="inputText"
 </div>
 </div>
 </div>
+<template x-if="chatLogsModalOpen">
+<div class="of-modal-overlay" style="z-index:3000" @click.self="closeChatLogsModal()" @keydown.escape.window="closeChatLogsModal()">
+<div class="of-modal" style="max-width:min(920px,96vw);width:min(920px,96vw);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true" aria-labelledby="of-chat-logs-title-orch" @click.stop>
+<div class="of-modal-header">
+<h3 id="of-chat-logs-title-orch">Agent trace log</h3>
+<div class="of-modal-header__actions">
+<button type="button" class="button is-ghost is-small" @click="loadChatTraceLogs()" :disabled="chatLogsLoading" title="Reload from disk">Refresh</button>
+<button type="button" class="button is-ghost is-small" @click="copyChatLogsToClipboard()" x-show="chatLogsBody && chatLogsBody.length" title="Copy to clipboard">Copy</button>
+<button type="button" class="of-modal-close" @click="closeChatLogsModal()" aria-label="Close">&times;</button>
+</div>
+</div>
+<div class="text-xs text-dim" style="padding:0 16px 8px" x-show="currentAgent && currentAgent.id">
+<span class="font-mono" x-text="traceKeyForAgentId(currentAgent.id)"></span>
+</div>
+<p class="text-xs text-dim" style="padding:0 16px 8px;margin:0" x-show="chatLogsNote" x-text="chatLogsNote"></p>
+<p class="text-sm" style="padding:0 16px;color:var(--danger);margin:0" x-show="chatLogsError" x-text="chatLogsError"></p>
+<div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px" x-show="chatLogsLoading">
+<div class="spinner"></div>
+<span class="text-xs text-dim" style="margin-left:10px">Loading…</span>
+</div>
+<pre x-show="!chatLogsLoading && !chatLogsError" style="flex:1;min-height:200px;max-height:calc(88vh - 140px);overflow:auto;margin:0 16px 16px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;border:1px solid var(--border);font-family:var(--font-mono,monospace)" x-text="chatLogsBody"></pre>
+</div>
+</div>
+</template>
 
                       </div>
                     </template>
@@ -3116,6 +3170,9 @@ x-model="inputText"
                 </div>
                 <button type="button" class="button is-ghost is-small" @click="toggleSearch()" title="Search messages (Ctrl+F)" aria-label="Search messages">
                   <i class="fa fa-search" aria-hidden="true"></i>
+                </button>
+                <button type="button" class="button is-ghost is-small" @click="openChatLogsModal()" title="Server trace log for this agent" aria-label="View agent trace log">
+                  <i class="fa fa-file-text-o" aria-hidden="true"></i>
                 </button>
                 <button type="button" class="button is-ghost is-small" @click="$store.app.toggleFocusMode()" title="Ctrl+Shift+F" aria-label="Toggle focus mode">
                   <i class="fa fa-expand" aria-hidden="true" x-show="!$store.app.focusMode"></i>
@@ -3364,6 +3421,30 @@ x-model="inputText"
                 </div>
               </div>
             </div>
+            <template x-if="chatLogsModalOpen">
+              <div class="of-modal-overlay" style="z-index:3000" @click.self="closeChatLogsModal()" @keydown.escape.window="closeChatLogsModal()">
+                <div class="of-modal" style="max-width:min(920px,96vw);width:min(920px,96vw);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true" aria-labelledby="of-chat-logs-title-pe" @click.stop>
+                  <div class="of-modal-header">
+                    <h3 id="of-chat-logs-title-pe">Agent trace log</h3>
+                    <div class="of-modal-header__actions">
+                      <button type="button" class="button is-ghost is-small" @click="loadChatTraceLogs()" :disabled="chatLogsLoading" title="Reload from disk">Refresh</button>
+                      <button type="button" class="button is-ghost is-small" @click="copyChatLogsToClipboard()" x-show="chatLogsBody && chatLogsBody.length" title="Copy to clipboard">Copy</button>
+                      <button type="button" class="of-modal-close" @click="closeChatLogsModal()" aria-label="Close">&times;</button>
+                    </div>
+                  </div>
+                  <div class="text-xs text-dim" style="padding:0 16px 8px" x-show="currentAgent && currentAgent.id">
+                    <span class="font-mono" x-text="traceKeyForAgentId(currentAgent.id)"></span>
+                  </div>
+                  <p class="text-xs text-dim" style="padding:0 16px 8px;margin:0" x-show="chatLogsNote" x-text="chatLogsNote"></p>
+                  <p class="text-sm" style="padding:0 16px;color:var(--danger);margin:0" x-show="chatLogsError" x-text="chatLogsError"></p>
+                  <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px" x-show="chatLogsLoading">
+                    <div class="spinner"></div>
+                    <span class="text-xs text-dim" style="margin-left:10px">Loading…</span>
+                  </div>
+                  <pre x-show="!chatLogsLoading && !chatLogsError" style="flex:1;min-height:200px;max-height:calc(88vh - 140px);overflow:auto;margin:0 16px 16px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;border:1px solid var(--border);font-family:var(--font-mono,monospace)" x-text="chatLogsBody"></pre>
+                </div>
+              </div>
+            </template>
                           </div>
                         </div>
                       </template>
@@ -4314,6 +4395,7 @@ x-model="inputText"
                       <h4 class="m-0 text-sm" style="font-weight:600">Run detail</h4>
                       <div class="flex flex-wrap gap-2">
                         <button type="button" class="button is-ghost is-small" @click="reloadConduitRunDetail()" x-show="!conduitRunDetailLoading && conduitRunSelectedId && conduitRunSelectedConduitId && (conduitRunDetail || conduitRunDetailError)">Reload detail</button>
+                        <button type="button" class="button is-ghost is-small" @click="openConduitRunTraceModal()" x-show="conduitRunSelectedId && selectedProject && selectedProject.id" title="Scoped trace lines that mention this run (system + project logs)">View trace log</button>
                         <button type="button" class="button is-ghost is-small" @click="copyConduitRunDetailJson()" x-show="conduitRunDetail && !conduitRunDetailLoading">Copy JSON</button>
                         <button type="button" class="button is-ghost is-small" @click="clearConduitRunDetail()">Close</button>
                       </div>
@@ -5139,6 +5221,29 @@ x-model="inputText"
                 </select>
               </div>
               <p class="text-xs text-danger mb-2" x-show="boardNewTaskError" x-text="boardNewTaskError"></p>
+            </div>
+          </div>
+        </template>
+
+        <template x-if="conduitRunTraceModalOpen">
+          <div class="of-modal-overlay" style="z-index:3000" @click.self="closeConduitRunTraceModal()" @keydown.escape.window="closeConduitRunTraceModal()">
+            <div class="of-modal" style="max-width:min(920px,96vw);width:min(920px,96vw);max-height:88vh;display:flex;flex-direction:column" role="dialog" aria-modal="true" aria-labelledby="of-conduit-run-trace-title" @click.stop>
+              <div class="of-modal-header">
+                <h3 id="of-conduit-run-trace-title">Conduit run trace</h3>
+                <div class="of-modal-header__actions">
+                  <button type="button" class="button is-ghost is-small" @click="reloadConduitRunTrace()" :disabled="conduitRunTraceLoading" title="Reload">Refresh</button>
+                  <button type="button" class="button is-ghost is-small" @click="copyConduitRunTrace()" x-show="conduitRunTraceContent && conduitRunTraceContent.length" title="Copy">Copy</button>
+                  <button type="button" class="of-modal-close" @click="closeConduitRunTraceModal()" aria-label="Close">&times;</button>
+                </div>
+              </div>
+              <p class="text-xs text-dim" style="padding:0 16px 8px;margin:0" x-show="conduitRunSelectedId" x-text="'run_id=' + conduitRunSelectedId"></p>
+              <p class="text-xs text-dim" style="padding:0 16px 8px;margin:0" x-show="conduitRunTraceNote" x-text="conduitRunTraceNote"></p>
+              <p class="text-sm" style="padding:0 16px;color:var(--danger);margin:0" x-show="conduitRunTraceError" x-text="conduitRunTraceError"></p>
+              <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px" x-show="conduitRunTraceLoading">
+                <div class="spinner"></div>
+                <span class="text-xs text-dim" style="margin-left:10px">Loading…</span>
+              </div>
+              <pre x-show="!conduitRunTraceLoading && !conduitRunTraceError" style="flex:1;min-height:200px;max-height:calc(88vh - 140px);overflow:auto;margin:0 16px 16px;padding:12px;background:var(--surface2);border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-word;border:1px solid var(--border);font-family:var(--font-mono,monospace)" x-text="conduitRunTraceContent"></pre>
             </div>
           </div>
         </template>

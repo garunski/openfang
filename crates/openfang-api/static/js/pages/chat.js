@@ -43,6 +43,13 @@ function chatPage(opts) {
     modelPickerList: [],
     modelPickerFilter: '',
     modelPickerIdx: 0,
+    // Agent trace log modal (server-side scoped file trace)
+    chatLogsModalOpen: false,
+    chatLogsLoading: false,
+    chatLogsError: '',
+    chatLogsBody: '',
+    chatLogsNote: '',
+
     // Model switcher dropdown
     showModelSwitcher: false,
     modelSwitcherFilter: '',
@@ -1291,6 +1298,119 @@ function chatPage(opts) {
       var q = this.searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       var regex = new RegExp('(' + q + ')', 'gi');
       return html.replace(regex, '<mark style="background:var(--warning);color:var(--bg);border-radius:2px;padding:0 2px">$1</mark>');
+    },
+
+    traceKeyForAgentId: function (id) {
+      var s = String(id || '').trim().toLowerCase().replace(/-/g, '_');
+      if (!s) return '';
+      return 'trace_agt_' + s;
+    },
+
+    closeChatLogsModal: function () {
+      this.chatLogsModalOpen = false;
+    },
+
+    openChatLogsModal: async function () {
+      if (!this.currentAgent || !this.currentAgent.id) return;
+      this.chatLogsModalOpen = true;
+      this.chatLogsLoading = true;
+      this.chatLogsError = '';
+      this.chatLogsBody = '';
+      this.chatLogsNote = '';
+      try {
+        await this.loadChatTraceLogs();
+      } finally {
+        this.chatLogsLoading = false;
+      }
+    },
+
+    loadChatTraceLogs: async function () {
+      var agentId = this.currentAgent && this.currentAgent.id;
+      if (!agentId) {
+        this.chatLogsError = 'No agent selected.';
+        return;
+      }
+      var key = this.traceKeyForAgentId(agentId);
+      var chunk = 1024 * 1024;
+      var maxTotal = 4 * 1024 * 1024;
+      this.chatLogsError = '';
+      this.chatLogsBody = '';
+      this.chatLogsNote = '';
+      try {
+        var list = await OpenFangAPI.get('/api/logs/files');
+        var files = list.files || [];
+        var meta = files.find(function (f) { return f.key === key; });
+        if (!meta) {
+          this.chatLogsBody = '';
+          this.chatLogsNote =
+            'No trace entry yet for this agent. Entries appear after activity (messages, tools).';
+          return;
+        }
+        if (!meta.exists || !meta.size_bytes) {
+          this.chatLogsBody =
+            '(Trace file not created or empty yet. Send a message, then refresh.)';
+          return;
+        }
+        var size = meta.size_bytes;
+        var start = 0;
+        var capNote = '';
+        if (size > maxTotal) {
+          start = size - maxTotal;
+          capNote =
+            'Showing last ' +
+            (maxTotal / (1024 * 1024)).toFixed(0) +
+            ' MB of ' +
+            size +
+            ' bytes. Use Logs → Files for the full file.';
+        }
+        var parts = [];
+        var off = start;
+        var lossy = false;
+        while (off < size) {
+          var lim = Math.min(chunk, size - off);
+          var path =
+            '/api/logs/files/' +
+            encodeURIComponent(key) +
+            '?offset=' +
+            off +
+            '&limit=' +
+            lim;
+          var data = await OpenFangAPI.get(path);
+          if (data.utf8_lossy) lossy = true;
+          parts.push(data.content || '');
+          var next = typeof data.next_offset === 'number' ? data.next_offset : off + (data.bytes_read || 0);
+          if (next <= off) break;
+          off = next;
+        }
+        this.chatLogsBody = parts.join('');
+        var notes = [];
+        if (capNote) notes.push(capNote);
+        if (lossy) notes.push('UTF-8: invalid byte sequences were replaced.');
+        this.chatLogsNote = notes.join(' ');
+      } catch (e) {
+        this.chatLogsError = e.message || 'Failed to load trace log';
+      }
+    },
+
+    copyChatLogsToClipboard: async function () {
+      var t = this.chatLogsBody || '';
+      if (!t.trim()) return;
+      try {
+        await navigator.clipboard.writeText(t);
+      } catch (e) {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = t;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch (e2) {
+          /* ignore */
+        }
+      }
     },
 
     renderMarkdown: renderMarkdown,

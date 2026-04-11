@@ -7,8 +7,14 @@
 //! Rotated segments live in `logs/trace/archive/` as `{prefix}_{YYYYmmddHH}.log`.
 //! Files in `archive/` older than [`RETENTION`] are deleted (best-effort).
 
+mod paths;
 mod prune;
 mod writer;
+
+pub use paths::{
+    logs_dir, trace_agents_dir, trace_archive_dir, trace_projects_dir, trace_readme_path,
+    trace_root, trace_system_log_path, TRACE_SUBDIR,
+};
 
 use chrono::{NaiveDate, Utc};
 use dashmap::DashMap;
@@ -39,20 +45,20 @@ pub struct ScopedFileTrace {
 impl ScopedFileTrace {
     /// Create directories, write shipped README once, prune expired archives.
     pub fn new(home_dir: &Path) -> std::io::Result<Self> {
-        let root = home_dir.join("logs").join("trace");
-        let archive_dir = root.join("archive");
-        let projects_dir = root.join("projects");
-        let agents_dir = root.join("agents");
+        let root = paths::trace_root(home_dir);
+        let archive_dir = paths::trace_archive_dir(home_dir);
+        let projects_dir = paths::trace_projects_dir(home_dir);
+        let agents_dir = paths::trace_agents_dir(home_dir);
         std::fs::create_dir_all(&archive_dir)?;
         std::fs::create_dir_all(&projects_dir)?;
         std::fs::create_dir_all(&agents_dir)?;
 
-        let readme = root.join("README.txt");
+        let readme = paths::trace_readme_path(home_dir);
         if !readme.exists() {
             let _ = std::fs::write(&readme, SHIP_README);
         }
 
-        let system_path = root.join("system.log");
+        let system_path = paths::trace_system_log_path(home_dir);
         let system = Mutex::new(RotatingWriter::new(
             system_path,
             archive_dir.clone(),
@@ -231,19 +237,18 @@ pub fn resolve_trace_log_key(home: &Path, key: &str) -> Option<PathBuf> {
     {
         return None;
     }
-    let root = home.join("logs").join("trace");
     if key == "trace_system" {
-        return Some(root.join("system.log"));
+        return Some(paths::trace_system_log_path(home));
     }
     if let Some(rest) = key.strip_prefix("trace_prj_") {
         let uuid_str = rest.replace('_', "-");
         let id = Uuid::parse_str(&uuid_str).ok()?;
-        return Some(root.join("projects").join(format!("{id}.log")));
+        return Some(paths::trace_projects_dir(home).join(format!("{id}.log")));
     }
     if let Some(rest) = key.strip_prefix("trace_agt_") {
         let uuid_str = rest.replace('_', "-");
         let id = Uuid::parse_str(&uuid_str).ok()?;
-        return Some(root.join("agents").join(format!("{id}.log")));
+        return Some(paths::trace_agents_dir(home).join(format!("{id}.log")));
     }
     None
 }
@@ -255,17 +260,12 @@ fn uuid_to_api_key_segment(id: &Uuid) -> String {
 /// Entries for `GET /api/logs/files` — `(key, label)`.
 pub fn trace_log_catalog_entries(home: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
-    let root = home.join("logs").join("trace");
-    let system = root.join("system.log");
     out.push((
         "trace_system".to_string(),
         "Trace: system (rolling, 48h archive)".to_string(),
     ));
-    if !system.exists() {
-        // still offer key so UI can show “will appear on first write”
-    }
 
-    if let Ok(rd) = std::fs::read_dir(root.join("projects")) {
+    if let Ok(rd) = std::fs::read_dir(paths::trace_projects_dir(home)) {
         for ent in rd.flatten() {
             let path = ent.path();
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -283,7 +283,7 @@ pub fn trace_log_catalog_entries(home: &Path) -> Vec<(String, String)> {
         }
     }
 
-    if let Ok(rd) = std::fs::read_dir(root.join("agents")) {
+    if let Ok(rd) = std::fs::read_dir(paths::trace_agents_dir(home)) {
         for ent in rd.flatten() {
             let path = ent.path();
             let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
@@ -341,7 +341,7 @@ mod tests {
     fn resolve_round_trip_key() {
         let dir = tempdir().unwrap();
         let id = Uuid::new_v4();
-        let path = dir.path().join("logs/trace/projects").join(format!("{id}.log"));
+        let path = paths::trace_projects_dir(dir.path()).join(format!("{id}.log"));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, b"x").unwrap();
         let key = format!("trace_prj_{}", uuid_to_api_key_segment(&id));

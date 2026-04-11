@@ -84,6 +84,8 @@ pub enum PipelineAuditEvent {
         task_id: String,
         workspace: String,
         mode: String,
+        /// Cursor CLI `--model` value (e.g. `auto`, `sonnet-4`).
+        model: String,
         exit_code: i32,
         actor: String,
         tool: String,
@@ -177,6 +179,7 @@ pub fn log_cursor_worker(
     task_id: impl Into<String>,
     workspace: impl Into<String>,
     mode: impl Into<String>,
+    model: impl Into<String>,
     exit_code: i32,
     actor: impl Into<String>,
 ) {
@@ -185,6 +188,7 @@ pub fn log_cursor_worker(
         task_id: task_id.into(),
         workspace: workspace.into(),
         mode: mode.into(),
+        model: model.into(),
         exit_code,
         actor: actor.into(),
         tool: "trigger_cursor_worker".to_string(),
@@ -360,6 +364,7 @@ mod tests {
             task_id: "T1".to_string(),
             workspace: "/w".to_string(),
             mode: "agent".to_string(),
+            model: "auto".to_string(),
             exit_code: 1,
             actor: "act".to_string(),
             tool: "trigger_cursor_worker".to_string(),

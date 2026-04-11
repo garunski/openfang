@@ -106,6 +106,11 @@ function projectsPage() {
     conduitRunDetail: null,
     conduitRunDetailLoading: false,
     conduitRunDetailError: '',
+    conduitRunTraceModalOpen: false,
+    conduitRunTraceLoading: false,
+    conduitRunTraceError: '',
+    conduitRunTraceContent: '',
+    conduitRunTraceNote: '',
     /** @type {{ orchestrator_agent_id: string|null, current: any[], historical: any[] } | null} */
     projectAgentsManagement: null,
     orchestratorStartSubmitting: false,
@@ -1729,6 +1734,11 @@ function projectsPage() {
       this.conduitRunDetail = null;
       this.conduitRunDetailLoading = false;
       this.conduitRunDetailError = '';
+      this.conduitRunTraceModalOpen = false;
+      this.conduitRunTraceLoading = false;
+      this.conduitRunTraceError = '';
+      this.conduitRunTraceContent = '';
+      this.conduitRunTraceNote = '';
     },
 
     async selectConduitRunRow(row) {
@@ -1789,6 +1799,68 @@ function projectsPage() {
       } catch (e) {
         if (typeof OpenFangToast !== 'undefined' && OpenFangToast.error) {
           OpenFangToast.error('Copy failed');
+        }
+      }
+    },
+
+    closeConduitRunTraceModal() {
+      this.conduitRunTraceModalOpen = false;
+    },
+
+    async loadConduitRunTrace() {
+      var pid = this.selectedProject && this.selectedProject.id;
+      var rid = this.conduitRunSelectedId;
+      if (!pid || !rid) return;
+      this.conduitRunTraceLoading = true;
+      this.conduitRunTraceError = '';
+      this.conduitRunTraceContent = '';
+      this.conduitRunTraceNote = '';
+      try {
+        var path =
+          '/api/projects/' +
+          encodeURIComponent(pid) +
+          '/conduit-runs/' +
+          encodeURIComponent(rid) +
+          '/trace';
+        var data = await OpenFangAPI.get(path);
+        this.conduitRunTraceContent = data.content || '';
+        this.conduitRunTraceNote = data.note || '';
+      } catch (e) {
+        this.conduitRunTraceError = e.message || 'Failed to load trace';
+      }
+      this.conduitRunTraceLoading = false;
+    },
+
+    async openConduitRunTraceModal() {
+      var pid = this.selectedProject && this.selectedProject.id;
+      var rid = this.conduitRunSelectedId;
+      if (!pid || !rid) return;
+      this.conduitRunTraceModalOpen = true;
+      await this.loadConduitRunTrace();
+    },
+
+    async reloadConduitRunTrace() {
+      if (!this.conduitRunTraceModalOpen) return;
+      await this.loadConduitRunTrace();
+    },
+
+    async copyConduitRunTrace() {
+      var t = this.conduitRunTraceContent || '';
+      if (!t.trim()) return;
+      try {
+        await navigator.clipboard.writeText(t);
+      } catch (e) {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = t;
+          ta.style.position = 'fixed';
+          ta.style.left = '-9999px';
+          document.body.appendChild(ta);
+          ta.select();
+          document.execCommand('copy');
+          document.body.removeChild(ta);
+        } catch (e2) {
+          /* ignore */
         }
       }
     },

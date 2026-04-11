@@ -113,8 +113,9 @@ pub fn flatten_pipeline_event(ev: &Value) -> Value {
         "cursor_worker" => (
             "cursor",
             format!(
-                "exit_code={}",
-                ev.get("exit_code").and_then(|x| x.as_i64()).unwrap_or(-1)
+                "exit_code={} model={}",
+                ev.get("exit_code").and_then(|x| x.as_i64()).unwrap_or(-1),
+                ev.get("model").and_then(|x| x.as_str()).unwrap_or("")
             ),
         ),
         "backlog_status_transition" => (

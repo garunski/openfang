@@ -465,6 +465,10 @@ pub async fn build_router(
             axum::routing::get(routes::list_project_conduit_runs),
         )
         .route(
+            "/api/projects/{id}/conduit-runs/{run_id}/trace",
+            axum::routing::get(routes::project_conduit_run_trace),
+        )
+        .route(
             "/api/projects/{id}/conduits/{conduit_id}/run",
             axum::routing::post(routes::run_project_conduit),
         )

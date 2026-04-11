@@ -280,6 +280,14 @@ async fn start_test_server_with_provider(
             axum::routing::get(routes::list_project_conduits),
         )
         .route(
+            "/api/projects/{id}/conduit-runs",
+            axum::routing::get(routes::list_project_conduit_runs),
+        )
+        .route(
+            "/api/projects/{id}/conduit-runs/{run_id}/trace",
+            axum::routing::get(routes::project_conduit_run_trace),
+        )
+        .route(
             "/api/projects/{id}/backlog/config",
             axum::routing::get(routes::backlog_get_config),
         )
@@ -2456,6 +2464,47 @@ async fn test_project_workflow_requires_assigned_agents() {
         reqwest::StatusCode::BAD_REQUEST,
         "validation should pass after bind"
     );
+    let run_status = resp.status();
+    let run_body: serde_json::Value = resp.json().await.unwrap();
+    let run_id = if run_status == reqwest::StatusCode::OK {
+        run_body["run_id"]
+            .as_str()
+            .expect("run_id in success body")
+            .to_string()
+    } else {
+        let resp = client
+            .get(format!(
+                "{}/api/projects/{}/conduit-runs?limit=10",
+                server.base_url, pid
+            ))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let list: Vec<serde_json::Value> = resp.json().await.unwrap();
+        list.iter()
+            .find(|r| r["conduit_id"].as_str() == Some(wf_id.as_str()))
+            .and_then(|r| r["id"].as_str())
+            .expect("expected a project conduit run row after POST /run")
+            .to_string()
+    };
+
+    let resp = client
+        .get(format!(
+            "{}/api/projects/{}/conduit-runs/{}/trace",
+            server.base_url, pid, run_id
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let trace: serde_json::Value = resp.json().await.unwrap();
+    assert_eq!(trace["run_id"], run_id);
+    let content = trace["content"].as_str().unwrap_or("");
+    assert!(
+        content.contains("run_id=") && content.contains(&run_id),
+        "expected trace content to mention run_id, got: {content:?}"
+    );
 }
 
 /// TASK-46: `conduit-full-cycle` template registers via POST /api/conduits and runs via project route.
@@ -2500,7 +2549,7 @@ model = "test-model"
 system_prompt = "You are a test workflow orchestrator. Reply briefly."
 
 [capabilities]
-tools = ["file_read", "backlog_task_view", "query_project_status", "read_project_context", "update_project_context", "backlog_task_edit", "trigger_cursor_worker", "enforce_quality_gate", "record_git_action", "git_create_branch", "git_commit_and_push", "git_create_pr"]
+tools = ["file_read", "backlog_task_view", "query_project_status", "read_project_context", "resolve_conduit_context", "update_project_context", "backlog_task_edit", "trigger_cursor_worker", "enforce_quality_gate", "record_git_action", "git_create_branch", "git_commit_and_push", "git_create_pr"]
 memory_read = ["*"]
 memory_write = ["self.*"]
 "#;

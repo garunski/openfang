@@ -11,7 +11,6 @@ use openfang_types::backlog::{
     AcceptanceCriterion, BacklogDecision, BacklogDocument, BacklogMilestone, BacklogSearchResult,
     BacklogSnapshot, BacklogTask, DecisionStatus, DocTreeNode, TaskPriority,
 };
-use openfang_runtime::kernel_handle::KernelHandle;
 use openfang_types::project::{ProjectId, ADMIN_SPOKE_REQUIRED_MSG};
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -189,6 +188,11 @@ fn ensure_project(
         }
     }
     Ok(())
+}
+
+#[inline]
+fn trace_backlog_event(state: &AppState, pid: ProjectId, msg: impl AsRef<str>) {
+    state.kernel.trace_project_event(pid, msg);
 }
 
 fn task_matches_query(t: &BacklogTask, q: &BacklogTasksListQuery) -> bool {
@@ -426,6 +430,15 @@ pub async fn backlog_cleanup_tasks_execute(
         &state.kernel.project_store,
     ) {
         Ok((moved, total, failed)) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!(
+                    "backlog_cleanup_execute age_days={} moved={moved} total={total} failed_count={}",
+                    body.age,
+                    failed.len()
+                ),
+            );
             let message = if total == 0 {
                 "No tasks to clean up".to_string()
             } else {
@@ -537,14 +550,25 @@ pub async fn backlog_create_task(
         .backlog_store
         .create_task(&pid, task, &state.kernel.project_store)
     {
-        Ok(t) => match serde_json::to_value(&t) {
-            Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
-            Err(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Serialize failed"})),
-            )
-                .into_response(),
-        },
+        Ok(t) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!(
+                    "backlog_task_created task_id={} title={:?}",
+                    t.id,
+                    t.title.chars().take(120).collect::<String>()
+                ),
+            );
+            match serde_json::to_value(&t) {
+                Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
+                Err(_) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Serialize failed"})),
+                )
+                    .into_response(),
+            }
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -568,6 +592,11 @@ pub async fn backlog_put_task(
             .toggle_ac(&pid, &task_id, idx, &state.kernel.project_store)
         {
             Ok(()) => {
+                trace_backlog_event(
+                    &state,
+                    pid,
+                    format!("backlog_task_toggle_ac task_id={task_id} index={idx}"),
+                );
                 let fresh = match state.backlog_store.get_active_task(&pid, &task_id) {
                     Some(t) => t,
                     None => {
@@ -607,6 +636,11 @@ pub async fn backlog_put_task(
         .write_active_task(&pid, &task, &state.kernel.project_store)
     {
         Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_task_updated task_id={task_id}"),
+            );
             let fresh = state
                 .backlog_store
                 .get_active_task(&pid, &task_id)
@@ -640,7 +674,14 @@ pub async fn backlog_delete_task(
         .backlog_store
         .archive_task(&pid, &task_id, &state.kernel.project_store)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_task_archived task_id={task_id}"),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -661,15 +702,23 @@ pub async fn backlog_complete_task(
         .backlog_store
         .complete_task(&pid, &task_id, &state.kernel.project_store)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_task_completed task_id={task_id}"),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
 
 /// POST /api/projects/:id/backlog/tasks/:task_id/conduit-start
 ///
-/// Runs the same pipeline as the conduit-coordinator `start_project_conduit` tool:
-/// validates task is **Ready for Dev**, resolves the workflow, then `run_conduit` with project context.
+/// Validates task is **Ready for Dev**, resolves the conduit, then **starts** the run in the
+/// background and returns immediately with `run_id` and `status: "started"` (same execution path as
+/// the coordinator tool, but does not block until the pipeline finishes).
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BacklogStartTaskWorkflowBody {
@@ -709,24 +758,35 @@ pub async fn backlog_start_task_conduit(
         )
             .into_response();
     }
-    match KernelHandle::start_project_conduit(
-        state.kernel.as_ref(),
-        project_id.as_str(),
-        tid,
-        wf_id,
-        wf_name,
-        body.post_mattermost_confirmation,
-    )
-    .await
+    match state
+        .kernel
+        .backlog_start_conduit_for_dashboard(
+            project_id.as_str(),
+            tid,
+            wf_id,
+            wf_name,
+            body.post_mattermost_confirmation,
+        )
+        .await
     {
-        Ok(json_str) => match serde_json::from_str::<serde_json::Value>(&json_str) {
-            Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-            Err(_) => (
-                StatusCode::OK,
-                Json(serde_json::json!({ "raw": json_str })),
-            )
-                .into_response(),
-        },
+        Ok(json_str) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!(
+                    "backlog_conduit_start task_id={tid} conduit_id={:?} conduit_name={:?}",
+                    wf_id, wf_name
+                ),
+            );
+            match serde_json::from_str::<serde_json::Value>(&json_str) {
+                Ok(v) => (StatusCode::OK, Json(v)).into_response(),
+                Err(_) => (
+                    StatusCode::OK,
+                    Json(serde_json::json!({ "raw": json_str })),
+                )
+                    .into_response(),
+            }
+        }
         Err(msg) => {
             let lower = msg.to_lowercase();
             let status = if lower.contains("not found")
@@ -776,7 +836,18 @@ pub async fn backlog_reorder_tasks(
         &body.ordered_task_ids,
         &state.kernel.project_store,
     ) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!(
+                    "backlog_tasks_reordered moved_task_id={} target_status={}",
+                    body.task_id.trim(),
+                    body.target_status.trim()
+                ),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -899,14 +970,21 @@ pub async fn backlog_create_doc(
         &body.content,
         &state.kernel.project_store,
     ) {
-        Ok(d) => match serde_json::to_value(&d) {
-            Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
-            Err(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Serialize failed"})),
-            )
-                .into_response(),
-        },
+        Ok(d) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_doc_created doc_id={} title={:?}", d.id, d.title),
+            );
+            match serde_json::to_value(&d) {
+                Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
+                Err(_) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Serialize failed"})),
+                )
+                    .into_response(),
+            }
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -949,6 +1027,11 @@ pub async fn backlog_update_doc(
         .update_doc(&pid, &doc, &state.kernel.project_store)
     {
         Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_doc_updated doc_id={doc_id}"),
+            );
             let fresh = state
                 .backlog_store
                 .get_document(&pid, &doc_id)
@@ -982,7 +1065,14 @@ pub async fn backlog_delete_doc(
         .backlog_store
         .delete_document(&pid, &doc_id, &state.kernel.project_store)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_doc_deleted doc_id={doc_id}"),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -1189,14 +1279,25 @@ pub async fn backlog_create_decision(
         body.title.trim(),
         &state.kernel.project_store,
     ) {
-        Ok(d) => match serde_json::to_value(&d) {
-            Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
-            Err(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Serialize failed"})),
-            )
-                .into_response(),
-        },
+        Ok(d) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!(
+                    "backlog_decision_created decision_id={} title={:?}",
+                    d.id,
+                    d.title.chars().take(120).collect::<String>()
+                ),
+            );
+            match serde_json::to_value(&d) {
+                Ok(v) => (StatusCode::CREATED, Json(v)).into_response(),
+                Err(_) => (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Serialize failed"})),
+                )
+                    .into_response(),
+            }
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -1231,6 +1332,11 @@ pub async fn backlog_update_decision(
         .update_decision(&pid, &d, &state.kernel.project_store)
     {
         Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_decision_updated decision_id={decision_id}"),
+            );
             let fresh = state
                 .backlog_store
                 .get_decision(&pid, &decision_id)
@@ -1264,7 +1370,14 @@ pub async fn backlog_delete_decision(
         .backlog_store
         .delete_decision(&pid, &decision_id, &state.kernel.project_store)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_decision_deleted decision_id={decision_id}"),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -1344,6 +1457,11 @@ pub async fn backlog_create_milestone(
         &state.kernel.project_store,
     ) {
         Ok(m) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_milestone_created milestone_id={} title={:?}", m.id, m.title),
+            );
             let Some(snap) = state.backlog_store.get_snapshot(&pid) else {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1388,6 +1506,11 @@ pub async fn backlog_update_milestone(
         .update_milestone(&pid, &m, &state.kernel.project_store)
     {
         Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_milestone_updated milestone_id={milestone_id}"),
+            );
             let Some(snap) = state.backlog_store.get_snapshot(&pid) else {
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1422,7 +1545,14 @@ pub async fn backlog_delete_milestone(
         .backlog_store
         .delete_milestone(&pid, &milestone_id, &state.kernel.project_store)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_milestone_deleted milestone_id={milestone_id}"),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }
@@ -1443,7 +1573,14 @@ pub async fn backlog_archive_milestone(
         .backlog_store
         .archive_milestone(&pid, &milestone_id, &state.kernel.project_store)
     {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            trace_backlog_event(
+                &state,
+                pid,
+                format!("backlog_milestone_archived milestone_id={milestone_id}"),
+            );
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(e) => map_backlog_err(e).into_response(),
     }
 }

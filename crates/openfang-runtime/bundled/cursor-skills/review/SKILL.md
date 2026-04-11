@@ -10,9 +10,9 @@ description: >-
 
 ## Expected Cursor CLI (via OpenFang `trigger_cursor_worker`)
 
-- **Command shape**: `cursor agent -d <workspace> -p '<prompt>' --mode ask -o json`
-- **Flags**: OpenFang always passes `-o json`.
-- **Workspace**: Spoke root (`-d`).
+- **Command shape**: `cursor agent --print --output-format json --trust --workspace <workspace> --mode ask -- '<prompt>'`
+- **Flags**: Optional allowlisted extras from the orchestrator (`--yolo`, `--force`).
+- **Workspace**: Spoke root (`--workspace`).
 
 ## Inputs
 

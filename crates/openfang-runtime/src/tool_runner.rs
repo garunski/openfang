@@ -7,9 +7,11 @@ use crate::kernel_handle::KernelHandle;
 use crate::mcp;
 use crate::web_search::{parse_ddg_results, WebToolsContext};
 use openfang_skills::registry::SkillRegistry;
+use openfang_types::message::{ContentBlock, Message, MessageContent, Role};
 use openfang_types::taint::{TaintLabel, TaintSink, TaintedValue};
 use openfang_types::tool::{ToolDefinition, ToolResult};
 use openfang_types::tool_compat::normalize_tool_name;
+use regex_lite::Regex;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
@@ -92,6 +94,160 @@ tokio::task_local! {
 /// Returns 0 if called outside an agent task.
 pub fn current_agent_depth() -> u32 {
     AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0)
+}
+
+static CONDUIT_BINDING_PROJECT_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"project_id=([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+    )
+    .expect("CONDUIT_BINDING_PROJECT_ID regex")
+});
+
+static CONDUIT_BINDING_TRIGGER_TASK_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"trigger_task_id=([A-Za-z0-9][A-Za-z0-9_.-]*)").expect("CONDUIT_BINDING_TRIGGER_TASK_ID regex")
+});
+
+fn user_message_plain_text(m: &Message) -> String {
+    match &m.content {
+        MessageContent::Text(t) => t.clone(),
+        MessageContent::Blocks(blocks) => blocks
+            .iter()
+            .filter_map(|b| {
+                if let ContentBlock::Text { text, .. } = b {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+    }
+}
+
+fn last_capture_from_user_messages(
+    messages: &[Message],
+    re: &Regex,
+    group: usize,
+) -> Option<String> {
+    let mut last = None;
+    for m in messages {
+        if m.role != Role::User {
+            continue;
+        }
+        let body = user_message_plain_text(m);
+        if let Some(caps) = re.captures(&body) {
+            last = caps.get(group).map(|g| g.as_str().to_string());
+        }
+    }
+    last
+}
+
+fn uuid_str_eq_ignore_case(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// When a model omits `project_id` (or conduit `task_id`) for project tools, copy values from
+/// the most recent user message containing OpenFang conduit binding lines (`project_id=…`,
+/// `trigger_task_id=…`). If the model supplies a wrong `project_id` / `task_id`, the binding
+/// line wins (authoritative for conduit runs).
+pub fn merge_project_id_from_conduit_binding(
+    tool_name: &str,
+    mut input: serde_json::Value,
+    messages: &[Message],
+) -> serde_json::Value {
+    let t = normalize_tool_name(tool_name);
+    let needs_project = matches!(
+        t,
+        "read_project_context"
+            | "resolve_conduit_context"
+            | "update_project_context"
+            | "query_project_status"
+            | "start_project_conduit"
+            | "backlog_task_list"
+            | "backlog_task_view"
+            | "backlog_task_edit"
+            | "backlog_doc_create"
+            | "backlog_doc_list"
+            | "backlog_doc_view"
+            | "backlog_decision_view"
+    );
+    if !needs_project {
+        return input;
+    }
+
+    let binding_pid =
+        last_capture_from_user_messages(messages, &CONDUIT_BINDING_PROJECT_ID, 1);
+    if let Some(ref bp) = binding_pid {
+        let input_pid = input
+            .get("project_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        let replace_pid = input_pid
+            .map(|ip| !uuid_str_eq_ignore_case(ip, bp))
+            .unwrap_or(true);
+        if replace_pid {
+            debug!(
+                tool = %t,
+                had_input = input_pid.is_some(),
+                "conduit binding overrides project_id for tool input"
+            );
+            if let Some(obj) = input.as_object_mut() {
+                obj.insert("project_id".to_string(), serde_json::Value::String(bp.clone()));
+            } else {
+                input = serde_json::json!({ "project_id": bp.clone() });
+            }
+        }
+    }
+
+    if t == "start_project_conduit" {
+        if let Some(ref bt) =
+            last_capture_from_user_messages(messages, &CONDUIT_BINDING_TRIGGER_TASK_ID, 1)
+        {
+            let input_tid = input
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let replace_tid = input_tid
+                .map(|it| it != bt.as_str())
+                .unwrap_or(true);
+            if replace_tid {
+                debug!(
+                    tool = %t,
+                    had_input = input_tid.is_some(),
+                    "conduit binding overrides task_id for tool input"
+                );
+                if let Some(obj) = input.as_object_mut() {
+                    obj.insert("task_id".to_string(), serde_json::Value::String(bt.clone()));
+                } else {
+                    input = serde_json::json!({ "task_id": bt.clone() });
+                }
+            }
+        }
+    }
+    if t == "resolve_conduit_context" {
+        let has_tid = input
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some();
+        if !has_tid {
+            if let Some(bt) =
+                last_capture_from_user_messages(messages, &CONDUIT_BINDING_TRIGGER_TASK_ID, 1)
+            {
+                debug!(tool = %t, "conduit binding fills task_id for resolve_conduit_context");
+                if let Some(obj) = input.as_object_mut() {
+                    obj.insert("task_id".to_string(), serde_json::Value::String(bt));
+                } else {
+                    input = serde_json::json!({ "task_id": bt });
+                }
+            }
+        }
+    }
+
+    input
 }
 
 /// Execute a tool by name with the given input, returning a ToolResult.
@@ -420,6 +576,20 @@ pub async fn execute_tool(
                 },
             };
         }
+        "resolve_conduit_context" => {
+            return match tool_resolve_conduit_context(input, kernel).await {
+                Ok((content, is_error)) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content,
+                    is_error,
+                },
+                Err(e) => ToolResult {
+                    tool_use_id: tool_use_id.to_string(),
+                    content: format!("Error: {e}"),
+                    is_error: true,
+                },
+            };
+        }
         "update_project_context" => {
             return match tool_update_project_context(input, kernel).await {
                 Ok((content, is_error)) => ToolResult {
@@ -564,7 +734,7 @@ pub async fn execute_tool(
         }
 
         // Inter-agent tools (require kernel handle)
-        "agent_send" => tool_agent_send(input, kernel).await,
+        "agent_send" => tool_agent_send(input, kernel, caller_agent_id).await,
         "agent_spawn" => tool_agent_spawn(input, kernel, caller_agent_id).await,
         "agent_list" => tool_agent_list(kernel),
         "agent_kill" => tool_agent_kill(input, kernel),
@@ -929,13 +1099,14 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "trigger_cursor_worker".to_string(),
-            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Maps to `cursor agent -d <workspace> -p <prompt> --mode <mode> -o json` plus optional allowlisted flags. OpenFang always passes `-o json`. Before launching Cursor, OpenFang writes bundled skill files to `<workspace>/.cursor/skills/{explore,review,test-write,implement}/SKILL.md` (skipped when unchanged). In `agent` mode the prompt includes a mandatory contract: default references `.cursor/skills/implement/SKILL.md`; if `behavior` contains `.cursor/skills/test-write/SKILL.md`, the test-write contract is used instead. For read-only phases use `--mode ask` and point `behavior` at `.cursor/skills/explore/SKILL.md` or `.cursor/skills/review/SKILL.md`. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
+            description: "Spawn Cursor Agent CLI on an allowlisted spoke workspace with a structured prompt. Invokes `cursor agent --print --output-format json --trust --workspace <abs> --model <model>` (default model `auto`) plus optional `--mode plan|ask` (OpenFang `agent` mode omits `--mode` for full read/write runs), optional allowlisted `flags` (`--yolo`, `--force`), then `--` and the composed prompt. Streams stdout/stderr to tracing target `openfang_cursor_agent_stream` (set `RUST_LOG=openfang_cursor_agent_stream=info` on the daemon to watch chunks in logs). Before launching Cursor, OpenFang writes bundled skill files to `<workspace>/.cursor/skills/{explore,review,test-write,implement}/SKILL.md` (skipped when unchanged). In `agent` mode the prompt includes a mandatory contract: default references `.cursor/skills/implement/SKILL.md`; if `behavior` contains `.cursor/skills/test-write/SKILL.md`, the test-write contract is used instead. For read-only phases use `mode` \"ask\" or \"plan\" and point `behavior` at explore/review skills. Returns JSON with exit_code, stdout, stderr, and structured_output when stdout is valid JSON.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "workspace": { "type": "string", "description": "Absolute path to the spoke repository root (allowlisted)" },
                     "prompt": { "type": "string", "description": "Task text / instructions for the agent" },
                     "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor agent mode: use `ask` with explore/review skills; `agent` with implement or test-write (default: agent)" },
+                    "model": { "type": "string", "description": "Cursor CLI `--model` (e.g. `auto`, `sonnet-4`, `gpt-5`); default `auto` when omitted or empty" },
                     "behavior": { "type": "string", "description": "Orchestrator contract line(s). Typical values (paths are inside the spoke workspace): implement — omit or add spoke notes; explore — `Follow .cursor/skills/explore/SKILL.md in this workspace.` with mode ask; review — `Follow .cursor/skills/review/SKILL.md in this workspace.` with mode ask; test-write — include `.cursor/skills/test-write/SKILL.md` in this string with mode agent to swap in the test authoring contract. Extra notes (e.g. gate stderr) can follow." },
                     "flags": { "type": "array", "items": { "type": "string" }, "description": "Extra CLI flags allowlisted by OpenFang (e.g. --yolo, --force)" },
                     "task_id": { "type": "string", "description": "Backlog task id for audit correlation; default unknown if omitted" }
@@ -954,6 +1125,7 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
                     "task_labels": { "type": "array", "items": { "type": "string" }, "description": "Task labels including exactly one repo:<spoke> when workspace is omitted" },
                     "prompt": { "type": "string", "description": "Initial Cursor prompt (gate stderr is appended automatically on retries)" },
                     "mode": { "type": "string", "enum": ["agent", "plan", "ask"], "description": "Cursor mode (default: agent)" },
+                    "model": { "type": "string", "description": "Cursor CLI `--model` for each round; default `auto` when omitted or empty" },
                     "behavior": { "type": "string", "description": "Optional extra behavior passed to each Cursor invocation" },
                     "flags": { "type": "array", "items": { "type": "string" }, "description": "Allowlisted extra cursor agent flags" },
                     "max_retries": { "type": "integer", "description": "Extra Cursor rounds after a failed gate; default from kernel / project conduit_overrides" },
@@ -965,38 +1137,41 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "backlog_task_list".to_string(),
-            description: "List tasks via `backlog task list --plain`. Returns structured JSON including parsed sections and tasks.".to_string(),
+            description: "List tasks via `backlog task list --plain`. Pass project_id to use that project's admin backlog, or backlog_root for an explicit allowlisted path.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "project_id": { "type": "string", "description": "Registered project UUID — runs backlog CLI in that project's admin backlog (preferred for conduits)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 }
             }),
         },
         ToolDefinition {
             name: "backlog_task_view".to_string(),
-            description: "Show one task via `backlog task <id> --plain`. Returns structured JSON.".to_string(),
+            description: "Show one task via `backlog task <id> --plain`. Pass project_id for the project's admin backlog (same cwd as query_project_status).".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "task_id": { "type": "string", "description": "Task id (e.g. TASK-4 or 4)" },
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "project_id": { "type": "string", "description": "Registered project UUID — admin backlog cwd (preferred for conduits)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 },
                 "required": ["task_id"]
             }),
         },
         ToolDefinition {
             name: "backlog_task_edit".to_string(),
-            description: "Edit a task via `backlog task edit` with optional status, assignee, labels (add), and dependencies.".to_string(),
+            description: "Edit a task via `backlog task edit` with optional status, assignee, labels (add), and dependencies. Pass project_id for admin backlog cwd.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "task_id": { "type": "string", "description": "Task id (e.g. TASK-4 or 4)" },
+                    "project_id": { "type": "string", "description": "Registered project UUID — admin backlog cwd (preferred for conduits)" },
                     "status": { "type": "string", "description": "New status" },
                     "assignee": { "type": "string", "description": "Assignee" },
                     "labels": { "type": "array", "items": { "type": "string" }, "description": "Labels to add (--add-label each)" },
                     "dependencies": { "type": "array", "items": { "type": "string" }, "description": "Dependency task ids (passed to --dep)" },
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 },
                 "required": ["task_id"]
             }),
@@ -1030,11 +1205,23 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "read_project_context".to_string(),
-            description: "Load persisted per-project workflow context (repo summary, conventions, recent failures, decision log) from the hub. Returns JSON.".to_string(),
+            description: "Load per-project context: persisted notes plus orchestrator_hints (resolved spoke paths, admin_backlog_root). For tasks/docs, pass the same project_id into backlog_task_view / backlog_task_list (admin backlog cwd) — do not ask the user for backlog_root when project_id is known.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "project_id": { "type": "string", "description": "Registered project UUID" }
+                },
+                "required": ["project_id"]
+            }),
+        },
+        ToolDefinition {
+            name: "resolve_conduit_context".to_string(),
+            description: "One JSON bundle: same fields as read_project_context plus optional trigger_task_snapshot from `backlog task <id> --plain`. Use for mid-run refresh; conduit runs already embed paths + task plaintext in the initial payload.".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "description": "Registered project UUID" },
+                    "task_id": { "type": "string", "description": "Optional — when set, includes live backlog task plain output in trigger_task_snapshot" }
                 },
                 "required": ["project_id"]
             }),
@@ -1113,48 +1300,52 @@ pub fn builtin_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "backlog_doc_create".to_string(),
-            description: "Create a Backlog.md document under backlog/docs via `backlog doc create` (doc flow, not tasks). Requires allowlisted backlog root.".to_string(),
+            description: "Create a Backlog.md document under backlog/docs via `backlog doc create` (doc flow, not tasks). Pass project_id for admin backlog cwd.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "title": { "type": "string", "description": "Document title" },
                     "path": { "type": "string", "description": "Relative path under backlog/docs (category/subcategory, e.g. overview/openfang)" },
                     "doc_type": { "type": "string", "description": "Document type (e.g. technical, guide)" },
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "project_id": { "type": "string", "description": "Registered project UUID — admin backlog cwd (preferred for conduits)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 },
                 "required": ["title", "path", "doc_type"]
             }),
         },
         ToolDefinition {
             name: "backlog_doc_list".to_string(),
-            description: "List Backlog.md documents via `backlog doc list --plain` (doc flow, not tasks). Returns structured JSON.".to_string(),
+            description: "List Backlog.md documents via `backlog doc list --plain` (doc flow, not tasks). Pass project_id for admin backlog cwd.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "project_id": { "type": "string", "description": "Registered project UUID — admin backlog cwd (preferred for conduits)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 }
             }),
         },
         ToolDefinition {
             name: "backlog_doc_view".to_string(),
-            description: "View a Backlog.md document by id via `backlog doc view <doc_id>` (e.g. doc-1). Full document text is in `stdout`; requires allowlisted backlog root.".to_string(),
+            description: "View a Backlog.md document by id via `backlog doc view <doc_id>` (e.g. doc-1). Pass project_id for admin backlog cwd.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "doc_id": { "type": "string", "description": "Document id from frontmatter (e.g. doc-11, doc-0001)" },
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "project_id": { "type": "string", "description": "Registered project UUID — admin backlog cwd (preferred for conduits)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 },
                 "required": ["doc_id"]
             }),
         },
         ToolDefinition {
             name: "backlog_decision_view".to_string(),
-            description: "View a Backlog.md ADR/decision by id via `backlog decision <decision_id> --plain` (same AI-oriented pattern as `backlog task <id> --plain`). Full record is in `stdout`; requires allowlisted backlog root.".to_string(),
+            description: "View a Backlog.md ADR/decision by id via `backlog decision <decision_id> --plain`. Pass project_id for admin backlog cwd.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "decision_id": { "type": "string", "description": "Decision id from frontmatter (e.g. decision-1, DECISION-2) or numeric key if the CLI accepts it" },
-                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured" }
+                    "project_id": { "type": "string", "description": "Registered project UUID — admin backlog cwd (preferred for conduits)" },
+                    "backlog_root": { "type": "string", "description": "Absolute backlog root when multiple [automation].backlog_roots are configured (overrides project_id)" }
                 },
                 "required": ["decision_id"]
             }),
@@ -2177,6 +2368,16 @@ async fn tool_enforce_quality_gate(
     Ok((json, failed))
 }
 
+fn parse_cursor_agent_model(input: &serde_json::Value) -> String {
+    input
+        .get("model")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| "auto".to_string())
+}
+
 async fn tool_trigger_cursor_worker(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
@@ -2191,6 +2392,7 @@ async fn tool_trigger_cursor_worker(
         .as_str()
         .ok_or_else(|| "Missing required parameter 'prompt'".to_string())?;
     let mode = input["mode"].as_str().unwrap_or("agent");
+    let cursor_model = parse_cursor_agent_model(input);
     let extra_flags = crate::pipeline_steps::parse_cursor_agent_extra_flags(input)?;
     let actor = pipeline_tool_actor(caller_agent_id);
     let out = crate::pipeline_steps::run_cursor_worker(
@@ -2200,6 +2402,7 @@ async fn tool_trigger_cursor_worker(
         prompt,
         mode,
         input.get("behavior").and_then(|v| v.as_str()),
+        cursor_model.as_str(),
         &extra_flags,
         &actor,
     )
@@ -2280,6 +2483,7 @@ async fn tool_run_conduit_cycle(
     };
     let mode = input["mode"].as_str().unwrap_or("agent");
     let behavior = input.get("behavior").and_then(|v| v.as_str());
+    let cursor_model = parse_cursor_agent_model(input);
     let extra_flags = crate::pipeline_steps::parse_cursor_agent_extra_flags(input)?;
     let rollback = input
         .get("rollback_to_status")
@@ -2296,6 +2500,7 @@ async fn tool_run_conduit_cycle(
             max_retries,
             mode,
             behavior,
+            cursor_model.as_str(),
             &extra_flags,
             rollback,
         )
@@ -2427,6 +2632,35 @@ fn optional_backlog_root_param(input: &serde_json::Value) -> Option<&str> {
         .filter(|s| !s.is_empty())
 }
 
+/// `backlog_root` wins; else `project_id` → registered admin backlog dir (must lie under allowlisted roots); else global single-root / error if multiple.
+fn resolve_backlog_tool_cwd(
+    input: &serde_json::Value,
+    kh: &dyn KernelHandle,
+) -> Result<std::path::PathBuf, String> {
+    if let Some(p) = optional_backlog_root_param(input) {
+        return openfang_types::config::resolve_automation_backlog_cwd(
+            &kh.automation_backlog_roots(),
+            Some(p),
+        );
+    }
+    if let Some(pid) = input
+        .get("project_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let dir = kh.resolve_project_backlog_cwd(pid)?;
+        return openfang_types::config::validate_backlog_root_allowlisted(
+            &kh.automation_backlog_roots(),
+            &dir,
+        );
+    }
+    openfang_types::config::resolve_automation_backlog_cwd(
+        &kh.automation_backlog_roots(),
+        None,
+    )
+}
+
 fn backlog_task_id_param(input: &serde_json::Value) -> Result<String, String> {
     if let Some(s) = input.get("task_id").and_then(|v| v.as_str()) {
         let t = s.trim();
@@ -2519,10 +2753,7 @@ async fn tool_backlog_task_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
     let args = vec!["task".into(), "list".into(), "--plain".into()];
     let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let parsed = parse_backlog_task_list_plain(&stdout);
@@ -2535,10 +2766,7 @@ async fn tool_backlog_task_view(
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
     let id = backlog_task_id_param(input)?;
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
     let args = vec!["task".into(), id, "--plain".into()];
     let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let headline = stdout.lines().next().unwrap_or("").to_string();
@@ -2553,10 +2781,7 @@ async fn tool_backlog_task_edit(
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
     let id = backlog_task_id_param(input)?;
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
 
     let to_status = input
         .get("status")
@@ -2697,6 +2922,27 @@ async fn tool_read_project_context(
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
     let json = kh.read_project_context(project_id).await?;
+    Ok((json, false))
+}
+
+async fn tool_resolve_conduit_context(
+    input: &serde_json::Value,
+    kernel: Option<&Arc<dyn KernelHandle>>,
+) -> Result<(String, bool), String> {
+    let kh = require_kernel(kernel)?;
+    let project_id = input["project_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Missing required parameter 'project_id'".to_string())?;
+    let task_id = input
+        .get("task_id")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let json = kh
+        .resolve_conduit_context(project_id, task_id)
+        .await?;
     Ok((json, false))
 }
 
@@ -3006,10 +3252,7 @@ async fn tool_backlog_doc_create(
     if doc_type.trim().is_empty() {
         return Err("doc_type must be non-empty".to_string());
     }
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
     let docs_subpath = format!(
         "backlog/docs/{}",
         path.trim_start_matches('/').trim_end_matches('/')
@@ -3042,10 +3285,7 @@ async fn tool_backlog_doc_list(
     kernel: Option<&Arc<dyn KernelHandle>>,
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
     let args = vec!["doc".into(), "list".into(), "--plain".into()];
     let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let parsed = parse_backlog_doc_list_plain(&stdout);
@@ -3058,10 +3298,7 @@ async fn tool_backlog_doc_view(
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
     let id = backlog_doc_id_param(input)?;
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
     let args = vec!["doc".into(), "view".into(), id.clone()];
     let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let first_line = stdout.lines().next().unwrap_or("").to_string();
@@ -3079,10 +3316,7 @@ async fn tool_backlog_decision_view(
 ) -> Result<(String, bool), String> {
     let kh = require_kernel(kernel)?;
     let id = backlog_decision_id_param(input)?;
-    let cwd = openfang_types::config::resolve_automation_backlog_cwd(
-        &kh.automation_backlog_roots(),
-        optional_backlog_root_param(input),
-    )?;
+    let cwd = resolve_backlog_tool_cwd(input, kh.as_ref())?;
     let args = vec!["decision".into(), id.clone(), "--plain".into()];
     let (code, stdout, stderr) = crate::backlog_cli::run_backlog_cli(&cwd, &args).await?;
     let first_line = stdout.lines().next().unwrap_or("").to_string();
@@ -3106,9 +3340,39 @@ fn require_kernel(
     })
 }
 
+/// True if `target` refers to the same agent as `caller` (by id, canonical UUID, or display name).
+///
+/// Used to refuse `agent_send` to self: the kernel holds a per-agent mutex for the whole LLM turn;
+/// re-entering `send_message` for that agent from the same async task deadlocks forever.
+fn agent_send_target_is_caller(kh: &dyn KernelHandle, target: &str, caller: &str) -> bool {
+    let caller = caller.trim();
+    let target = target.trim();
+    if caller.is_empty() {
+        return false;
+    }
+    if target.eq_ignore_ascii_case(caller) {
+        return true;
+    }
+    if let (Ok(t_uuid), Ok(c_uuid)) = (
+        uuid::Uuid::parse_str(target),
+        uuid::Uuid::parse_str(caller),
+    ) {
+        if t_uuid == c_uuid {
+            return true;
+        }
+    }
+    for a in kh.list_agents() {
+        if a.id.eq_ignore_ascii_case(caller) && (a.id == target || a.name == target) {
+            return true;
+        }
+    }
+    false
+}
+
 async fn tool_agent_send(
     input: &serde_json::Value,
     kernel: Option<&Arc<dyn KernelHandle>>,
+    caller_agent_id: Option<&str>,
 ) -> Result<String, String> {
     let kh = require_kernel(kernel)?;
     let agent_id = input["agent_id"]
@@ -3117,6 +3381,17 @@ async fn tool_agent_send(
     let message = input["message"]
         .as_str()
         .ok_or("Missing 'message' parameter")?;
+
+    if let Some(caller) = caller_agent_id.map(str::trim).filter(|s| !s.is_empty()) {
+        if agent_send_target_is_caller(kh.as_ref(), agent_id, caller) {
+            return Err(
+                "Refusing agent_send: target is the current agent. The kernel cannot run a nested \
+                 message on the same agent during tool execution (it would deadlock). Reply in \
+                 this turn instead, or send to a different agent."
+                    .to_string(),
+            );
+        }
+    }
 
     // Check + increment inter-agent call depth
     let current_depth = AGENT_CALL_DEPTH.try_with(|d| d.get()).unwrap_or(0);
@@ -4780,6 +5055,289 @@ async fn tool_canvas_present(
 mod tests {
     use super::*;
     use crate::kernel_handle::{AgentInfo, KernelHandle};
+    use openfang_types::message::{Message, MessageContent, Role};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    #[test]
+    fn merge_conduit_binding_fills_project_id() {
+        let binding = "[OpenFang conduit binding] project_id=f39b1498-1760-43a0-ba53-3a03c568db36 trigger_task_id=TASK-52";
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text(binding.into()),
+        };
+        let out = merge_project_id_from_conduit_binding(
+            "read_project_context",
+            serde_json::json!({}),
+            std::slice::from_ref(&user),
+        );
+        assert_eq!(
+            out["project_id"].as_str().unwrap(),
+            "f39b1498-1760-43a0-ba53-3a03c568db36"
+        );
+    }
+
+    #[test]
+    fn merge_conduit_binding_fills_project_id_for_backlog_task_view() {
+        let binding = "project_id=f39b1498-1760-43a0-ba53-3a03c568db36";
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text(binding.into()),
+        };
+        let out = merge_project_id_from_conduit_binding(
+            "backlog_task_view",
+            serde_json::json!({ "task_id": "TASK-52" }),
+            std::slice::from_ref(&user),
+        );
+        assert_eq!(out["task_id"].as_str().unwrap(), "TASK-52");
+        assert_eq!(
+            out["project_id"].as_str().unwrap(),
+            "f39b1498-1760-43a0-ba53-3a03c568db36"
+        );
+    }
+
+    #[test]
+    fn merge_conduit_binding_start_conduit_fills_ids() {
+        let binding = "project_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee trigger_task_id=TASK-99";
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text(binding.into()),
+        };
+        let out = merge_project_id_from_conduit_binding(
+            "start_project_conduit",
+            serde_json::json!({}),
+            std::slice::from_ref(&user),
+        );
+        assert_eq!(
+            out["project_id"].as_str().unwrap(),
+            "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        );
+        assert_eq!(out["task_id"].as_str().unwrap(), "TASK-99");
+    }
+
+    #[test]
+    fn merge_conduit_binding_overrides_hallucinated_project_id() {
+        let binding = "[OpenFang conduit binding] project_id=f39b1498-1760-43a0-ba53-3a03c568db36";
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text(binding.into()),
+        };
+        // Model typo / hallucination (valid UUID shape, wrong value → Project not found).
+        let wrong = "f39b1498-1760-43a0-ba3a-03a03a03a03a";
+        let out = merge_project_id_from_conduit_binding(
+            "read_project_context",
+            serde_json::json!({ "project_id": wrong }),
+            std::slice::from_ref(&user),
+        );
+        assert_eq!(
+            out["project_id"].as_str().unwrap(),
+            "f39b1498-1760-43a0-ba53-3a03c568db36"
+        );
+    }
+
+    #[test]
+    fn merge_conduit_binding_keeps_matching_project_id() {
+        let pid = "f39b1498-1760-43a0-ba53-3a03c568db36";
+        let binding = format!("[OpenFang conduit binding] project_id={pid}");
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text(binding),
+        };
+        let out = merge_project_id_from_conduit_binding(
+            "read_project_context",
+            serde_json::json!({ "project_id": pid }),
+            std::slice::from_ref(&user),
+        );
+        assert_eq!(out["project_id"].as_str().unwrap(), pid);
+    }
+
+    #[test]
+    fn merge_conduit_binding_project_id_case_insensitive_match() {
+        let binding = "project_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text(binding.into()),
+        };
+        let out = merge_project_id_from_conduit_binding(
+            "read_project_context",
+            serde_json::json!({ "project_id": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE" }),
+            std::slice::from_ref(&user),
+        );
+        assert_eq!(
+            out["project_id"].as_str().unwrap(),
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        );
+    }
+
+    #[test]
+    fn merge_conduit_binding_noop_for_other_tools() {
+        let user = Message {
+            role: Role::User,
+            content: MessageContent::Text("project_id=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".into()),
+        };
+        let out = merge_project_id_from_conduit_binding(
+            "file_read",
+            serde_json::json!({ "path": "/x" }),
+            std::slice::from_ref(&user),
+        );
+        assert!(out.get("project_id").is_none());
+        assert_eq!(out["path"], "/x");
+    }
+
+    #[derive(Clone)]
+    struct AgentSendListKernel {
+        agents: Vec<AgentInfo>,
+    }
+
+    #[async_trait::async_trait]
+    impl KernelHandle for AgentSendListKernel {
+        async fn spawn_agent(&self, _: &str, _: Option<&str>) -> Result<(String, String), String> {
+            Err("stub".into())
+        }
+        async fn send_to_agent(&self, _: &str, _: &str) -> Result<String, String> {
+            panic!("send_to_agent must not run when self-send is rejected")
+        }
+        fn list_agents(&self) -> Vec<AgentInfo> {
+            self.agents.clone()
+        }
+        fn kill_agent(&self, _: &str) -> Result<(), String> {
+            Err("stub".into())
+        }
+        fn memory_store(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
+            Err("stub".into())
+        }
+        fn memory_recall(&self, _: &str) -> Result<Option<serde_json::Value>, String> {
+            Ok(None)
+        }
+        fn find_agents(&self, _: &str) -> Vec<AgentInfo> {
+            vec![]
+        }
+        async fn task_post(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&str>,
+            _: Option<&str>,
+        ) -> Result<String, String> {
+            Err("stub".into())
+        }
+        async fn task_claim(&self, _: &str) -> Result<Option<serde_json::Value>, String> {
+            Ok(None)
+        }
+        async fn task_complete(&self, _: &str, _: &str) -> Result<(), String> {
+            Err("stub".into())
+        }
+        async fn task_list(&self, _: Option<&str>) -> Result<Vec<serde_json::Value>, String> {
+            Ok(vec![])
+        }
+        async fn publish_event(&self, _: &str, _: serde_json::Value) -> Result<(), String> {
+            Err("stub".into())
+        }
+        async fn knowledge_add_entity(
+            &self,
+            _: openfang_types::memory::Entity,
+        ) -> Result<String, String> {
+            Err("stub".into())
+        }
+        async fn knowledge_add_relation(
+            &self,
+            _: openfang_types::memory::Relation,
+        ) -> Result<String, String> {
+            Err("stub".into())
+        }
+        async fn knowledge_query(
+            &self,
+            _: openfang_types::memory::GraphPattern,
+        ) -> Result<Vec<openfang_types::memory::GraphMatch>, String> {
+            Ok(vec![])
+        }
+        fn automation_spoke_roots(&self) -> Vec<PathBuf> {
+            vec![]
+        }
+        fn automation_backlog_roots(&self) -> Vec<PathBuf> {
+            vec![]
+        }
+    }
+
+    #[test]
+    fn agent_send_target_is_caller_matches_uuid_and_name() {
+        let id = "11111111-1111-1111-1111-111111111111";
+        let kh = AgentSendListKernel {
+            agents: vec![AgentInfo {
+                id: id.to_string(),
+                name: "Conduit · test".to_string(),
+                state: "Running".to_string(),
+                model_provider: "x".to_string(),
+                model_name: "y".to_string(),
+                description: "".to_string(),
+                tags: vec![],
+                tools: vec![],
+            }],
+        };
+        assert!(super::agent_send_target_is_caller(&kh, id, id));
+        assert!(super::agent_send_target_is_caller(
+            &kh,
+            "11111111-1111-1111-1111-111111111111",
+            "11111111-1111-1111-1111-111111111111"
+        ));
+        assert!(super::agent_send_target_is_caller(
+            &kh,
+            "Conduit · test",
+            id
+        ));
+        assert!(!super::agent_send_target_is_caller(
+            &kh,
+            "22222222-2222-2222-2222-222222222222",
+            id
+        ));
+    }
+
+    #[tokio::test]
+    async fn agent_send_tool_rejects_self_before_kernel_send() {
+        let id = "11111111-1111-1111-1111-111111111111";
+        let k: Arc<dyn KernelHandle> = Arc::new(AgentSendListKernel {
+            agents: vec![AgentInfo {
+                id: id.to_string(),
+                name: "Orchestrator".to_string(),
+                state: "Running".to_string(),
+                model_provider: "x".to_string(),
+                model_name: "y".to_string(),
+                description: "".to_string(),
+                tags: vec![],
+                tools: vec![],
+            }],
+        });
+        let allowed = vec!["agent_send".to_string()];
+        let r = execute_tool(
+            "t1",
+            "agent_send",
+            &serde_json::json!({
+                "agent_id": id,
+                "message": "ping"
+            }),
+            Some(&k),
+            Some(&allowed),
+            Some(id),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .await;
+        assert!(r.is_error);
+        assert!(
+            r.content.contains("Refusing agent_send"),
+            "unexpected: {}",
+            r.content
+        );
+    }
 
     #[derive(Clone)]
     struct QaGateStubKernel {
@@ -4856,6 +5414,18 @@ mod tests {
             self.backlog_roots.clone()
         }
 
+        fn resolve_project_backlog_cwd(&self, _project_id: &str) -> Result<PathBuf, String> {
+            match self.backlog_roots.len() {
+                0 => Err("No automation backlog roots configured.".to_string()),
+                1 => std::fs::canonicalize(&self.backlog_roots[0])
+                    .map_err(|e| format!("backlog root does not exist or is not accessible: {e}")),
+                _ => Err(
+                    "Multiple [automation].backlog_roots in test stub: pass backlog_root explicitly."
+                        .to_string(),
+                ),
+            }
+        }
+
         fn resolve_git_workspace_for_project(
             &self,
             project_id: &str,
@@ -4911,6 +5481,19 @@ mod tests {
             Ok(serde_json::json!({ "project_id": project_id, "stub": true }).to_string())
         }
 
+        async fn resolve_conduit_context(
+            &self,
+            project_id: &str,
+            task_id: Option<&str>,
+        ) -> Result<String, String> {
+            Ok(serde_json::json!({
+                "project_id": project_id,
+                "task_id": task_id,
+                "stub_resolve_conduit_context": true,
+            })
+            .to_string())
+        }
+
         async fn update_project_context(
             &self,
             project_id: &str,
@@ -4928,8 +5511,8 @@ mod tests {
     fn test_builtin_tool_definitions() {
         let tools = builtin_tool_definitions();
         assert!(
-            tools.len() >= 39,
-            "Expected at least 39 tools, got {}",
+            tools.len() >= 40,
+            "Expected at least 40 tools, got {}",
             tools.len()
         );
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
@@ -4946,6 +5529,7 @@ mod tests {
         assert!(names.contains(&"start_project_conduit"));
         assert!(names.contains(&"query_project_status"));
         assert!(names.contains(&"read_project_context"));
+        assert!(names.contains(&"resolve_conduit_context"));
         assert!(names.contains(&"update_project_context"));
         assert!(names.contains(&"git_create_branch"));
         assert!(names.contains(&"git_commit_and_push"));

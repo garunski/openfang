@@ -785,36 +785,27 @@ enum SystemCommands {
     },
 }
 
-fn config_log_level() -> String {
-    let config_path = if let Ok(home) = std::env::var("OPENFANG_HOME") {
-        std::path::PathBuf::from(home).join("config.toml")
+/// When `RUST_LOG` is unset, build the `EnvFilter` from **`KernelConfig.log_level`** (plain level or
+/// full directive string) using the same `load_config` path as the daemon (`--config`, `include` merge,
+/// `[api]` migration).
+fn tracing_env_filter_from_config(config_override: Option<&PathBuf>) -> tracing_subscriber::EnvFilter {
+    let level = openfang_kernel::config::load_config(config_override.map(|p| p.as_path()))
+        .log_level
+        .trim()
+        .to_string();
+    let level = if level.is_empty() {
+        "info".to_string()
     } else {
-        dirs::home_dir()
-            .unwrap_or_else(std::env::temp_dir)
-            .join(".openfang")
-            .join("config.toml")
+        level
     };
-    if let Ok(content) = std::fs::read_to_string(config_path) {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with("log_level") {
-                if let Some(val) = trimmed.split('=').nth(1) {
-                    let level = val.trim().trim_matches('"').trim_matches('\'');
-                    if !level.is_empty() {
-                        return level.to_string();
-                    }
-                }
-            }
-        }
-    }
-    "info".to_string()
+    tracing_subscriber::EnvFilter::new(level)
 }
 
-fn init_tracing_stderr() {
+fn init_tracing_stderr(config_override: Option<&PathBuf>) {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(config_log_level())),
+                .unwrap_or_else(|_| tracing_env_filter_from_config(config_override)),
         )
         .with_writer(std::io::stderr)
         .init();
@@ -831,7 +822,7 @@ fn cli_openfang_home() -> std::path::PathBuf {
 }
 
 /// Redirect tracing to a log file so it doesn't corrupt the ratatui TUI.
-fn init_tracing_file() {
+fn init_tracing_file(config_override: Option<&PathBuf>) {
     let log_dir = cli_openfang_home();
     let _ = std::fs::create_dir_all(&log_dir);
     let log_path = log_dir.join("tui.log");
@@ -841,7 +832,7 @@ fn init_tracing_file() {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(config_log_level())),
+                        .unwrap_or_else(|_| tracing_env_filter_from_config(config_override)),
                 )
                 .with_writer(std::sync::Mutex::new(file))
                 .with_ansi(false)
@@ -903,12 +894,12 @@ fn main() {
         );
 
     if is_tui_mode {
-        init_tracing_file();
+        init_tracing_file(cli.config.as_ref());
     } else {
         // CLI subcommands: install Ctrl+C handler for clean interrupt of
         // blocking read_line calls, and trace to stderr.
         install_ctrlc_handler();
-        init_tracing_stderr();
+        init_tracing_stderr(cli.config.as_ref());
     }
 
     match cli.command {

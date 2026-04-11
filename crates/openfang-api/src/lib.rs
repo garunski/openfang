@@ -62,6 +62,10 @@ mod dashboard_static_tests {
             "expected project conduit-runs API path"
         );
         assert!(
+            js.contains("/conduit-runs/") && js.contains("/trace"),
+            "expected project conduit run trace API path in projects.js"
+        );
+        assert!(
             !js.contains("openWorkflowRunsPanel"),
             "removed per-project workflow definitions panel"
         );

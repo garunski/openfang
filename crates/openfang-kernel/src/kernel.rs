@@ -43,6 +43,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock, Weak};
 use tracing::{debug, info, warn};
 
+/// Max bytes of `backlog task … --plain` output embedded in conduit run payloads.
+const CONDUIT_TRIGGER_PLAIN_EMBED_MAX: usize = 24_000;
+
 /// The main OpenFang kernel — coordinates all subsystems.
 /// Stub LLM driver used when no providers are configured.
 /// Returns a helpful error so the dashboard still boots and users can configure providers.
@@ -542,6 +545,33 @@ fn gethostname() -> Option<String> {
 }
 
 impl OpenFangKernel {
+    /// Rolling trace files under `<home>/logs/trace/` ([`openfang_filetrace`]).
+    #[inline]
+    pub fn file_trace(&self) -> &std::sync::Arc<openfang_filetrace::ScopedFileTrace> {
+        &self.scoped_file_trace
+    }
+
+    pub fn trace_system_event(&self, msg: impl AsRef<str>) {
+        self.scoped_file_trace.system().info(msg.as_ref());
+    }
+
+    pub fn trace_project_event(&self, pid: ProjectId, msg: impl AsRef<str>) {
+        let m = msg.as_ref();
+        if let Some(t) = self.scoped_file_trace.project(&pid.to_string()) {
+            t.info(m);
+        }
+        self.scoped_file_trace
+            .system()
+            .info(&format!("project={pid} {m}"));
+    }
+
+    pub fn trace_agent_file_only(&self, agent_id: AgentId, msg: impl AsRef<str>) {
+        let m = msg.as_ref();
+        if let Some(t) = self.scoped_file_trace.agent(&agent_id.to_string()) {
+            t.info(m);
+        }
+    }
+
     /// Boot the kernel with configuration from the given path.
     pub fn boot(config_path: Option<&Path>) -> KernelResult<Self> {
         let config = load_config(config_path);
@@ -1228,7 +1258,7 @@ impl OpenFangKernel {
         }
 
         info!("OpenFang kernel booted successfully");
-        kernel.scoped_file_trace.system().info("Kernel boot complete");
+        kernel.trace_system_event("Kernel boot complete");
         Ok(kernel)
     }
 
@@ -1393,6 +1423,14 @@ impl OpenFangKernel {
             "ok",
         );
 
+        self.trace_agent_file_only(
+            agent_id,
+            format!("agent_spawned name={name} session_id={session_id}"),
+        );
+        self.trace_system_event(format!(
+            "agent_spawned id={agent_id} name={name} parent={parent:?}"
+        ));
+
         // For proactive agents spawned at runtime, auto-register triggers
         if let ScheduleMode::Proactive { conditions } = &entry.manifest.schedule {
             for condition in conditions {
@@ -1545,15 +1583,16 @@ impl OpenFangKernel {
         })?;
 
         let preview: String = message.chars().take(240).collect();
-        if let Some(sink) = self.scoped_file_trace.agent(&agent_id.to_string()) {
-            let sn = sender_name.as_deref().unwrap_or("-");
-            sink.info(&format!(
+        let sn = sender_name.as_deref().unwrap_or("-");
+        self.trace_agent_file_only(
+            agent_id,
+            format!(
                 "agent_message_in agent={} chars={} sender_name={} preview={preview:?}",
                 entry.name,
                 message.chars().count(),
                 sn
-            ));
-        }
+            ),
+        );
 
         // Dispatch based on module type
         let result = if entry.manifest.module.starts_with("wasm:") {
@@ -1594,12 +1633,13 @@ impl OpenFangKernel {
                     "ok",
                 );
 
-                if let Some(sink) = self.scoped_file_trace.agent(&agent_id.to_string()) {
-                    sink.info(&format!(
+                self.trace_agent_file_only(
+                    agent_id,
+                    format!(
                         "agent_message_out tokens_in={} tokens_out={}",
                         result.total_usage.input_tokens, result.total_usage.output_tokens
-                    ));
-                }
+                    ),
+                );
 
                 Ok(result)
             }
@@ -1615,9 +1655,10 @@ impl OpenFangKernel {
                 // Record the failure in supervisor for health reporting
                 self.supervisor.record_panic();
                 warn!(agent_id = %agent_id, error = %e, "Agent loop failed — recorded in supervisor");
-                if let Some(sink) = self.scoped_file_trace.agent(&agent_id.to_string()) {
-                    sink.error(&format!("agent_message_failed error={e}"));
-                }
+                self.trace_agent_file_only(
+                    agent_id,
+                    format!("agent_message_failed error={e}"),
+                );
                 Err(e)
             }
         }
@@ -3252,6 +3293,8 @@ impl OpenFangKernel {
 
     /// Kill an agent.
     pub fn kill_agent(&self, agent_id: AgentId) -> KernelResult<()> {
+        self.trace_agent_file_only(agent_id, "agent_kill_begin");
+        self.trace_system_event(format!("agent_kill_begin id={agent_id}"));
         let entry = self
             .registry
             .remove(agent_id)
@@ -3303,6 +3346,14 @@ impl OpenFangKernel {
             }
         }
 
+        self.trace_agent_file_only(
+            agent_id,
+            format!("agent_killed name={}", entry.name),
+        );
+        self.trace_system_event(format!(
+            "agent_killed id={agent_id} name={}",
+            entry.name
+        ));
         info!(agent = %entry.name, id = %agent_id, "Agent killed");
         Ok(())
     }
@@ -3512,6 +3563,11 @@ impl OpenFangKernel {
         // Persist hand state so it survives restarts
         self.persist_hand_state();
 
+        self.trace_system_event(format!(
+            "hand_activated hand={hand_id} instance={} agent={agent_id}",
+            instance.instance_id
+        ));
+
         // Return instance with agent set
         Ok(self
             .hand_registry
@@ -3545,6 +3601,10 @@ impl OpenFangKernel {
         }
         // Persist hand state so it survives restarts
         self.persist_hand_state();
+        self.trace_system_event(format!(
+            "hand_deactivated instance={instance_id} hand_id={}",
+            instance.hand_id
+        ));
         Ok(())
     }
 
@@ -4179,16 +4239,122 @@ impl OpenFangKernel {
         crate::project_context::save_project_context_file(&path, ctx)
     }
 
+    fn orchestrator_hints_json(&self, project: &Project) -> serde_json::Value {
+        let id = project.id;
+        let configured_spokes: Vec<serde_json::Value> = project
+            .spokes
+            .iter()
+            .map(|s| {
+                let path_resolved = project
+                    .resolve_spoke(s.name.as_str())
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_default();
+                serde_json::json!({
+                    "name": s.name,
+                    "path_configured": s.path.display().to_string(),
+                    "path_resolved": path_resolved,
+                    "labels": s.labels,
+                })
+            })
+            .collect();
+
+        let admin_backlog_root = project
+            .admin_backlog_root()
+            .map(|p| p.display().to_string());
+
+        serde_json::json!({
+            "project_id": id.to_string(),
+            "project_name": project.name,
+            "admin_spoke": project.admin_spoke,
+            "admin_backlog_root": admin_backlog_root,
+            "mattermost_channel_id": project.mattermost_channel_id,
+            "configured_spokes": configured_spokes,
+            "workspace_resolution": "path_resolved is the absolute spoke root for trigger_cursor_worker. Pass the same project_id into backlog_task_view / backlog_task_list (admin backlog cwd, same as query_project_status) — not only backlog_root. Parse doc path / goal from the trigger task snapshot in the conduit payload or trigger_task_snapshot from resolve_conduit_context.",
+            "note": "Conduit runs prepend [OpenFang resolved paths] and a plaintext trigger-task snapshot (from backlog --plain) before the first model turn.",
+        })
+    }
+
+    /// Same JSON object as [`Self::read_project_context_tool`] but as a value (for composition).
+    pub fn read_project_context_json(&self, id: ProjectId) -> Result<serde_json::Value, String> {
+        let project = self
+            .project_store
+            .get(id)
+            .ok_or_else(|| "Project not found".to_string())?;
+        let ctx = self.load_project_context_resolved(id);
+        let mut root = serde_json::to_value(&ctx).map_err(|e| e.to_string())?;
+        let hints = self.orchestrator_hints_json(&project);
+        if let Some(obj) = root.as_object_mut() {
+            obj.insert("orchestrator_hints".to_string(), hints);
+        }
+        Ok(root)
+    }
+
     /// JSON snapshot for `read_project_context` tool.
+    ///
+    /// Includes persisted [`openfang_types::project::ProjectContext`] plus
+    /// `orchestrator_hints` (resolved spoke paths, admin backlog root). Empty
+    /// `repo_structure_summary` / `coding_conventions` are normal before any updates;
+    /// conduits should still use `orchestrator_hints` for workspace resolution.
     pub fn read_project_context_tool(&self, project_id: &str) -> Result<String, String> {
         let id: ProjectId = project_id
             .parse()
             .map_err(|_| format!("Invalid project_id: {project_id}"))?;
-        if self.project_store.get(id).is_none() {
-            return Err("Project not found".to_string());
+        let v = self.read_project_context_json(id)?;
+        serde_json::to_string_pretty(&v).map_err(|e| e.to_string())
+    }
+
+    /// `read_project_context` plus optional live `backlog task <id> --plain` snapshot (same as embedded conduit payload).
+    pub async fn resolve_conduit_context_tool(
+        &self,
+        project_id: &str,
+        task_id: Option<&str>,
+    ) -> Result<String, String> {
+        let id: ProjectId = project_id
+            .parse()
+            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
+        let mut root = self.read_project_context_json(id)?;
+        if let Some(tid) = task_id.map(str::trim).filter(|s| !s.is_empty()) {
+            let snap = match self.project_admin_backlog_dir(project_id) {
+                Ok(cwd) => {
+                    let args = vec!["task".into(), tid.to_string(), "--plain".into()];
+                    let (code, stdout, stderr) = backlog_cli::run_backlog_cli(&cwd, &args)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    serde_json::json!({
+                        "task_id": tid,
+                        "exit_code": code,
+                        "plain_stdout": stdout,
+                        "stderr": stderr,
+                    })
+                }
+                Err(e) => serde_json::json!({
+                    "error": e.to_string(),
+                }),
+            };
+            if let Some(obj) = root.as_object_mut() {
+                obj.insert("trigger_task_snapshot".to_string(), snap);
+            }
         }
-        let ctx = self.load_project_context_resolved(id);
-        serde_json::to_string_pretty(&ctx).map_err(|e| e.to_string())
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())
+    }
+
+    fn resolved_paths_block_for_conduit(&self, project: &Project) -> String {
+        let mut lines = vec![
+            "[OpenFang resolved paths — authoritative absolute paths; do not guess or ask the user]"
+                .to_string(),
+        ];
+        match project.admin_backlog_root() {
+            Some(root) => lines.push(format!("admin_backlog_root={}", root.display())),
+            None => lines.push(
+                "admin_backlog_root=(unset — configure project admin_spoke and spokes)".to_string(),
+            ),
+        }
+        for s in project.spokes.iter().take(20) {
+            if let Some(abs) = project.resolve_spoke(s.name.as_str()) {
+                lines.push(format!("spoke.{}={}", s.name, abs.display()));
+            }
+        }
+        lines.join("\n")
     }
 
     /// Apply `update_project_context` tool patch and persist.
@@ -4215,23 +4381,87 @@ impl OpenFangKernel {
         serde_json::to_string_pretty(&ctx).map_err(|e| e.to_string())
     }
 
-    /// Prepends persisted project context to workflow initial input when non-empty.
+    /// Builds the initial conduit message: binding, **resolved absolute paths**, optional
+    /// **trigger task `backlog task … --plain` snapshot**, optional persisted `context.json` notes,
+    /// then a one-line reminder. Dashboard and `start_project_conduit` use this after validating
+    /// the task exists (so `trigger_task_backlog_plain` is usually Some).
     pub fn conduit_input_with_project_context(
         &self,
         project_id: ProjectId,
         task_id: &str,
+        trigger_task_backlog_plain: Option<&str>,
     ) -> String {
         let tid = task_id.trim();
+        let mut out = String::new();
+        out.push_str("[OpenFang conduit binding]\n");
+        out.push_str(&format!("project_id={project_id}\n"));
+        out.push_str(&format!("trigger_task_id={tid}\n"));
+        if let Some(p) = self.project_store.get(project_id) {
+            if !p.name.trim().is_empty() {
+                out.push_str(&format!("project_name={}\n", p.name.trim()));
+            }
+            if let Some(mm) = p
+                .mattermost_channel_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                out.push_str(&format!("mattermost_channel_id={mm}\n"));
+            }
+            if let Some(adm) = p
+                .admin_spoke
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                out.push_str(&format!("admin_spoke={adm}\n"));
+            }
+            if !p.spokes.is_empty() {
+                out.push_str("configured_spokes:\n");
+                let n = p.spokes.len();
+                for s in p.spokes.iter().take(20) {
+                    let labels = s.labels.join(",");
+                    out.push_str(&format!(
+                        "  - name={} path={} labels={labels}\n",
+                        s.name,
+                        s.path.display()
+                    ));
+                }
+                if n > 20 {
+                    out.push_str(&format!("  … and {} more spoke(s)\n", n - 20));
+                }
+            }
+            out.push('\n');
+            out.push_str(&self.resolved_paths_block_for_conduit(&p));
+            out.push_str("\n\n");
+        } else {
+            out.push('\n');
+        }
+        out.push_str("Orchestrator rules: `project_id` in this block is authoritative. Resolved paths and the trigger-task snapshot (if present) are ground truth — do not ask the user for them. Call `read_project_context` / `resolve_conduit_context` only when you need updated persisted context or a fresh task snapshot.\n\n");
+
+        if let Some(plain) = trigger_task_backlog_plain.filter(|s| !s.trim().is_empty()) {
+            let snap = openfang_types::truncate_str(plain, CONDUIT_TRIGGER_PLAIN_EMBED_MAX);
+            out.push_str("---\n\n[OpenFang trigger task snapshot — `backlog task ");
+            out.push_str(tid);
+            out.push_str(" --plain`]\n\n");
+            out.push_str(snap);
+            if plain.len() > CONDUIT_TRIGGER_PLAIN_EMBED_MAX {
+                out.push_str("\n…[truncated]");
+            }
+            out.push_str("\n\n---\n\n");
+        }
+
         let ctx = self.load_project_context_resolved(project_id);
         let section =
             ctx.conduit_prompt_section(self.config.automation.project_context_prompt_max_chars);
-        if section.is_empty() {
-            tid.to_string()
-        } else {
-            format!(
-                "{section}\n\n---\n\n**Conduit task id:** `{tid}`\nUse this task id for backlog and pipeline steps."
-            )
+        if !section.is_empty() {
+            out.push_str(&section);
+            out.push_str("\n\n---\n\n");
         }
+        out.push_str(&format!(
+            "**Conduit trigger task:** `{tid}` (was **Ready for Dev** when the run started; do not mark **Done** unless the user asked.)"
+        ));
+        out
     }
 
     /// Resolve a git workspace path: allowlisted under `[automation].spoke_roots` and under the project's spokes.
@@ -4545,7 +4775,42 @@ impl OpenFangKernel {
 
     /// Register a workflow definition.
     pub async fn register_conduit(&self, workflow: Conduit) -> ConduitId {
-        self.conduits.register(workflow).await
+        let nm = workflow.name.clone();
+        let n_steps = workflow.steps.len();
+        let id = self.conduits.register(workflow).await;
+        self.trace_system_event(format!(
+            "conduit_registered conduit_id={id} name={nm} steps={n_steps}"
+        ));
+        id
+    }
+
+    /// Remove a conduit definition (with file trace).
+    pub async fn remove_conduit_traced(&self, conduit_id: ConduitId) -> bool {
+        let meta = self
+            .conduits
+            .get_conduit(conduit_id)
+            .await
+            .map(|w| w.name.clone());
+        let ok = self.conduits.remove_conduit(conduit_id).await;
+        if ok {
+            self.trace_system_event(format!(
+                "conduit_removed conduit_id={conduit_id} name={}",
+                meta.as_deref().unwrap_or("?")
+            ));
+        }
+        ok
+    }
+
+    /// Update a conduit definition (with file trace).
+    pub async fn update_conduit_traced(&self, conduit_id: ConduitId, updated: Conduit) -> bool {
+        let nm = updated.name.clone();
+        let ok = self.conduits.update_conduit(conduit_id, updated).await;
+        if ok {
+            self.trace_system_event(format!(
+                "conduit_updated conduit_id={conduit_id} name={nm}"
+            ));
+        }
+        ok
     }
 
     /// Resolve a workflow step's agent from the registry (by id or name).
@@ -4674,17 +4939,18 @@ impl OpenFangKernel {
                 KernelError::OpenFang(OpenFangError::Internal("Conduit not found".to_string()))
             })?;
 
-        self.scoped_file_trace.system().info(&format!(
+        self.trace_system_event(format!(
             "conduit_run start run_id={run_id} conduit_id={conduit_id} conduit_name={} project={effective_project:?}",
             wf_def.name
         ));
         if let Some(pid) = effective_project {
-            if let Some(sink) = self.scoped_file_trace.project(&pid.to_string()) {
-                sink.info(&format!(
+            self.trace_project_event(
+                pid,
+                format!(
                     "conduit_run start run_id={run_id} conduit_id={conduit_id} name={}",
                     wf_def.name
-                ));
-            }
+                ),
+            );
         }
 
         let resolver =
@@ -4705,8 +4971,8 @@ impl OpenFangKernel {
         };
 
         // SECURITY: Global workflow timeout to prevent runaway execution.
-        // Must cover bundled multi-step templates (e.g. conduit-doc-to-tasks: 900+7200+900s step budgets).
-        const MAX_WORKFLOW_SECS: u64 = 10_800; // 3 hours
+        // Must cover bundled multi-step templates (e.g. conduit-doc-to-tasks: 3600+7200+900s step budgets).
+        const MAX_WORKFLOW_SECS: u64 = 12_600; // 3.5 hours
 
         let output = tokio::time::timeout(
             std::time::Duration::from_secs(MAX_WORKFLOW_SECS),
@@ -4722,11 +4988,235 @@ impl OpenFangKernel {
             KernelError::OpenFang(OpenFangError::Internal(format!("Conduit failed: {e}")))
         })?;
 
-        self.scoped_file_trace.system().info(&format!(
+        self.trace_system_event(format!(
             "conduit_run completed run_id={run_id} conduit_id={conduit_id}"
         ));
 
         Ok((run_id, output))
+    }
+
+    /// Create a conduit run and execute it in the background (dashboard HTTP path).
+    /// Returns `run_id` immediately; completion or failure is traced via scoped trace + `tracing`.
+    pub async fn run_conduit_spawn(
+        self: &Arc<Self>,
+        conduit_id: ConduitId,
+        input: String,
+        project_context: Option<ProjectId>,
+    ) -> KernelResult<ConduitRunId> {
+        let wf_def = self
+            .conduits
+            .get_conduit(conduit_id)
+            .await
+            .ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::Internal("Conduit not found".to_string()))
+            })?;
+
+        let effective_project = project_context;
+
+        if let Some(pid) = effective_project {
+            self.validate_conduit_project_agents(&wf_def, pid)?;
+        }
+
+        let run_id = self
+            .conduits
+            .create_run(conduit_id, input, effective_project)
+            .await
+            .ok_or_else(|| {
+                KernelError::OpenFang(OpenFangError::Internal("Conduit not found".to_string()))
+            })?;
+
+        self.trace_system_event(format!(
+            "conduit_run start run_id={run_id} conduit_id={conduit_id} conduit_name={} project={effective_project:?}",
+            wf_def.name
+        ));
+        if let Some(pid) = effective_project {
+            self.trace_project_event(
+                pid,
+                format!(
+                    "conduit_run start run_id={run_id} conduit_id={conduit_id} name={}",
+                    wf_def.name
+                ),
+            );
+        }
+
+        let k_trace = Arc::clone(self);
+        let k_exec = Arc::clone(self);
+        let cid = conduit_id;
+        tokio::spawn(async move {
+            let ep = effective_project;
+            let k_resolve = Arc::clone(&k_exec);
+            let resolver = move |agent_ref: &StepAgent| {
+                k_resolve.resolve_conduit_step_agent(agent_ref, ep)
+            };
+            let send_message = {
+                let ksm = Arc::clone(&k_exec);
+                move |agent_id: AgentId, message: String| {
+                    let km = Arc::clone(&ksm);
+                    async move {
+                        km.send_message(agent_id, &message)
+                            .await
+                            .map(|r| {
+                                (
+                                    r.response,
+                                    r.total_usage.input_tokens,
+                                    r.total_usage.output_tokens,
+                                )
+                            })
+                            .map_err(|e| format!("{e}"))
+                    }
+                }
+            };
+
+            const MAX_WORKFLOW_SECS: u64 = 12_600;
+            let exec_result = tokio::time::timeout(
+                std::time::Duration::from_secs(MAX_WORKFLOW_SECS),
+                k_exec.conduits.execute_run(run_id, resolver, send_message),
+            )
+            .await;
+
+            match exec_result {
+                Ok(Ok(_)) => {
+                    k_trace.trace_system_event(format!(
+                        "conduit_run completed run_id={run_id} conduit_id={cid}"
+                    ));
+                }
+                Ok(Err(e)) => {
+                    warn!(
+                        run_id = %run_id,
+                        error = %e,
+                        "Background conduit run failed"
+                    );
+                    k_trace.trace_system_event(format!(
+                        "conduit_run failed run_id={run_id} conduit_id={cid} error={e}"
+                    ));
+                }
+                Err(_) => {
+                    warn!(
+                        run_id = %run_id,
+                        "Background conduit run timed out (global limit)"
+                    );
+                    k_trace.trace_system_event(format!(
+                        "conduit_run timed_out run_id={run_id} conduit_id={cid} after_secs={MAX_WORKFLOW_SECS}"
+                    ));
+                }
+            }
+        });
+
+        Ok(run_id)
+    }
+
+    /// Shared validation for task-scoped conduit starts (dashboard + `start_project_conduit` tool).
+    async fn start_project_conduit_prepare(
+        &self,
+        project_id: &str,
+        task_id: &str,
+        conduit_id: Option<&str>,
+        conduit_name: Option<&str>,
+        post_mattermost_confirmation: bool,
+    ) -> Result<(ProjectId, ConduitId, String), String> {
+        let tid = task_id.trim();
+        if tid.is_empty() {
+            return Err("task_id must be non-empty".to_string());
+        }
+        let cwd = self
+            .project_admin_backlog_dir(project_id)
+            .map_err(|e| e.to_string())?;
+        let view_args = vec!["task".into(), tid.to_string(), "--plain".into()];
+        let (code, stdout, stderr) = backlog_cli::run_backlog_cli(&cwd, &view_args)
+            .await
+            .map_err(|e| e.to_string())?;
+        if code != 0 {
+            return Err(format!(
+                "Task {tid} not found in project backlog (exit {code}): {stderr}"
+            ));
+        }
+        let status = parse_backlog_plain_status(&stdout).ok_or_else(|| {
+            let preview: String = stdout
+                .chars()
+                .take(500)
+                .collect::<String>()
+                .replace('\n', " ");
+            warn!(
+                task_id = %tid,
+                backlog_cwd = %cwd.display(),
+                stdout_preview = %preview,
+                "Could not parse status from `backlog task … --plain` output (check backlog CLI version vs OpenFang parser)"
+            );
+            format!("Could not read task status from backlog output for {tid}")
+        })?;
+        if !status.trim().eq_ignore_ascii_case("Ready for Dev") {
+            return Err(format!(
+                "Cannot start pipeline: task {tid} status is '{status}' (required: Ready for Dev)"
+            ));
+        }
+
+        let wf_id = self
+            .resolve_conduit_id_for_tool(conduit_id, conduit_name)
+            .await?;
+        let pid: ProjectId = project_id
+            .parse()
+            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
+
+        if post_mattermost_confirmation {
+            let project = self
+                .project_store
+                .get(pid)
+                .ok_or_else(|| "Project disappeared while starting workflow".to_string())?;
+            let ch = project
+                .mattermost_channel_id
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    "post_mattermost_confirmation requires project.mattermost_channel_id".to_string()
+                })?;
+            let wf_name = self
+                .conduits
+                .get_conduit(wf_id)
+                .await
+                .map(|w| w.name.clone())
+                .unwrap_or_else(|| "conduit".to_string());
+            self.send_channel_message(
+                "mattermost",
+                ch,
+                &format!("Starting pipeline `{wf_name}` for `{tid}`…"),
+                None,
+            )
+            .await?;
+        }
+
+        let wf_input = self.conduit_input_with_project_context(pid, tid, Some(stdout.as_str()));
+        Ok((pid, wf_id, wf_input))
+    }
+
+    /// Start a conduit from a backlog task for the dashboard: returns immediately with `run_id` while execution continues in the background.
+    pub async fn backlog_start_conduit_for_dashboard(
+        self: &Arc<Self>,
+        project_id: &str,
+        task_id: &str,
+        conduit_id: Option<&str>,
+        conduit_name: Option<&str>,
+        post_mattermost_confirmation: bool,
+    ) -> Result<String, String> {
+        let (pid, wf_id, wf_input) = self
+            .start_project_conduit_prepare(
+                project_id,
+                task_id,
+                conduit_id,
+                conduit_name,
+                post_mattermost_confirmation,
+            )
+            .await?;
+        let run_id = self
+            .run_conduit_spawn(wf_id, wf_input, Some(pid))
+            .await
+            .map_err(|e| e.to_string())?;
+        serde_json::to_string(&serde_json::json!({
+            "ok": true,
+            "run_id": run_id.to_string(),
+            "conduit_id": wf_id.to_string(),
+            "status": "started",
+        }))
+        .map_err(|e| e.to_string())
     }
 
     /// Admin backlog directory for a registered project (for `backlog` CLI).
@@ -5558,6 +6048,7 @@ impl OpenFangKernel {
     /// This cleanly shuts down in-memory state but preserves persistent agent
     /// data so agents are restored on the next boot.
     pub fn shutdown(&self) {
+        self.trace_system_event("kernel_shutdown_begin");
         info!("Shutting down OpenFang kernel...");
 
         self.supervisor.shutdown();
@@ -5571,10 +6062,9 @@ impl OpenFangKernel {
             }
         }
 
-        info!(
-            "OpenFang kernel shut down ({} agents preserved)",
-            self.registry.list().len()
-        );
+        let n = self.registry.list().len();
+        info!("OpenFang kernel shut down ({n} agents preserved)");
+        self.trace_system_event(format!("kernel_shutdown_complete agents_persisted={n}"));
     }
 
     /// Resolve the LLM driver for an agent.
@@ -7187,6 +7677,11 @@ impl KernelHandle for OpenFangKernel {
         self.config.automation.backlog_roots.clone()
     }
 
+    fn resolve_project_backlog_cwd(&self, project_id: &str) -> Result<std::path::PathBuf, String> {
+        self.project_admin_backlog_dir(project_id)
+            .map_err(|e| e.to_string())
+    }
+
     fn automation_max_retries(&self) -> u32 {
         self.config.automation.max_retries
     }
@@ -7810,78 +8305,15 @@ impl KernelHandle for OpenFangKernel {
         conduit_name: Option<&str>,
         post_mattermost_confirmation: bool,
     ) -> Result<String, String> {
-        let tid = task_id.trim();
-        if tid.is_empty() {
-            return Err("task_id must be non-empty".to_string());
-        }
-        let cwd = self
-            .project_admin_backlog_dir(project_id)
-            .map_err(|e| e.to_string())?;
-        let view_args = vec!["task".into(), tid.to_string(), "--plain".into()];
-        let (code, stdout, stderr) = backlog_cli::run_backlog_cli(&cwd, &view_args)
-            .await
-            .map_err(|e| e.to_string())?;
-        if code != 0 {
-            return Err(format!(
-                "Task {tid} not found in project backlog (exit {code}): {stderr}"
-            ));
-        }
-        let status = parse_backlog_plain_status(&stdout).ok_or_else(|| {
-            let preview: String = stdout
-                .chars()
-                .take(500)
-                .collect::<String>()
-                .replace('\n', " ");
-            warn!(
-                task_id = %tid,
-                backlog_cwd = %cwd.display(),
-                stdout_preview = %preview,
-                "Could not parse status from `backlog task … --plain` output (check backlog CLI version vs OpenFang parser)"
-            );
-            format!("Could not read task status from backlog output for {tid}")
-        })?;
-        if !status.trim().eq_ignore_ascii_case("Ready for Dev") {
-            return Err(format!(
-                "Cannot start pipeline: task {tid} status is '{status}' (required: Ready for Dev)"
-            ));
-        }
-
-        let wf_id = self
-            .resolve_conduit_id_for_tool(conduit_id, conduit_name)
-            .await?;
-        let pid: ProjectId = project_id
-            .parse()
-            .map_err(|_| format!("Invalid project_id: {project_id}"))?;
-
-        if post_mattermost_confirmation {
-            let project = self
-                .project_store
-                .get(pid)
-                .ok_or_else(|| "Project disappeared while starting workflow".to_string())?;
-            let ch = project
-                .mattermost_channel_id
-                .as_deref()
-                .filter(|s| !s.trim().is_empty())
-                .ok_or_else(|| {
-                    "post_mattermost_confirmation requires project.mattermost_channel_id"
-                        .to_string()
-                })?;
-            let wf_name = self
-                .conduits
-                .get_conduit(wf_id)
-                .await
-                .map(|w| w.name.clone())
-                .unwrap_or_else(|| "conduit".to_string());
-            self.send_channel_message(
-                "mattermost",
-                ch,
-                &format!("Starting pipeline `{wf_name}` for `{tid}`…"),
-                None,
+        let (pid, wf_id, wf_input) = self
+            .start_project_conduit_prepare(
+                project_id,
+                task_id,
+                conduit_id,
+                conduit_name,
+                post_mattermost_confirmation,
             )
             .await?;
-        }
-
-        let wf_input = self.conduit_input_with_project_context(pid, tid);
         let (run_id, output) = self
             .run_conduit(wf_id, wf_input, Some(pid))
             .await
@@ -7953,6 +8385,14 @@ impl KernelHandle for OpenFangKernel {
 
     async fn read_project_context(&self, project_id: &str) -> Result<String, String> {
         OpenFangKernel::read_project_context_tool(self, project_id)
+    }
+
+    async fn resolve_conduit_context(
+        &self,
+        project_id: &str,
+        task_id: Option<&str>,
+    ) -> Result<String, String> {
+        OpenFangKernel::resolve_conduit_context_tool(self, project_id, task_id).await
     }
 
     async fn update_project_context(
