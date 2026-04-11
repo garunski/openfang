@@ -432,6 +432,34 @@ fn sanitize_gemini_turns(contents: Vec<GeminiContent>) -> Vec<GeminiContent> {
         }
     }
 
+    // Step 3b: Gemini rejects user turns where non-tool parts precede `functionResponse`
+    // in the same content (merged user messages). Tool results must lead that turn.
+    for entry in &mut merged {
+        if entry.role.as_deref() != Some("user") {
+            continue;
+        }
+        let has_fr = entry
+            .parts
+            .iter()
+            .any(|p| matches!(p, GeminiPart::FunctionResponse { .. }));
+        if !has_fr {
+            continue;
+        }
+        let has_other = entry
+            .parts
+            .iter()
+            .any(|p| !matches!(p, GeminiPart::FunctionResponse { .. }));
+        if !has_other {
+            continue;
+        }
+        let parts = std::mem::take(&mut entry.parts);
+        let (mut frs, mut rest): (Vec<_>, Vec<_>) = parts
+            .into_iter()
+            .partition(|p| matches!(p, GeminiPart::FunctionResponse { .. }));
+        frs.append(&mut rest);
+        entry.parts = frs;
+    }
+
     // Step 4: Remove turns that ended up empty after filtering
     merged.retain(|c| !c.parts.is_empty());
 
@@ -2197,6 +2225,48 @@ mod tests {
             &sanitized[0].parts[0],
             GeminiPart::Text { text, .. } if text == "continue"
         ));
+    }
+
+    #[test]
+    fn test_sanitize_moves_function_response_before_text_in_user_turn() {
+        let contents = vec![
+            GeminiContent {
+                role: Some("user".to_string()),
+                parts: vec![GeminiPart::Text {
+                    text: "hi".to_string(),
+                    thought_signature: None,
+                }],
+            },
+            GeminiContent {
+                role: Some("model".to_string()),
+                parts: vec![GeminiPart::FunctionCall {
+                    function_call: GeminiFunctionCallData {
+                        name: "t".to_string(),
+                        args: serde_json::json!({}),
+                    },
+                    thought_signature: None,
+                }],
+            },
+            GeminiContent {
+                role: Some("user".to_string()),
+                parts: vec![
+                    GeminiPart::Text {
+                        text: "note".to_string(),
+                        thought_signature: None,
+                    },
+                    GeminiPart::FunctionResponse {
+                        function_response: GeminiFunctionResponseData {
+                            name: "t".to_string(),
+                            response: serde_json::json!({"result": "ok"}),
+                        },
+                    },
+                ],
+            },
+        ];
+        let sanitized = sanitize_gemini_turns(contents);
+        assert_eq!(sanitized.len(), 3);
+        assert!(matches!(&sanitized[2].parts[0], GeminiPart::FunctionResponse { .. }));
+        assert!(matches!(&sanitized[2].parts[1], GeminiPart::Text { .. }));
     }
 
     #[test]

@@ -364,10 +364,19 @@ fn convert_messages(
                                 },
                             });
                         }
-                        ContentBlock::ToolResult { content, .. } => {
+                        ContentBlock::ToolResult {
+                            content,
+                            tool_name,
+                            ..
+                        } => {
+                            let fn_name = if tool_name.is_empty() {
+                                "unknown_function".to_string()
+                            } else {
+                                tool_name.clone()
+                            };
                             parts.push(VertexPart::FunctionResponse {
                                 function_response: VertexFunctionResponseData {
-                                    name: String::new(),
+                                    name: fn_name,
                                     response: serde_json::json!({ "result": content }),
                                 },
                             });
@@ -388,26 +397,131 @@ fn convert_messages(
         }
     }
 
-    strip_leading_vertex_model_turns(&mut contents);
+    let contents = sanitize_vertex_turns(contents);
 
     (contents, system_instruction)
 }
 
-/// Match Gemini API: `contents` must not begin with `model` when a `user` turn exists later
-/// (same rule as `sanitize_gemini_turns` step 6 in `gemini.rs`).
-fn strip_leading_vertex_model_turns(contents: &mut Vec<VertexContent>) {
-    let has_user = contents
+/// Same tool-turn rules as `gemini::sanitize_gemini_turns` (Vertex uses the same API).
+fn sanitize_vertex_turns(contents: Vec<VertexContent>) -> Vec<VertexContent> {
+    if contents.is_empty() {
+        return contents;
+    }
+
+    let mut merged: Vec<VertexContent> = Vec::with_capacity(contents.len());
+    for entry in contents {
+        if let Some(last) = merged.last_mut() {
+            if last.role == entry.role {
+                last.parts.extend(entry.parts);
+                continue;
+            }
+        }
+        merged.push(entry);
+    }
+
+    let len = merged.len();
+    for i in 0..len {
+        let is_model = merged[i].role.as_deref() == Some("model");
+        if !is_model {
+            continue;
+        }
+        let has_function_call = merged[i]
+            .parts
+            .iter()
+            .any(|p| matches!(p, VertexPart::FunctionCall { .. }));
+        if !has_function_call {
+            continue;
+        }
+        let next_has_response = i + 1 < len
+            && merged[i + 1].role.as_deref() == Some("user")
+            && merged[i + 1]
+                .parts
+                .iter()
+                .any(|p| matches!(p, VertexPart::FunctionResponse { .. }));
+        if !next_has_response {
+            merged[i]
+                .parts
+                .retain(|p| !matches!(p, VertexPart::FunctionCall { .. }));
+        }
+    }
+
+    for i in 0..merged.len() {
+        let is_user = merged[i].role.as_deref() == Some("user");
+        if !is_user {
+            continue;
+        }
+        let has_function_response = merged[i]
+            .parts
+            .iter()
+            .any(|p| matches!(p, VertexPart::FunctionResponse { .. }));
+        if !has_function_response {
+            continue;
+        }
+        let prev_has_call = i > 0
+            && merged[i - 1].role.as_deref() == Some("model")
+            && merged[i - 1]
+                .parts
+                .iter()
+                .any(|p| matches!(p, VertexPart::FunctionCall { .. }));
+        if !prev_has_call {
+            merged[i]
+                .parts
+                .retain(|p| !matches!(p, VertexPart::FunctionResponse { .. }));
+        }
+    }
+
+    for entry in &mut merged {
+        if entry.role.as_deref() != Some("user") {
+            continue;
+        }
+        let has_fr = entry
+            .parts
+            .iter()
+            .any(|p| matches!(p, VertexPart::FunctionResponse { .. }));
+        if !has_fr {
+            continue;
+        }
+        let has_other = entry
+            .parts
+            .iter()
+            .any(|p| !matches!(p, VertexPart::FunctionResponse { .. }));
+        if !has_other {
+            continue;
+        }
+        let parts = std::mem::take(&mut entry.parts);
+        let (mut frs, mut rest): (Vec<_>, Vec<_>) = parts
+            .into_iter()
+            .partition(|p| matches!(p, VertexPart::FunctionResponse { .. }));
+        frs.append(&mut rest);
+        entry.parts = frs;
+    }
+
+    merged.retain(|c| !c.parts.is_empty());
+
+    let mut final_merged: Vec<VertexContent> = Vec::with_capacity(merged.len());
+    for entry in merged {
+        if let Some(last) = final_merged.last_mut() {
+            if last.role == entry.role {
+                last.parts.extend(entry.parts);
+                continue;
+            }
+        }
+        final_merged.push(entry);
+    }
+
+    let has_user = final_merged
         .iter()
         .any(|c| c.role.as_deref() == Some("user"));
-    if !has_user {
-        return;
+    if has_user {
+        while matches!(
+            final_merged.first().and_then(|c| c.role.as_deref()),
+            Some("model")
+        ) {
+            final_merged.remove(0);
+        }
     }
-    while matches!(
-        contents.first().and_then(|c| c.role.as_deref()),
-        Some("model")
-    ) {
-        contents.remove(0);
-    }
+
+    final_merged
 }
 
 fn extract_system(messages: &[Message], system: &Option<String>) -> Option<VertexContent> {
