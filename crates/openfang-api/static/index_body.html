@@ -218,7 +218,7 @@
       </div>
     </template>
 
-    <!-- Page: Overview -->
+    <!-- Page: Overview — .overview-dashboard: projects (main) + system summary (aside); see components.css -->
     <template x-if="page === 'overview'">
       <div x-data="overviewPage" x-init="loadOverview().then(() => startAutoRefresh())" @page-leave.window="stopAutoRefresh()">
         <div class="page-header">
@@ -230,8 +230,8 @@
             </button>
           </div>
         </div>
-        <div class="page-body">
-          <!-- Loading skeleton state -->
+        <div class="page-body page-body--overview">
+          <!-- Loading: same two-column skeleton as loaded state -->
           <div x-show="loading" class="overview-dashboard overview-dashboard--loading" style="animation:fadeIn 0.2s">
             <div class="overview-dashboard__main">
               <div class="box overview-projects-box">
@@ -248,7 +248,7 @@
               </div>
             </aside>
           </div>
-          <!-- Error state -->
+          <!-- Error: full-width, outside the dashboard grid -->
           <div x-show="!loading && loadError" class="error-state" style="animation:fadeIn 0.3s">
             <div class="empty-state-icon">
               <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="var(--error)" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
@@ -257,127 +257,124 @@
             <p class="text-xs text-dim" x-text="loadError"></p>
             <button class="button is-primary is-small" @click="loadData()" style="margin-top:8px">Retry</button>
           </div>
+          <!-- Loaded: two-column dashboard (.overview-dashboard__main + .overview-dashboard__aside) -->
           <div x-show="!loading && !loadError" class="overview-dashboard" style="animation:fadeIn 0.3s">
-
-          <div class="overview-dashboard__main">
-          <!-- Registered projects -->
-          <section class="box overview-projects-box">
-            <div class="level is-mobile is-align-items-flex-start mb-4">
-              <div class="level-left">
-                <div class="level-item">
-                  <h3 class="title is-6 mb-0" style="display:flex;align-items:center;gap:8px;font-weight:600">
-                    <i class="fa fa-folder-open" style="color:var(--accent)" aria-hidden="true"></i>
-                    <span>Projects</span>
-                  </h3>
-                </div>
-              </div>
-              <div class="level-right">
-                <div class="level-item">
-                  <div class="buttons">
-                    <button type="button" class="button is-primary is-small" @click="navigate('projects')"><i class="fa fa-plus" aria-hidden="true"></i><span>Register</span></button>
-                    <button type="button" class="button is-light is-small" @click="loadProjects()" :disabled="projectsLoading"><i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh</span></button>
+            <div class="overview-dashboard__main">
+              <section class="box overview-projects-box" aria-labelledby="overview-projects-heading">
+                <div class="level is-mobile is-align-items-flex-start mb-4">
+                  <div class="level-left">
+                    <div class="level-item">
+                      <h3 id="overview-projects-heading" class="title is-6 mb-0" style="display:flex;align-items:center;gap:8px;font-weight:600">
+                        <i class="fa fa-folder-open" style="color:var(--accent)" aria-hidden="true"></i>
+                        <span>Projects</span>
+                      </h3>
+                    </div>
                   </div>
-                </div>
-              </div>
-            </div>
-            <div x-show="projectsLoading" class="text-xs text-dim py-2">Loading projects…</div>
-            <div x-show="!projectsLoading && !projects.length" class="content is-small">
-              <p class="mb-2">No projects registered.</p>
-              <button type="button" class="button is-ghost is-small" @click="navigate('projects')">Open Projects page</button>
-            </div>
-            <div x-show="!projectsLoading && projects.length">
-              <template x-for="p in projects" :key="p.id">
-                <div class="columns is-vcentered is-mobile is-multiline overview-project-row py-4" style="border-bottom:1px solid var(--border-subtle)">
-                  <div class="column is-12-mobile is-6-tablet">
-                    <p class="title is-6 mb-1" style="font-weight:600" x-text="p.name"></p>
-                    <p class="is-size-7 text-dim font-mono truncate" style="margin:0" :title="p.path" x-text="truncatePath(p.path, 96)"></p>
-                  </div>
-                  <div class="column is-12-mobile is-6-tablet">
-                    <div class="is-flex is-flex-wrap is-align-items-center is-justify-content-flex-end" style="gap:8px">
-                      <span class="tag is-light is-rounded" x-text="'Spokes ' + (p.spoke_count != null ? p.spoke_count : 0)"></span>
-                      <div class="buttons are-small mb-0">
-                        <button type="button" class="button is-primary" @click="navigate('projects/' + encodeURIComponent(p.id) + '/overview')"><i class="fa fa-folder-open" aria-hidden="true"></i><span>Open</span></button>
-                        <button type="button" class="button is-light" @click="navigate('projects/' + encodeURIComponent(p.id) + '/backlog')"><i class="fa fa-list" aria-hidden="true"></i><span>List</span></button>
-                        <button type="button" class="button is-light" @click="navigate('projects/' + encodeURIComponent(p.id) + '/board')"><i class="fa fa-th" aria-hidden="true"></i><span>Board</span></button>
-                        <button type="button" class="button is-danger is-light is-small" @click="deleteProject(p)" title="Remove from OpenFang" aria-label="Remove from OpenFang"><i class="fa fa-trash-o" aria-hidden="true"></i><span>Remove</span></button>
+                  <div class="level-right">
+                    <div class="level-item">
+                      <div class="buttons">
+                        <button type="button" class="button is-primary is-small" @click="navigate('projects')"><i class="fa fa-plus" aria-hidden="true"></i><span>Register</span></button>
+                        <button type="button" class="button is-light is-small" @click="loadProjects()" :disabled="projectsLoading"><i class="fa fa-refresh" aria-hidden="true"></i><span>Refresh</span></button>
                       </div>
                     </div>
                   </div>
                 </div>
-              </template>
+                <div x-show="projectsLoading" class="text-xs text-dim py-2">Loading projects…</div>
+                <div x-show="!projectsLoading && !projects.length" class="content is-small">
+                  <p class="mb-2">No projects registered.</p>
+                  <button type="button" class="button is-ghost is-small" @click="navigate('projects')">Open Projects page</button>
+                </div>
+                <div x-show="!projectsLoading && projects.length">
+                  <template x-for="p in projects" :key="p.id">
+                    <div class="columns is-vcentered is-mobile is-multiline overview-project-row py-4" style="border-bottom:1px solid var(--border-subtle)">
+                      <div class="column is-12-mobile is-6-tablet">
+                        <p class="title is-6 mb-1" style="font-weight:600" x-text="p.name"></p>
+                        <p class="is-size-7 text-dim font-mono truncate" style="margin:0" :title="p.path" x-text="truncatePath(p.path, 96)"></p>
+                      </div>
+                      <div class="column is-12-mobile is-6-tablet">
+                        <div class="is-flex is-flex-wrap is-align-items-center is-justify-content-flex-end" style="gap:8px">
+                          <span class="tag is-light is-rounded" x-text="'Spokes ' + (p.spoke_count != null ? p.spoke_count : 0)"></span>
+                          <div class="buttons are-small mb-0">
+                            <button type="button" class="button is-primary" @click="navigate('projects/' + encodeURIComponent(p.id) + '/overview')"><i class="fa fa-folder-open" aria-hidden="true"></i><span>Open</span></button>
+                            <button type="button" class="button is-light" @click="navigate('projects/' + encodeURIComponent(p.id) + '/backlog')"><i class="fa fa-list" aria-hidden="true"></i><span>List</span></button>
+                            <button type="button" class="button is-light" @click="navigate('projects/' + encodeURIComponent(p.id) + '/board')"><i class="fa fa-th" aria-hidden="true"></i><span>Board</span></button>
+                            <button type="button" class="button is-danger is-light is-small" @click="deleteProject(p)" title="Remove from OpenFang" aria-label="Remove from OpenFang"><i class="fa fa-trash-o" aria-hidden="true"></i><span>Remove</span></button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </section>
             </div>
-          </section>
-          </div>
-
-          <aside class="overview-dashboard__aside" aria-label="System summary">
-          <div class="overview-sidebar-cards">
-            <!-- System Health -->
-            <div class="of-card">
-              <div class="of-card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-                System Health
-              </div>
-              <div class="detail-grid" style="margin-top:8px">
-                <div class="detail-row"><span class="detail-label">Status</span><span class="badge" :class="health.status === 'ok' ? 'badge-running' : 'badge-crashed'" x-text="health.status || 'unknown'"></span></div>
-                <div class="detail-row"><span class="detail-label">Version</span><span class="detail-value font-mono" x-text="status.version || '-'"></span></div>
-                <div class="detail-row"><span class="detail-label">Provider</span><span class="detail-value" x-text="status.default_provider || '-'"></span></div>
-                <div class="detail-row"><span class="detail-label">Model</span><span class="detail-value font-mono" style="font-size:11px" x-text="status.default_model || '-'"></span></div>
-              </div>
-            </div>
-
-            <!-- Security Systems -->
-            <div class="of-card">
-              <div class="of-card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-                Security Systems
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Merkle Audit</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Taint Tracking</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">WASM Sandbox</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">GCRA Rate Limit</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Ed25519 Signing</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">SSRF Protection</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Secret Zeroize</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Loop Guard</span>
-                <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Session Repair</span>
-              </div>
-              <div class="text-xs text-dim" style="margin-top:8px">9 defense-in-depth systems active</div>
-            </div>
-
-            <!-- Connected Channels -->
-            <div class="of-card" x-show="channels.length">
-              <div class="of-card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
-                Connected Channels
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <template x-for="ch in channels" :key="ch.name">
-                  <span class="badge badge-info" style="font-size:9px;text-transform:capitalize;padding:2px 8px" x-text="ch.name"></span>
-                </template>
-              </div>
-              <div class="text-xs text-dim" style="margin-top:8px" x-text="channels.length + ' channel(s) connected'"></div>
-            </div>
-
-            <!-- MCP Servers -->
-            <div class="of-card" x-show="mcpServers.length">
-              <div class="of-card-header">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><path d="M6 6h.01M6 18h.01"/></svg>
-                MCP Servers
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
-                <template x-for="s in mcpServers" :key="s.name">
-                  <div class="badge" :class="s.status === 'connected' ? 'badge-success' : 'badge-dim'" style="font-size:9px;padding:2px 8px">
-                    <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="s.status === 'connected' ? 'background:var(--success)' : 'background:var(--text-dim)'"></span>
-                    <span x-text="s.name"></span>
-                    <span class="text-xs text-dim" x-show="s.tool_count" x-text="'(' + s.tool_count + ' tools)'"></span>
+            <aside class="overview-dashboard__aside" aria-label="System summary">
+              <div class="overview-sidebar-cards">
+                <!-- System Health -->
+                <div class="of-card">
+                  <div class="of-card-header">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    System Health
                   </div>
-                </template>
-              </div>
-            </div>
-          </div>
-          </aside>
+                  <div class="detail-grid" style="margin-top:8px">
+                    <div class="detail-row"><span class="detail-label">Status</span><span class="badge" :class="health.status === 'ok' ? 'badge-running' : 'badge-crashed'" x-text="health.status || 'unknown'"></span></div>
+                    <div class="detail-row"><span class="detail-label">Version</span><span class="detail-value font-mono" x-text="status.version || '-'"></span></div>
+                    <div class="detail-row"><span class="detail-label">Provider</span><span class="detail-value" x-text="status.default_provider || '-'"></span></div>
+                    <div class="detail-row"><span class="detail-label">Model</span><span class="detail-value font-mono" style="font-size:11px" x-text="status.default_model || '-'"></span></div>
+                  </div>
+                </div>
 
+                <!-- Security Systems -->
+                <div class="of-card">
+                  <div class="of-card-header">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                    Security Systems
+                  </div>
+                  <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Merkle Audit</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Taint Tracking</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">WASM Sandbox</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">GCRA Rate Limit</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Ed25519 Signing</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">SSRF Protection</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Secret Zeroize</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Loop Guard</span>
+                    <span class="badge badge-success" style="font-size:9px;padding:2px 8px">Session Repair</span>
+                  </div>
+                  <div class="text-xs text-dim" style="margin-top:8px">9 defense-in-depth systems active</div>
+                </div>
+
+                <!-- Connected Channels -->
+                <div class="of-card" x-show="channels.length">
+                  <div class="of-card-header">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><path d="M4 9h16M4 15h16M10 3l-2 18M16 3l-2 18"/></svg>
+                    Connected Channels
+                  </div>
+                  <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
+                    <template x-for="ch in channels" :key="ch.name">
+                      <span class="badge badge-info" style="font-size:9px;text-transform:capitalize;padding:2px 8px" x-text="ch.name"></span>
+                    </template>
+                  </div>
+                  <div class="text-xs text-dim" style="margin-top:8px" x-text="channels.length + ' channel(s) connected'"></div>
+                </div>
+
+                <!-- MCP Servers -->
+                <div class="of-card" x-show="mcpServers.length">
+                  <div class="of-card-header">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline;margin-right:4px;vertical-align:-2px"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><path d="M6 6h.01M6 18h.01"/></svg>
+                    MCP Servers
+                  </div>
+                  <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">
+                    <template x-for="s in mcpServers" :key="s.name">
+                      <div class="badge" :class="s.status === 'connected' ? 'badge-success' : 'badge-dim'" style="font-size:9px;padding:2px 8px">
+                        <span style="display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:3px" :style="s.status === 'connected' ? 'background:var(--success)' : 'background:var(--text-dim)'"></span>
+                        <span x-text="s.name"></span>
+                        <span class="text-xs text-dim" x-show="s.tool_count" x-text="'(' + s.tool_count + ' tools)'"></span>
+                      </div>
+                    </template>
+                  </div>
+                </div>
+              </div>
+            </aside>
           </div>
         </div>
       </div>

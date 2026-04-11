@@ -3496,6 +3496,15 @@ mark.search-highlight {
   }
 }
 
+/* Global overview route only — flex parent + grid; min-width avoids horizontal clip */
+.page-body--overview {
+  min-width: 0;
+}
+.page-body--overview > .overview-dashboard {
+  width: 100%;
+  box-sizing: border-box;
+}
+
 .health-indicator {
   display: inline-flex;
   align-items: center;
